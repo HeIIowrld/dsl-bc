@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CanonicalChunk",
+  "type": "object",
+  "required": [
+    "chunk_id",
+    "document_id",
+    "source_id",
+    "section_path",
+    "content_type",
+    "text",
+    "normalized_text",
+    "embedding_text",
+    "table_refs"
+  ],
+  "properties": {
+    "chunk_id": {"type": "string"},
+    "document_id": {"type": "string"},
+    "source_id": {"type": "string"},
+    "section_path": {"type": "array", "items": {"type": "string"}},
+    "content_type": {"type": "string"},
+    "text": {"type": "string"},
+    "normalized_text": {"type": "string"},
+    "page": {"type": ["integer", "null"]},
+    "clause_no": {"type": ["string", "null"]},
+    "valid_from": {"type": ["string", "null"]},
+    "valid_to": {"type": ["string", "null"]},
+    "embedding_text": {"type": "string"},
+    "table_refs": {"type": "array"}
+  }
+}

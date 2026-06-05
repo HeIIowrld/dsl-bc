@@ -1,0 +1,33 @@
+pools:
+  benchmark_final_full:
+    label: 벤치마크 - benchmark_dataset_test.csv
+    is_public: true
+    dataset_version: benchmark_dataset_test
+    path: questionlist/benchmark/benchmark_dataset_test.csv
+    gate_eligible: false
+    role: benchmark
+    default_quota: 800
+  regression_golden_full:
+    label: 회귀 전체 - regression_golden_set.csv
+    is_public: true
+    dataset_version: regression_golden_set
+    path: questionlist/regression/regression_golden_set.csv
+    gate_eligible: true
+    role: regression
+    default_quota: 300
+profiles:
+  benchmark_final_full:
+    label: 벤치마크 전체
+    pools:
+      benchmark_final_full: 800
+    ui_visible: true
+  regression_golden_full:
+    label: 회귀 전체
+    pools:
+      regression_golden_full: 300
+    ui_visible: true
+  custom_seeded_mix:
+    label: 직접 구성
+    pools: {}
+    ui_visible: true
+default_seed: 42

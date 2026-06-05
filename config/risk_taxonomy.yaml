@@ -1,0 +1,9 @@
+refusal_keywords:
+- cannot comply
+- policy
+- safety
+safety_keywords:
+- 개인정보
+- 비밀번호
+- 카드번호
+- 주민등록번호

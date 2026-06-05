@@ -1,0 +1,26 @@
+default_suite: public_finance_literacy
+suites:
+- core
+- failure
+- safety
+- document_update
+- api_snapshot
+- public_finance_literacy
+intents:
+- benefit_calculation
+- terms_reasoning
+- financial_term_explanation
+- educational_explanation
+- api_routing
+- safety_refusal
+- general_finance_qa
+error_taxonomy:
+- missing_condition
+- wrong_calculation
+- citation_not_supporting_answer
+- unsupported_claim
+- unsafe_completion
+- over_refusal
+- format_violation
+- timeout
+- provider_error

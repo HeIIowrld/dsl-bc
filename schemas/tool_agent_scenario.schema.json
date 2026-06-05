@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tool Agent Scenario",
+  "type": "object",
+  "required": [
+    "scenario_id",
+    "title",
+    "category",
+    "priority",
+    "difficulty",
+    "stage_targets",
+    "query",
+    "available_tools",
+    "expected_actions",
+    "observations",
+    "expected_final_answer",
+    "tool_creation_task",
+    "evaluation",
+    "metadata"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "scenario_id": { "type": "string" },
+    "title": { "type": "string" },
+    "category": {
+      "type": "string",
+      "enum": [
+        "argument_clarification",
+        "no_tool_safety",
+        "parallel_tool_calls",
+        "tool_call",
+        "tool_chain",
+        "tool_creation",
+        "tool_creation_and_use",
+        "tool_creation_safety",
+        "tool_repair",
+        "tool_result_refinement"
+      ]
+    },
+    "priority": { "type": "string", "enum": ["P0", "P1", "P2", "P3"] },
+    "difficulty": { "type": "string", "enum": ["low", "medium", "hard"] },
+    "stage_targets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["tool_call", "tool_creation", "tool_result_refinement"]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "query": { "type": "string" },
+    "available_tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "expected_actions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "observations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/observation" }
+    },
+    "expected_final_answer": { "$ref": "#/$defs/final_answer" },
+    "tool_creation_task": {
+      "oneOf": [
+        {
+          "type": "object",
+          "maxProperties": 0
+        },
+        {
+          "$ref": "#/$defs/tool_creation_task"
+        }
+      ]
+    },
+    "evaluation": { "$ref": "#/$defs/evaluation" },
+    "metadata": { "$ref": "#/$defs/metadata" }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": ["name", "description", "input_schema", "output_schema", "side_effect_free", "allowed"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "input_schema": { "type": "object" },
+        "output_schema": { "type": "object" },
+        "side_effect_free": { "type": "boolean" },
+        "allowed": { "type": "boolean" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["order", "tool_name", "arguments", "must_call"],
+      "additionalProperties": false,
+      "properties": {
+        "order": { "type": "integer" },
+        "tool_name": { "type": "string" },
+        "arguments": { "type": "object" },
+        "must_call": { "type": "boolean" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "required": ["tool_name", "status", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "tool_name": { "type": "string" },
+        "status": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    },
+    "final_answer": {
+      "type": "object",
+      "required": ["must_include", "must_not_include", "citation_required", "style"],
+      "additionalProperties": false,
+      "properties": {
+        "must_include": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "must_not_include": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "citation_required": { "type": "boolean" },
+        "style": { "type": "string" }
+      }
+    },
+    "tool_creation_task": {
+      "type": "object",
+      "required": ["capability", "expected_tool_spec"],
+      "additionalProperties": false,
+      "properties": {
+        "capability": { "type": "string" },
+        "expected_tool_spec": {
+          "type": "object",
+          "required": [
+            "name",
+            "required_inputs",
+            "required_outputs",
+            "reusable_constraints",
+            "safety_constraints",
+            "validation_tests"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "required_inputs": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "required_outputs": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "reusable_constraints": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "safety_constraints": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "validation_tests": {
+              "type": "array",
+              "items": { "type": "object" }
+            }
+          }
+        }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["metrics", "pass_criteria"],
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "tool_selection",
+              "argument_correctness",
+              "tool_creation_reusability",
+              "observation_grounding",
+              "answer_refinement",
+              "safety"
+            ]
+          }
+        },
+        "pass_criteria": {
+          "type": "object",
+          "required": [
+            "required_actions_match",
+            "no_forbidden_tool_call",
+            "created_tool_has_schema_and_tests",
+            "answer_uses_observation_only",
+            "final_answer_includes_required_facts"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "required_actions_match": { "type": "boolean" },
+            "no_forbidden_tool_call": { "type": "boolean" },
+            "created_tool_has_schema_and_tests": {
+              "oneOf": [
+                { "type": "boolean" },
+                { "type": "string", "enum": ["when_tool_creation_targeted"] }
+              ]
+            },
+            "answer_uses_observation_only": { "type": "boolean" },
+            "final_answer_includes_required_facts": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["domain", "representation", "tags"],
+      "additionalProperties": false,
+      "properties": {
+        "domain": { "type": "string" },
+        "representation": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

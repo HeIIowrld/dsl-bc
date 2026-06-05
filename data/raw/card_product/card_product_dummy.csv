@@ -1,0 +1,52 @@
+﻿product_id,card_name,topic,question_type,question,gold_answer,evidence_title,evidence_excerpt,annual_fee,benefit_category,benefit_summary,conditions,exclusions,required_conditions,forbidden_claims,source_url,severity,priority
+CPD001,BC 더미 쇼핑카드,product_fee,annual_fee,,,,,12000원,온라인쇼핑,온라인쇼핑 5% 할인,전월 30만원 이상 및 월 한도 10000원,상품권 구매 및 세금 납부 제외,,,,high,P1
+CPD001,BC 더미 쇼핑카드,product_benefit,benefit_lookup,,,,,12000원,온라인쇼핑,온라인쇼핑 5% 할인,전월 30만원 이상 및 월 한도 10000원,상품권 구매 및 세금 납부 제외,,,,medium,P2
+CPD001,BC 더미 쇼핑카드,product_condition,condition_lookup,,,,,12000원,온라인쇼핑,온라인쇼핑 5% 할인,전월 30만원 이상 및 월 한도 10000원,상품권 구매 및 세금 납부 제외,,,,high,P1
+CPD001,BC 더미 쇼핑카드,product_exclusion,exclusion_lookup,,,,,12000원,온라인쇼핑,온라인쇼핑 5% 할인,전월 30만원 이상 및 월 한도 10000원,상품권 구매 및 세금 납부 제외,,,,high,P1
+CPD001,BC 더미 쇼핑카드,product_summary,summary,,,,,12000원,온라인쇼핑,온라인쇼핑 5% 할인,전월 30만원 이상 및 월 한도 10000원,상품권 구매 및 세금 납부 제외,,,,medium,P2
+CPD002,BC 더미 교통카드,product_fee,annual_fee,,,,,15000원,대중교통,대중교통 10% 청구할인,전월 40만원 이상 및 월 한도 8000원,택시 및 시외버스 제외,,,,high,P1
+CPD002,BC 더미 교통카드,product_benefit,benefit_lookup,,,,,15000원,대중교통,대중교통 10% 청구할인,전월 40만원 이상 및 월 한도 8000원,택시 및 시외버스 제외,,,,medium,P2
+CPD002,BC 더미 교통카드,product_condition,condition_lookup,,,,,15000원,대중교통,대중교통 10% 청구할인,전월 40만원 이상 및 월 한도 8000원,택시 및 시외버스 제외,,,,high,P1
+CPD002,BC 더미 교통카드,product_exclusion,exclusion_lookup,,,,,15000원,대중교통,대중교통 10% 청구할인,전월 40만원 이상 및 월 한도 8000원,택시 및 시외버스 제외,,,,high,P1
+CPD002,BC 더미 교통카드,product_summary,summary,,,,,15000원,대중교통,대중교통 10% 청구할인,전월 40만원 이상 및 월 한도 8000원,택시 및 시외버스 제외,,,,medium,P2
+CPD003,BC 더미 주유카드,product_fee,annual_fee,,,,,18000원,주유,주유 리터당 80원 할인,전월 50만원 이상 및 월 한도 12000원,LPG 충전소 제외,,,,high,P1
+CPD003,BC 더미 주유카드,product_benefit,benefit_lookup,,,,,18000원,주유,주유 리터당 80원 할인,전월 50만원 이상 및 월 한도 12000원,LPG 충전소 제외,,,,medium,P2
+CPD003,BC 더미 주유카드,product_condition,condition_lookup,,,,,18000원,주유,주유 리터당 80원 할인,전월 50만원 이상 및 월 한도 12000원,LPG 충전소 제외,,,,high,P1
+CPD003,BC 더미 주유카드,product_exclusion,exclusion_lookup,,,,,18000원,주유,주유 리터당 80원 할인,전월 50만원 이상 및 월 한도 12000원,LPG 충전소 제외,,,,high,P1
+CPD003,BC 더미 주유카드,product_summary,summary,,,,,18000원,주유,주유 리터당 80원 할인,전월 50만원 이상 및 월 한도 12000원,LPG 충전소 제외,,,,medium,P2
+CPD004,BC 더미 여행카드,product_fee,annual_fee,,,,,20000원,여행,항공 및 호텔 3% 적립,전월 50만원 이상 및 월 한도 15000점,취소 및 환불 매출 제외,,,,high,P1
+CPD004,BC 더미 여행카드,product_benefit,benefit_lookup,,,,,20000원,여행,항공 및 호텔 3% 적립,전월 50만원 이상 및 월 한도 15000점,취소 및 환불 매출 제외,,,,medium,P2
+CPD004,BC 더미 여행카드,product_condition,condition_lookup,,,,,20000원,여행,항공 및 호텔 3% 적립,전월 50만원 이상 및 월 한도 15000점,취소 및 환불 매출 제외,,,,high,P1
+CPD004,BC 더미 여행카드,product_exclusion,exclusion_lookup,,,,,20000원,여행,항공 및 호텔 3% 적립,전월 50만원 이상 및 월 한도 15000점,취소 및 환불 매출 제외,,,,high,P1
+CPD004,BC 더미 여행카드,product_summary,summary,,,,,20000원,여행,항공 및 호텔 3% 적립,전월 50만원 이상 및 월 한도 15000점,취소 및 환불 매출 제외,,,,medium,P2
+CPD005,BC 더미 구독카드,product_fee,annual_fee,,,,,10000원,구독,OTT 및 음원 20% 할인,전월 30만원 이상 및 월 한도 7000원,인앱결제 제외,,,,high,P1
+CPD005,BC 더미 구독카드,product_benefit,benefit_lookup,,,,,10000원,구독,OTT 및 음원 20% 할인,전월 30만원 이상 및 월 한도 7000원,인앱결제 제외,,,,medium,P2
+CPD005,BC 더미 구독카드,product_condition,condition_lookup,,,,,10000원,구독,OTT 및 음원 20% 할인,전월 30만원 이상 및 월 한도 7000원,인앱결제 제외,,,,high,P1
+CPD005,BC 더미 구독카드,product_exclusion,exclusion_lookup,,,,,10000원,구독,OTT 및 음원 20% 할인,전월 30만원 이상 및 월 한도 7000원,인앱결제 제외,,,,high,P1
+CPD005,BC 더미 구독카드,product_summary,summary,,,,,10000원,구독,OTT 및 음원 20% 할인,전월 30만원 이상 및 월 한도 7000원,인앱결제 제외,,,,medium,P2
+CPD006,BC 더미 외식카드,product_fee,annual_fee,,,,,13000원,외식,음식점 10% 할인,전월 30만원 이상 및 월 한도 8000원,백화점 및 대형마트 입점매장 제외,,,,high,P1
+CPD006,BC 더미 외식카드,product_benefit,benefit_lookup,,,,,13000원,외식,음식점 10% 할인,전월 30만원 이상 및 월 한도 8000원,백화점 및 대형마트 입점매장 제외,,,,medium,P2
+CPD006,BC 더미 외식카드,product_condition,condition_lookup,,,,,13000원,외식,음식점 10% 할인,전월 30만원 이상 및 월 한도 8000원,백화점 및 대형마트 입점매장 제외,,,,high,P1
+CPD006,BC 더미 외식카드,product_exclusion,exclusion_lookup,,,,,13000원,외식,음식점 10% 할인,전월 30만원 이상 및 월 한도 8000원,백화점 및 대형마트 입점매장 제외,,,,high,P1
+CPD006,BC 더미 외식카드,product_summary,summary,,,,,13000원,외식,음식점 10% 할인,전월 30만원 이상 및 월 한도 8000원,백화점 및 대형마트 입점매장 제외,,,,medium,P2
+CPD007,BC 더미 생활카드,product_fee,annual_fee,,,,,11000원,생활,편의점 및 커피 7% 할인,전월 20만원 이상 및 월 한도 6000원,상품권 구매 제외,,,,high,P1
+CPD007,BC 더미 생활카드,product_benefit,benefit_lookup,,,,,11000원,생활,편의점 및 커피 7% 할인,전월 20만원 이상 및 월 한도 6000원,상품권 구매 제외,,,,medium,P2
+CPD007,BC 더미 생활카드,product_condition,condition_lookup,,,,,11000원,생활,편의점 및 커피 7% 할인,전월 20만원 이상 및 월 한도 6000원,상품권 구매 제외,,,,high,P1
+CPD007,BC 더미 생활카드,product_exclusion,exclusion_lookup,,,,,11000원,생활,편의점 및 커피 7% 할인,전월 20만원 이상 및 월 한도 6000원,상품권 구매 제외,,,,high,P1
+CPD007,BC 더미 생활카드,product_summary,summary,,,,,11000원,생활,편의점 및 커피 7% 할인,전월 20만원 이상 및 월 한도 6000원,상품권 구매 제외,,,,medium,P2
+CPD008,BC 더미 프리미엄카드,product_fee,annual_fee,,,,,30000원,프리미엄,공항라운지 월 1회 제공,전월 70만원 이상 및 연 4회 한도,동반인 및 미이용월 이월 제외,,,,high,P1
+CPD008,BC 더미 프리미엄카드,product_benefit,benefit_lookup,,,,,30000원,프리미엄,공항라운지 월 1회 제공,전월 70만원 이상 및 연 4회 한도,동반인 및 미이용월 이월 제외,,,,medium,P2
+CPD008,BC 더미 프리미엄카드,product_condition,condition_lookup,,,,,30000원,프리미엄,공항라운지 월 1회 제공,전월 70만원 이상 및 연 4회 한도,동반인 및 미이용월 이월 제외,,,,high,P1
+CPD008,BC 더미 프리미엄카드,product_exclusion,exclusion_lookup,,,,,30000원,프리미엄,공항라운지 월 1회 제공,전월 70만원 이상 및 연 4회 한도,동반인 및 미이용월 이월 제외,,,,high,P1
+CPD008,BC 더미 프리미엄카드,product_summary,summary,,,,,30000원,프리미엄,공항라운지 월 1회 제공,전월 70만원 이상 및 연 4회 한도,동반인 및 미이용월 이월 제외,,,,medium,P2
+CPD009,BC 더미 교육카드,product_fee,annual_fee,,,,,14000원,교육,학원 및 서점 5% 할인,전월 40만원 이상 및 월 한도 10000원,온라인 중고거래 제외,,,,high,P1
+CPD009,BC 더미 교육카드,product_benefit,benefit_lookup,,,,,14000원,교육,학원 및 서점 5% 할인,전월 40만원 이상 및 월 한도 10000원,온라인 중고거래 제외,,,,medium,P2
+CPD009,BC 더미 교육카드,product_condition,condition_lookup,,,,,14000원,교육,학원 및 서점 5% 할인,전월 40만원 이상 및 월 한도 10000원,온라인 중고거래 제외,,,,high,P1
+CPD009,BC 더미 교육카드,product_exclusion,exclusion_lookup,,,,,14000원,교육,학원 및 서점 5% 할인,전월 40만원 이상 및 월 한도 10000원,온라인 중고거래 제외,,,,high,P1
+CPD009,BC 더미 교육카드,product_summary,summary,,,,,14000원,교육,학원 및 서점 5% 할인,전월 40만원 이상 및 월 한도 10000원,온라인 중고거래 제외,,,,medium,P2
+CPD010,BC 더미 병원카드,product_fee,annual_fee,,,,,16000원,의료,병원 및 약국 5% 할인,전월 40만원 이상 및 월 한도 10000원,동물병원 및 건강식품 제외,,,,high,P1
+CPD010,BC 더미 병원카드,product_benefit,benefit_lookup,,,,,16000원,의료,병원 및 약국 5% 할인,전월 40만원 이상 및 월 한도 10000원,동물병원 및 건강식품 제외,,,,medium,P2
+CPD010,BC 더미 병원카드,product_condition,condition_lookup,,,,,16000원,의료,병원 및 약국 5% 할인,전월 40만원 이상 및 월 한도 10000원,동물병원 및 건강식품 제외,,,,high,P1
+CPD010,BC 더미 병원카드,product_exclusion,exclusion_lookup,,,,,16000원,의료,병원 및 약국 5% 할인,전월 40만원 이상 및 월 한도 10000원,동물병원 및 건강식품 제외,,,,high,P1
+CPD010,BC 더미 병원카드,product_summary,summary,,,,,16000원,의료,병원 및 약국 5% 할인,전월 40만원 이상 및 월 한도 10000원,동물병원 및 건강식품 제외,,,,medium,P2
+

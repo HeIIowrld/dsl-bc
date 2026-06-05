@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BC 금융 RAG 회귀 평가 대시보드</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="theme-internal benchmark-console">
+  <aside class="sidebar">
+    <div class="brand-mini">
+      <img class="bc-logo symbol" src="assets/bc-card-symbol.png" alt="BC">
+      <div>
+        <strong>BC</strong>
+        <span>RAG Evaluation Dashboard</span>
+      </div>
+    </div>
+
+    <label>모델</label>
+    <div id="versionFilters" class="check-list"></div>
+    <div id="modelConnectionPanel" class="connection-panel"></div>
+
+    <label>질문 태그</label>
+    <div id="tagFilters" class="check-list"></div>
+
+    <label>소스 유형</label>
+    <div id="sourceFilters" class="check-list"></div>
+
+    <label>기대 동작</label>
+    <div id="behaviorFilters" class="check-list"></div>
+
+    <label>난이도</label>
+    <div id="difficultyFilters" class="segmented"></div>
+
+    <label for="threshold">과락 기준 <span id="thresholdValue">80</span>점</label>
+    <input id="threshold" type="range" min="50" max="95" value="80">
+  </aside>
+
+  <main class="page">
+    <section class="hero">
+      <div class="hero-brand">
+        <div class="hero-logo-row">
+          <img class="bc-logo large" src="assets/bc-card-signature-ko.png" alt="BC">
+        </div>
+        <div>
+          <p class="eyebrow">BC</p>
+          <h1>Evaluation Test Console</h1>
+          <p>최종 benchmark/regression set으로 모델을 나란히 고르고, 동일 조건에서 실행 결과를 비교합니다.</p>
+        </div>
+      </div>
+      <div class="hero-meta">
+        <span>Benchmark 800</span>
+        <span>Regression 300</span>
+        <span>Judge는 별도 설정</span>
+      </div>
+      <div id="runMeta" class="run-meta"></div>
+    </section>
+
+    <details class="card model-registry-panel utility-panel">
+      <summary>
+      <div class="card-head">
+        <h2>모델 연결 등록</h2>
+        <span>외부 GPU, 클라우드 API, 로컬 경로</span>
+      </div>
+      </summary>
+      <form id="modelRegistryForm" class="model-form">
+        <label>Provider
+          <select id="modelProvider" name="provider">
+            <option value="openai_compatible">OpenAI-compatible API</option>
+            <option value="generic_api">Generic HTTP API</option>
+            <option value="clova_studio">CLOVA Studio Chat v3</option>
+            <option value="anthropic">Anthropic Claude API</option>
+            <option value="gemini">Google Gemini API</option>
+            <option value="local_path">Local model path</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </label>
+        <label>Config ID
+          <input id="modelConfigId" name="config_id" placeholder="cloud_gpu_model_01">
+        </label>
+        <label>Display name
+          <input id="modelDisplayName" name="display_name" placeholder="Cloud GPU Model">
+        </label>
+        <label>Model
+          <input id="modelName" name="model" placeholder="model name or deployment id">
+        </label>
+        <label>Base URL
+          <input id="modelBaseUrl" name="base_url" placeholder="https://host.example.com">
+        </label>
+        <label>Chat URL
+          <input id="modelChatUrl" name="chat_url" placeholder="https://host.example.com/v1/chat/completions">
+        </label>
+        <label>Health URL
+          <input id="modelHealthUrl" name="health_url" placeholder="https://host.example.com/health">
+        </label>
+        <label>API key env
+          <input id="modelApiKeyEnv" name="api_key_env" placeholder="CLOUD_MODEL_API_KEY">
+        </label>
+        <label>Base URL env
+          <input id="modelBaseUrlEnv" name="base_url_env" placeholder="OLLAMA_BASE_URL">
+        </label>
+        <label>Prompt version
+          <input id="modelPromptVersion" name="prompt_version" placeholder="bc_support_remote_baseline_v1">
+        </label>
+        <label>System prompt
+          <textarea id="modelSystemPrompt" name="system_prompt" rows="3" placeholder="Optional system prompt override"></textarea>
+        </label>
+        <label>Query prompt template
+          <textarea id="modelQueryPromptTemplate" name="query_prompt_template" rows="4" placeholder="Use {question} for the user question"></textarea>
+        </label>
+        <label>Options JSON
+          <textarea id="modelOptionsJson" name="options_json" rows="3" placeholder="{&quot;temperature&quot;:0.2,&quot;top_p&quot;:0.8}"></textarea>
+        </label>
+        <label>Local path
+          <input id="modelLocalPath" name="local_path" placeholder="C:\models\my-model">
+        </label>
+        <button type="submit">등록</button>
+      </form>
+      <div id="modelRegistryMessage" class="form-message"></div>
+    </details>
+
+    <nav class="tabs primary-tabs" aria-label="Dashboard tabs">
+      <button class="tab active" data-tab="runEval">Run Evaluation</button>
+      <button class="tab" data-tab="caseSets">Test Sets</button>
+      <button class="tab" data-tab="overview">Results</button>
+      <button class="tab" data-tab="compare">Model Compare</button>
+      <button class="tab" data-tab="failures">Failures</button>
+      <button class="tab" data-tab="explorer">Explorer</button>
+      <button class="tab" data-tab="methodology">Scoring</button>
+    </nav>
+
+    <section id="overview" class="panel">
+      <div id="kpis" class="kpi-grid"></div>
+      <div id="runGateKpis" class="kpi-grid compact"></div>
+      <article class="card">
+        <div class="card-head">
+          <h2>Run Release Gate</h2>
+          <span>모델별 배포 차단 사유</span>
+        </div>
+        <div id="runGateTable"></div>
+      </article>
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head">
+            <h2>선택 모델 평가 비교</h2>
+            <span>종합 점수 / 합격률</span>
+          </div>
+          <div id="trendChart" class="chart"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>5대 평가 지표</h2>
+            <span>최신 선택 모델 기준</span>
+          </div>
+          <div id="metricBars" class="metric-bars"></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="questionlist" class="panel">
+      <div id="questionlistKpis" class="kpi-grid compact"></div>
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head">
+            <h2>선택 케이스 소스 분포</h2>
+            <span>source_type 기준</span>
+          </div>
+          <div id="questionlistSourceChart" class="metric-bars"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>기대 동작 분포</h2>
+            <span>grounded / refusal</span>
+          </div>
+          <div id="questionlistBehaviorChart" class="metric-bars"></div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head">
+          <h2>현재 선택 케이스</h2>
+          <span>기본 소스: questionlist/benchmark · questionlist/regression</span>
+        </div>
+        <div id="caseSetTable"></div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <h2>샘플 질문</h2>
+          <span>근거 문서 포함</span>
+        </div>
+        <div id="sampleQuestions" class="case-list"></div>
+      </article>
+    </section>
+
+    <section id="caseSets" class="panel">
+      <article class="card action-card">
+        <div class="card-head">
+          <h2>최종 테스트셋</h2>
+          <span>벤치마크와 회귀 문항셋을 확인합니다.</span>
+        </div>
+        <p class="action-copy">문항을 미리 보고, 필요한 테스트셋을 실행 탭으로 보낼 수 있습니다.</p>
+      </article>
+      <div id="caseSetKpis" class="kpi-grid compact"></div>
+      <article class="card">
+        <div class="card-head">
+          <h2>회귀테스트 케이스셋</h2>
+          <span>Final benchmark / regression golden</span>
+        </div>
+        <div class="control-row">
+          <label for="datasetSelect">Case file</label>
+          <select id="datasetSelect"></select>
+          <label for="datasetLimit">Preview</label>
+          <input id="datasetLimit" type="number" min="1" max="1000" value="120">
+          <button id="reloadDatasetCases" type="button">불러오기</button>
+        </div>
+        <div id="datasetSummaryTable"></div>
+      </article>
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head">
+            <h2>문항 구성 요약</h2>
+            <span>케이스 ID / 대분류 / 금융토픽 / 질문유형</span>
+          </div>
+          <div id="datasetCaseTable"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>선택 문항 상세</h2>
+            <span>질문 / 모범답안 / 채점 기준</span>
+          </div>
+          <div id="datasetCaseDetails"></div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head">
+          <h2>Tool-agent 기대 호출</h2>
+          <span>expected tool calls / observation / final answer</span>
+        </div>
+        <div id="toolAgentTable"></div>
+      </article>
+    </section>
+
+    <section id="runEval" class="panel active benchmark-lab">
+      <article class="card action-card run-action-card">
+        <div class="card-head">
+          <h2>테스트 실행</h2>
+          <span>선택한 프로필 또는 케이스 파일 기준으로 실행합니다.</span>
+        </div>
+        <div id="evalRunSummary" class="run-summary"></div>
+        <div id="evalProfileCards" class="profile-card-grid"></div>
+        <button class="run-submit" form="evalRunForm" type="submit">
+          <span>테스트 실행</span>
+          <small>선택한 모델과 profile로 평가 job 시작</small>
+        </button>
+      </article>
+      <article class="card benchmark-config-card">
+        <div class="card-head">
+          <h2>평가 실행 설정</h2>
+          <span>테스트셋, 모델, 채점 방식 선택</span>
+        </div>
+        <form id="evalRunForm" class="run-form">
+          <label>Run profile
+            <select id="evalRunProfile" name="run_profile">
+              <option value="single_dataset">Single case file</option>
+            </select>
+          </label>
+          <label>Seed
+            <input id="evalSeed" name="seed" type="number" min="0" max="2147483647" value="42">
+          </label>
+          <label>Case file
+            <select id="evalDatasetSelect" name="dataset"></select>
+          </label>
+          <label>Limit
+            <input id="evalLimit" name="limit" type="number" min="1" max="100000" placeholder="profile 전체 / single 기본 10">
+          </label>
+          <label>Run ID
+            <input id="evalRunId" name="run_id" placeholder="WEB_EVAL_SMOKE">
+          </label>
+          <label>Tool prediction JSONL
+            <input id="evalPredictionFile" name="prediction_file" placeholder="out\tool_agent_eval\predictions.jsonl">
+          </label>
+          <label>Scoring mode
+            <select id="evalScoringMode" name="scoring_mode">
+              <option value="static">Static only</option>
+              <option value="static_llm">Static + LLM audit</option>
+              <option value="llm_override">LLM judge override</option>
+              <option value="blend">Static/LLM blend</option>
+            </select>
+          </label>
+          <label>Judge provider
+            <select id="evalJudgeProvider" name="judge_provider">
+              <option value="clova_studio">CLOVA Studio</option>
+              <option value="openai_compatible">OpenAI</option>
+              <option value="anthropic">Claude</option>
+              <option value="gemini">Gemini</option>
+              <option value="ollama">Ollama</option>
+              <option value="generic_api">Generic API</option>
+            </select>
+          </label>
+          <label>Judge model
+            <input id="evalJudgeModel" name="judge_model" placeholder="HCX-007">
+          </label>
+          <label>Judge API key
+            <input id="evalJudgeApiKey" name="judge_api_key" type="password" autocomplete="off" placeholder="run only, not saved">
+          </label>
+          <label>Judge base URL
+            <input id="evalJudgeBaseUrl" name="judge_base_url" placeholder="optional">
+          </label>
+          <label>Temperature
+            <input id="evalJudgeTemperature" name="judge_temperature" type="number" min="0" max="2" step="0.05" value="0">
+          </label>
+          <label>Top P
+            <input id="evalJudgeTopP" name="judge_top_p" type="number" min="0" max="1" step="0.05" value="0.1">
+          </label>
+          <label>Blend weight
+            <input id="evalJudgeBlendWeight" name="judge_blend_weight" type="number" min="0" max="1" step="0.05" value="0.5">
+          </label>
+          <label class="check-inline">
+            <input id="evalDryRun" name="dry_run" type="checkbox" checked>
+            Dry run
+          </label>
+          <label class="check-inline">
+            <input id="evalExportFinalUi" name="export_final_ui" type="checkbox">
+            Export to UI
+          </label>
+          <button type="submit">Run</button>
+        </form>
+        <div id="evalCustomPools" class="custom-pools"></div>
+        <div class="grid two eval-grid">
+          <div>
+            <h3>모델 선택</h3>
+            <div id="evalConfigFilters" class="check-list"></div>
+          </div>
+          <div>
+            <h3>Suite 선택</h3>
+            <div id="evalSuiteFilters" class="check-list"></div>
+          </div>
+        </div>
+        <div id="evalRunMessage" class="form-message"></div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <h2>실행 로그</h2>
+          <span>최근 web job</span>
+        </div>
+        <div id="evalJobStatus"></div>
+        <pre id="evalJobLog" class="job-log"></pre>
+      </article>
+    </section>
+
+    <section id="benchmark" class="panel">
+      <div id="benchmarkKpis" class="kpi-grid compact"></div>
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head">
+            <h2>Benchmark Model Scores</h2>
+            <span>모델별 비차단 성능 비교</span>
+          </div>
+          <div id="benchmarkModelTable"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>Benchmark Dataset Scores</h2>
+            <span>비차단 성능 비교</span>
+          </div>
+          <div id="benchmarkDatasetTable"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>Topic x Question Type</h2>
+            <span>시나리오 매트릭스</span>
+          </div>
+          <div id="benchmarkMatrix"></div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head">
+          <h2>Benchmark Failures</h2>
+          <span>모델별 낮은 점수와 judge 사유</span>
+        </div>
+        <div id="benchmarkFailures"></div>
+      </article>
+    </section>
+
+    <section id="methodology" class="panel">
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head">
+            <h2>권장 평가 파이프라인</h2>
+            <span>공통 테스트셋 + capability suite</span>
+          </div>
+          <ol class="method-steps">
+            <li><strong>Eval Dataset</strong><span>golden, behavioral, metamorphic, RAG, safety, tool-use/JSON 케이스를 공통 suite로 구성합니다.</span></li>
+            <li><strong>Runner</strong><span>baseline과 candidate를 같은 조건으로 실행하고 필요한 경우 N회 샘플링합니다.</span></li>
+            <li><strong>Evaluator</strong><span>정답형은 schema/regex/rule로, 열린 답변은 rubric judge와 blinded pairwise judge로 평가합니다.</span></li>
+            <li><strong>Regression Analyzer</strong><span>전체 delta, slice delta, P0/P1 failure, item-level churn, latency/cost를 release gate에 연결합니다.</span></li>
+          </ol>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>Release Gate 예시</h2>
+            <span>배포 차단 기준</span>
+          </div>
+          <div class="gate-list">
+            <span>P0 안전성 실패 수 = 0</span>
+            <span>JSON schema pass rate >= 99.5%</span>
+            <span>핵심 질문 pass rate 하락 <= 1.0%p</span>
+            <span>candidate pairwise win rate >= 52%</span>
+            <span>RAG faithfulness 하락 <= 2.0%p</span>
+            <span>결제/환불/개인정보 slice regression 허용치 이하</span>
+            <span>p95 latency와 평균 비용 목표치 이하</span>
+          </div>
+        </article>
+      </div>
+      <article class="card">
+        <div class="card-head">
+          <h2>테스트 케이스 유형</h2>
+          <span>LLM 회귀 테스트 6종 세트</span>
+        </div>
+        <div class="method-grid">
+          <div><strong>Golden-set</strong><p>운영 로그, 도메인 전문가 질문, 과거 장애 케이스 기반의 필수 통과 테스트입니다.</p></div>
+          <div><strong>Behavioral</strong><p>환불, 개인정보, 표현 변형 등 서비스가 지켜야 하는 행동을 capability x test type으로 검증합니다.</p></div>
+          <div><strong>Pairwise</strong><p>기준 모델과 후보 모델 답변을 가리고 비교해 어떤 케이스가 좋아졌고 나빠졌는지 봅니다.</p></div>
+          <div><strong>Metamorphic</strong><p>paraphrase, 입력 순서 변경 등 라벨이 어려운 상황에서 결과 불변성을 확인합니다.</p></div>
+          <div><strong>RAG</strong><p>retrieval quality, context faithfulness, answer quality를 분리해 원인을 추적합니다.</p></div>
+          <div><strong>Safety</strong><p>jailbreak, prompt injection, 개인정보 유출, 정책 우회를 별도 gate로 차단합니다.</p></div>
+        </div>
+      </article>
+    </section>
+
+    <section id="compare" class="panel">
+      <article class="card">
+        <div class="card-head">
+          <h2>모델별 5대 지표 비교</h2>
+          <span>같은 평가셋 기준 상대 비교</span>
+        </div>
+        <div id="compareChart" class="compare-chart"></div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <h2>실행 결과 테이블</h2>
+          <span>점수, 비용, 지연시간</span>
+        </div>
+        <div id="runsTable"></div>
+      </article>
+    </section>
+
+    <section id="regression" class="panel">
+      <div id="regressionKpis" class="kpi-grid compact"></div>
+      <article class="card">
+        <div class="card-head">
+          <h2>회귀/과락 질문</h2>
+          <span>릴리즈 전 우선 점검 대상</span>
+        </div>
+        <div id="regressionTable"></div>
+      </article>
+    </section>
+
+    <section id="exploratory" class="panel">
+      <div id="exploratoryKpis" class="kpi-grid compact"></div>
+      <article class="card">
+        <div class="card-head">
+          <h2>Exploratory Regression</h2>
+          <span>Shadow / draft cases, not release blocking</span>
+        </div>
+        <div id="exploratoryTable"></div>
+      </article>
+    </section>
+
+    <section id="reviewQueue" class="panel">
+      <div id="reviewQueueKpis" class="kpi-grid compact"></div>
+      <article class="card">
+        <div class="card-head">
+          <h2>Human Review Queue</h2>
+          <span>Cases that need gold or judge review</span>
+        </div>
+        <div id="reviewQueueTable"></div>
+      </article>
+    </section>
+
+    <section id="failures" class="panel">
+      <div class="grid two">
+        <article class="card">
+          <div class="card-head">
+            <h2>오류 유형 분포</h2>
+            <span>과락 응답 기준</span>
+          </div>
+          <div id="failureChart" class="chart small"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <h2>대표 오류 사례</h2>
+            <span>질문, 응답, Judge 사유</span>
+          </div>
+          <div id="failureCases" class="case-list"></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="explorer" class="panel">
+      <article class="card">
+        <div class="card-head">
+          <h2>질문 단위 상세 조회</h2>
+          <select id="questionSelect" aria-label="질문 선택"></select>
+        </div>
+        <div id="questionDetail"></div>
+      </article>
+      <article class="card">
+        <div class="card-head">
+          <h2>태그별 평균 점수</h2>
+          <span>시나리오 취약점 확인</span>
+        </div>
+        <div id="tagSummary" class="tag-summary"></div>
+      </article>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

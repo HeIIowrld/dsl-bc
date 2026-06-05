@@ -1,0 +1,15 @@
+FROM C:\Users\jeff4\.ollama\models\blobs\sha256-44b7285efcd44b097184a545c54fbe49b6a32b29cad325814be5647a3c164dca
+
+TEMPLATE """{{- range .Messages }}<|start_header_id|>{{ .Role }}<|end_header_id|>
+
+{{ .Content }}<|eot_id|>
+{{- end }}<|start_header_id|>assistant<|end_header_id|>
+
+"""
+
+PARAMETER num_ctx 4096
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER stop <|start_header_id|>
+PARAMETER stop <|end_header_id|>
+PARAMETER stop <|eot_id|>

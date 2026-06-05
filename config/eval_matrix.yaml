@@ -1,0 +1,23 @@
+eval_run:
+  baseline_config: base_gemma2_9b_it_q4
+  pass_threshold: 60
+  configs:
+  - reference_qwen3_14b_q4
+  - bc_deepseek_8b_bcgpt_chat_q4
+  - bc_gemma_9b_bcgpt_q4
+  - bc_llama31_finance_8b_q4
+  - bc_llama3_finance_8b_q4
+  - bc_llama3_finance_12b_q4
+  - bc_llama3_finance_20b_q4
+  - bc_gemma_27b_bcgpt_q4
+  - bc_gemma_27b_korean_q4
+  - base_gemma2_9b_it_q4
+  - base_gemma2_27b_it_q4
+  - base_deepseek_r1_distill_llama_8b_q4
+  - base_sh2orc_llama3_korean_8b_q4
+  - base_sh2orc_llama31_korean_8b_instruct_q4
+  - reference_exaone35_78b_instruct_q4
+  run_id_prefix: WEB_EVAL
+  release_gates:
+    critical_fail_max: 0
+    core_pass_rate_min: 0.8
