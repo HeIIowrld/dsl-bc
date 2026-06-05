@@ -988,6 +988,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "Invalid JSON body"}, status=400)
             return
         config = payload.get("config") if isinstance(payload.get("config"), dict) else payload
+        incoming_config_id = self.safe_config_id(config.get("config_id") or config.get("model") or config.get("display_name"))
+        existing_config = self.load_registry().get(incoming_config_id, {}) if incoming_config_id else {}
+        if existing_config:
+            config = {**existing_config, **config}
         if any(key in config for key in ("api_key", "token", "secret")):
             self.send_json({"error": "Do not submit raw secrets. Set api_key_env instead."}, status=400)
             return

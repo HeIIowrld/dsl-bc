@@ -1790,6 +1790,20 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   cursor: pointer;
 }
 
+.connection-edit {
+  padding: 3px 7px;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.connection-edit:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
 .registry-badge,
 .model-chip,
 .result-matrix-meta span {

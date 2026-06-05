@@ -1890,6 +1890,10 @@ function bindModelRegistryForm() {
     updateModelRegistryProviderFields();
     document.getElementById("modelSystemPrompt")?.focus();
   });
+  document.getElementById("modelRegistryReset")?.addEventListener("click", () => {
+    resetModelRegistryForm(form);
+    setRegistryMessage("새 대상 모델 등록 모드입니다.", "");
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1919,9 +1923,8 @@ function bindModelRegistryForm() {
       renderJudgeRegistry();
       renderAll();
       updateHealthCheckButtonState();
-      setRegistryMessage(`등록 완료: ${modelLabelForVersion(body.config.config_id)}. 연결 확인으로 상태를 확인하세요.`, "ok");
-      form.reset();
-      updateModelRegistryProviderFields();
+      setRegistryMessage(`등록/업데이트 완료: ${modelLabelForVersion(body.config.config_id)}. 연결 확인으로 상태를 확인하세요.`, "ok");
+      resetModelRegistryForm(form);
     } catch (error) {
       setRegistryMessage(`등록 실패: ${error.message}`, "error");
     }
@@ -1931,6 +1934,10 @@ function bindModelRegistryForm() {
 function bindJudgeRegistryForm() {
   const form = document.getElementById("judgeRegistryForm");
   if (!form) return;
+  document.getElementById("judgeRegistryReset")?.addEventListener("click", () => {
+    resetJudgeRegistryForm(form);
+    setJudgeRegistryMessage("새 Judge 모델 등록 모드입니다.", "");
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1953,16 +1960,8 @@ function bindJudgeRegistryForm() {
       modelRegistry = body.registry || modelRegistry;
       renderJudgeRegistry();
       updateJudgePlaceholders();
-      setJudgeRegistryMessage(`Judge 등록 완료: ${modelLabelForVersion(body.config.config_id)}`, "ok");
-      form.reset();
-      document.getElementById("judgeRegistryTemperature").value = "0";
-      document.getElementById("judgeRegistryTopP").value = "0.1";
-      document.getElementById("judgeRegistryMaxTokens").value = "1024";
-      document.getElementById("judgeRegistryPromptPreset").value = "judge_default_v1";
-      document.getElementById("judgeRegistryPromptVersion").value = judgePromptPresets.judge_default_v1.version;
-      document.getElementById("judgeRegistrySystemPrompt").value = "";
-      updateJudgeRegistryProviderFields();
-      updateJudgePromptPresetFields();
+      setJudgeRegistryMessage(`Judge 등록/업데이트 완료: ${modelLabelForVersion(body.config.config_id)}`, "ok");
+      resetJudgeRegistryForm(form);
     } catch (error) {
       setJudgeRegistryMessage(`Judge 등록 실패: ${error.message}`, "error");
     }
@@ -1971,7 +1970,8 @@ function bindJudgeRegistryForm() {
 
 function judgeRegistryPayload(form) {
   const data = new FormData(form);
-  const payload = [
+  const payload = {};
+  [
     "provider",
     "config_id",
     "display_name",
@@ -1983,11 +1983,10 @@ function judgeRegistryPayload(form) {
     "prompt_version",
     "system_prompt_preset",
     "system_prompt",
-  ].reduce((payload, key) => {
-    const value = String(data.get(key) ?? "").trim();
-    if (value) payload[key] = value;
-    return payload;
-  }, {});
+  ].forEach((key) => {
+    payload[key] = String(data.get(key) ?? "").trim();
+  });
+  payload.upstream_chat_url = payload.chat_url;
 
   const options = {};
   const temperature = String(data.get("temperature") ?? "").trim();
@@ -2028,7 +2027,8 @@ function judgeRegistryPayload(form) {
 
 function modelRegistryPayload(form) {
   const data = new FormData(form);
-  const payload = [
+  const payload = {};
+  [
     "provider",
     "config_id",
     "display_name",
@@ -2046,11 +2046,11 @@ function modelRegistryPayload(form) {
     "prompt_prefix",
     "prompt_suffix",
     "local_path",
-  ].reduce((payload, key) => {
-    const value = String(data.get(key) ?? "").trim();
-    if (value) payload[key] = value;
-    return payload;
-  }, {});
+  ].forEach((key) => {
+    payload[key] = String(data.get(key) ?? "").trim();
+  });
+  payload.upstream_chat_url = payload.chat_url;
+  payload.upstream_health_url = payload.health_url;
   const optionsJson = String(data.get("options_json") ?? "").trim();
   if (optionsJson) {
     try {
@@ -2062,6 +2062,8 @@ function modelRegistryPayload(form) {
     } catch (error) {
       throw new Error(`Options JSON 오류: ${error.message}`);
     }
+  } else {
+    payload.options = {};
   }
   return payload;
 }
@@ -2104,8 +2106,21 @@ function copyModelField(id, value) {
   element.value = value ?? "";
 }
 
+function copySelectField(id, value, fallback = "") {
+  const element = document.getElementById(id);
+  if (!element) return;
+  const candidate = String(value || fallback || "");
+  const allowed = [...element.options].map((option) => option.value);
+  element.value = allowed.includes(candidate) ? candidate : fallback;
+}
+
 function openModelAdvancedFields() {
   const advanced = document.querySelector(".model-registry-panel .advanced-fields");
+  if (advanced) advanced.open = true;
+}
+
+function openJudgeAdvancedFields() {
+  const advanced = document.querySelector(".judge-registry-panel .advanced-fields");
   if (advanced) advanced.open = true;
 }
 
@@ -2114,6 +2129,120 @@ function externalEndpointValue(spec, proxyKey, upstreamKey) {
   if (upstream) return upstream;
   const value = String(spec?.[proxyKey] || "").trim();
   return value.startsWith("/api/models/") ? "" : value;
+}
+
+function registrySourceLabel(spec) {
+  return spec?.registry_source === "static" ? "기본 설정" : "사용자 등록";
+}
+
+function registryOptionsJson(options, omittedKeys = []) {
+  const source = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+  const omitted = new Set(omittedKeys);
+  const cleaned = Object.fromEntries(Object.entries(source).filter(([key]) => !omitted.has(key)));
+  return Object.keys(cleaned).length ? JSON.stringify(cleaned, null, 2) : "";
+}
+
+function editRegisteredModel(version) {
+  const spec = modelSpecForVersion(version);
+  const form = document.getElementById("modelRegistryForm");
+  if (!spec || !form) return;
+  copySelectField("modelProvider", spec.provider || "openai_native", "openai_native");
+  copyModelField("modelPromptVariantOf", spec.prompt_variant_of || "");
+  copyModelField("modelExperimentTag", spec.experiment_tag || "");
+  copyModelField("modelConfigId", spec.config_id || version);
+  copyModelField("modelDisplayName", spec.display_name || spec.model || version);
+  copyModelField("modelName", spec.model || version);
+  copyModelField("modelCacheIdentity", spec.cache_identity || spec.model_artifact_id || "");
+  copyModelField("modelBaseUrl", spec.base_url || "");
+  copyModelField("modelBaseUrlEnv", spec.base_url_env || "");
+  copyModelField("modelChatUrl", externalEndpointValue(spec, "chat_url", "upstream_chat_url"));
+  copyModelField("modelHealthUrl", externalEndpointValue(spec, "health_url", "upstream_health_url"));
+  copyModelField("modelApiKeyEnv", spec.api_key_env || "");
+  copyModelField("modelPromptVersion", spec.prompt_version || "");
+  copyModelField("modelSystemPrompt", spec.system_prompt || "");
+  copyModelField("modelQueryPromptTemplate", spec.query_prompt_template || spec.prompt_template || "");
+  copyModelField("modelOptionsJson", registryOptionsJson(spec.options));
+  copyModelField("modelLocalPath", spec.local_path || "");
+  updateModelRegistryProviderFields();
+  openModelAdvancedFields();
+  setRegistryMessage(`수정 모드: ${modelLabelForVersion(version)}. 저장하면 같은 설정 ID가 업데이트됩니다.`, "ok");
+  activateTab("settings");
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function resetModelRegistryForm(form = document.getElementById("modelRegistryForm")) {
+  form?.reset();
+  copyModelField("modelPromptVariantOf", "");
+  copyModelField("modelExperimentTag", "");
+  copyModelField("modelOptionsJson", "");
+  updateModelRegistryProviderFields();
+}
+
+function judgeMaxTokensFromOptions(options) {
+  if (!options || typeof options !== "object") return 1024;
+  return options.max_completion_tokens
+    ?? options.maxCompletionTokens
+    ?? options.max_output_tokens
+    ?? options.maxOutputTokens
+    ?? options.max_tokens
+    ?? options.maxTokens
+    ?? options.num_predict
+    ?? 1024;
+}
+
+function editRegisteredJudge(version) {
+  const spec = modelSpecForVersion(version);
+  const form = document.getElementById("judgeRegistryForm");
+  if (!spec || !form) return;
+  const options = spec.options || {};
+  const preset = judgePromptPresets[spec.system_prompt_preset]
+    ? spec.system_prompt_preset
+    : (spec.system_prompt_preset ? "custom" : "judge_default_v1");
+  copySelectField("judgeRegistryProvider", spec.provider || "clova_studio", "clova_studio");
+  copyModelField("judgeRegistryConfigId", spec.config_id || version);
+  copyModelField("judgeRegistryDisplayName", spec.display_name || spec.model || version);
+  copyModelField("judgeRegistryModel", spec.model || version);
+  copyModelField("judgeRegistryBaseUrl", spec.base_url || "");
+  copyModelField("judgeRegistryChatUrl", externalEndpointValue(spec, "chat_url", "upstream_chat_url"));
+  copyModelField("judgeRegistryApiKeyEnv", spec.api_key_env || "");
+  copyModelField("judgeRegistryTemperature", options.temperature ?? 0);
+  copyModelField("judgeRegistryTopP", options.top_p ?? options.topP ?? 0.1);
+  copyModelField("judgeRegistryMaxTokens", judgeMaxTokensFromOptions(options));
+  copySelectField("judgeRegistryPromptPreset", preset, "judge_default_v1");
+  copyModelField("judgeRegistryPromptVersion", spec.prompt_version || judgePromptPresets[preset]?.version || judgePromptPresets.judge_default_v1.version);
+  copyModelField("judgeRegistrySystemPrompt", spec.system_prompt || "");
+  copyModelField("judgeRegistryOptionsJson", registryOptionsJson(options, [
+    "temperature",
+    "top_p",
+    "topP",
+    "max_completion_tokens",
+    "maxCompletionTokens",
+    "max_output_tokens",
+    "maxOutputTokens",
+    "max_tokens",
+    "maxTokens",
+    "num_predict",
+  ]));
+  updateJudgeRegistryProviderFields();
+  updateJudgePromptPresetFields();
+  if (preset === "custom") copyModelField("judgeRegistrySystemPrompt", spec.system_prompt || "");
+  openJudgeAdvancedFields();
+  setJudgeRegistryMessage(`수정 모드: ${modelLabelForVersion(version)}. 저장하면 같은 설정 ID가 업데이트됩니다.`, "ok");
+  activateTab("settings");
+  form.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function resetJudgeRegistryForm(form = document.getElementById("judgeRegistryForm")) {
+  form?.reset();
+  copyModelField("judgeRegistryTemperature", "0");
+  copyModelField("judgeRegistryTopP", "0.1");
+  copyModelField("judgeRegistryMaxTokens", "1024");
+  copySelectField("judgeRegistryPromptPreset", "judge_default_v1", "judge_default_v1");
+  copyModelField("judgeRegistryPromptVersion", judgePromptPresets.judge_default_v1.version);
+  copyModelField("judgeRegistrySystemPrompt", "");
+  copyModelField("judgeRegistryOptionsJson", "");
+  updateJudgeRegistryProviderFields();
+  updateJudgePromptPresetFields();
 }
 
 function prefillPromptVariant(baseId, tag) {
@@ -2169,7 +2298,7 @@ function renderTargetRegistry() {
   }
   list.innerHTML = ids.map((id) => {
     const spec = modelSpecForVersion(id);
-    const sourceLabel = "사용자 등록";
+    const sourceLabel = registrySourceLabel(spec);
     const promptParts = [
       spec.prompt_version || "prompt_v1",
       spec.experiment_tag ? `태그 ${spec.experiment_tag}` : "",
@@ -2193,7 +2322,8 @@ function renderTargetRegistry() {
         <div class="connection-actions">
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>
           ${modelConnectionPill(id)}
-          ${spec.deletable ? `<button type="button" class="connection-delete" data-delete-model="${escapeHtml(id)}">삭제</button>` : ""}
+          <button type="button" class="connection-edit" data-edit-model="${escapeHtml(id)}">수정</button>
+          <button type="button" class="connection-delete" data-delete-model="${escapeHtml(id)}">삭제</button>
         </div>
       </div>
     `;
@@ -2212,6 +2342,13 @@ function populatePromptVariantSelect(select, ids, emptyLabel) {
 }
 
 function bindTargetRegistryButtons() {
+  document.querySelectorAll("[data-edit-model]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const version = button.dataset.editModel;
+      if (!version) return;
+      editRegisteredModel(version);
+    });
+  });
   document.querySelectorAll("[data-delete-model]").forEach((button) => {
     button.addEventListener("click", async () => {
       const version = button.dataset.deleteModel;
@@ -2223,7 +2360,9 @@ function bindTargetRegistryButtons() {
 
 async function deleteRegisteredModel(version) {
   const label = modelLabelForVersion(version);
-  if (!window.confirm(`${label} 등록 항목을 삭제할까요? 실제 모델 파일/API는 삭제하지 않습니다.`)) {
+  const spec = modelSpecForVersion(version);
+  const sourceNote = spec?.registry_source === "static" ? "기본 설정은 UI에서 숨김 처리됩니다." : "사용자 등록 항목이 삭제됩니다.";
+  if (!window.confirm(`${label} 등록 항목을 삭제할까요? ${sourceNote} 실제 모델 파일/API는 삭제하지 않습니다.`)) {
     return;
   }
   setRegistryMessage(`삭제 중: ${label}`, "");
@@ -2238,6 +2377,7 @@ async function deleteRegisteredModel(version) {
     state.resultVersions.delete(version);
     state.runConfigVersions.delete(version);
     renderTargetRegistry();
+    renderJudgeRegistry();
     renderFilters();
     renderEvalConfigFilters();
     renderAll();
@@ -2319,7 +2459,7 @@ function renderJudgeRegistry() {
   }
   list.innerHTML = ids.map((id) => {
     const spec = modelRegistry[id] || {};
-    const sourceLabel = "사용자 등록";
+    const sourceLabel = registrySourceLabel(spec);
     const endpoint = spec.upstream_chat_url || spec.chat_url || spec.base_url || spec.local_path || "endpoint 없음";
     const promptMeta = [
       spec.prompt_version || "",
@@ -2335,15 +2475,23 @@ function renderJudgeRegistry() {
         </div>
         <div class="connection-actions">
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>
-          ${spec.deletable ? `<button type="button" class="connection-delete" data-delete-judge="${escapeHtml(id)}">삭제</button>` : ""}
+          <button type="button" class="connection-edit" data-edit-judge="${escapeHtml(id)}">수정</button>
+          <button type="button" class="connection-delete" data-delete-judge="${escapeHtml(id)}">삭제</button>
         </div>
       </div>
     `;
   }).join("");
-  bindJudgeDeleteButtons();
+  bindJudgeRegistryButtons();
 }
 
-function bindJudgeDeleteButtons() {
+function bindJudgeRegistryButtons() {
+  document.querySelectorAll("[data-edit-judge]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const version = button.dataset.editJudge;
+      if (!version) return;
+      editRegisteredJudge(version);
+    });
+  });
   document.querySelectorAll("[data-delete-judge]").forEach((button) => {
     button.addEventListener("click", async () => {
       const version = button.dataset.deleteJudge;
@@ -2355,7 +2503,9 @@ function bindJudgeDeleteButtons() {
 
 async function deleteRegisteredJudge(version) {
   const label = modelLabelForVersion(version);
-  if (!window.confirm(`${label} Judge 등록 항목을 삭제할까요? 실제 모델 파일/API는 삭제하지 않습니다.`)) {
+  const spec = modelSpecForVersion(version);
+  const sourceNote = spec?.registry_source === "static" ? "기본 설정은 UI에서 숨김 처리됩니다." : "사용자 등록 항목이 삭제됩니다.";
+  if (!window.confirm(`${label} Judge 등록 항목을 삭제할까요? ${sourceNote} 실제 모델 파일/API는 삭제하지 않습니다.`)) {
     return;
   }
   setJudgeRegistryMessage(`삭제 중: ${label}`, "");
