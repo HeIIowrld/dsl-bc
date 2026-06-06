@@ -1188,23 +1188,30 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         live_mode = self.query_bool(params, "live") or self.query_bool(params, "load") or (
             str((params.get("mode") or [""])[0]).strip().lower() in {"load", "live", "load_unload"}
         )
+        tag_check_status = "ok"
+        tag_check_error = ""
         try:
             installed = self.ollama_models(base_url)
         except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            self.send_json(
-                {
-                    "status": "offline",
-                    "version": version,
-                    "provider": provider,
-                    "model": model,
-                    "message": f"Ollama is not reachable at {base_url}: {exc}",
-                },
-                status=503,
-            )
-            return
-
-        if model in installed:
             if not live_mode:
+                self.send_json(
+                    {
+                        "status": "offline",
+                        "version": version,
+                        "provider": provider,
+                        "model": model,
+                        "message": f"Ollama is not reachable at {base_url}: {exc}",
+                    },
+                    status=503,
+                )
+                return
+            installed = set()
+            tag_check_status = "unavailable"
+            tag_check_error = str(exc)
+
+        tag_installed = model in installed if tag_check_status == "ok" else None
+        if not live_mode:
+            if tag_installed:
                 self.send_json(
                     {
                         "status": "ok",
@@ -1213,112 +1220,125 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         "model": model,
                         "message": "Ollama model tag is installed. Live load check was not requested.",
                         "health_check_mode": "installed_only",
+                        "tag_check_status": tag_check_status,
+                        "tag_installed": tag_installed,
                     }
                 )
                 return
-
-            if self.has_running_eval_job():
-                self.send_json(
-                    {
-                        "status": "busy",
-                        "version": version,
-                        "provider": provider,
-                        "model": model,
-                        "message": "Eval job is running, so live load/unload healthcheck was skipped.",
-                        "health_check_mode": "load_unload",
-                    },
-                    status=409,
-                )
-                return
-
-            loaded_before = None
-            unload_status = "not_checked"
-            loaded_after_unload = None
-            loaded_after_probe = None
-            unload_error = ""
-            try:
-                loaded_models = self.ollama_loaded_models(base_url)
-                loaded_before = model in loaded_models
-            except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                unload_status = "ps_unavailable"
-                unload_error = str(exc)
-
-            should_unload = bool(model_spec.get("unload_after_health_check", True))
-            try:
-                self.ollama_probe_model(base_url, str(model))
-                try:
-                    loaded_after_probe = model in self.ollama_loaded_models(base_url)
-                except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                    loaded_after_probe = None
-                    unload_error = str(exc)
-            except (urlerror.HTTPError, urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                self.send_json(
-                    {
-                        "status": "load_failed",
-                        "version": version,
-                        "provider": provider,
-                        "model": model,
-                        "message": f"Model tag exists, but live load check failed: {exc}",
-                        "health_check_mode": "load_unload",
-                        "loaded_before_health": loaded_before,
-                        "loaded_after_probe": loaded_after_probe,
-                    },
-                    status=503,
-                )
-                return
-
-            if should_unload:
-                try:
-                    self.ollama_unload_model(
-                        base_url,
-                        str(model),
-                        timeout=MODEL_LIVE_HEALTH_TIMEOUT_SECONDS,
-                    )
-                    unload_status = "requested"
-                    try:
-                        loaded_after_unload = model in self.ollama_loaded_models(base_url)
-                    except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                        loaded_after_unload = None
-                        unload_error = str(exc)
-                except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
-                    unload_status = "error"
-                    unload_error = str(exc)
-            else:
-                unload_status = "disabled"
-
-            if unload_status == "requested":
-                message = "Model loaded successfully for healthcheck; an unload request was sent."
-            elif unload_status == "disabled":
-                message = "Model loaded successfully for healthcheck; unload is disabled for this config."
-            else:
-                message = "Model loaded successfully for healthcheck."
             self.send_json(
                 {
-                    "status": "ok",
+                    "status": "missing_model",
                     "version": version,
                     "provider": provider,
                     "model": model,
-                    "message": message,
-                    "health_check_mode": "load_unload",
-                    "loaded_before_health": loaded_before,
-                    "loaded_after_probe": loaded_after_probe,
-                    "unload_after_health_check": should_unload,
-                    "unload_status": unload_status,
-                    "loaded_after_unload": loaded_after_unload,
-                    "unload_error": unload_error,
-                }
+                    "message": f"Model is not installed in Ollama at {base_url}.",
+                    "tag_check_status": tag_check_status,
+                    "tag_installed": tag_installed,
+                },
+                status=503,
             )
             return
 
+        if self.has_running_eval_job():
+            self.send_json(
+                {
+                    "status": "busy",
+                    "version": version,
+                    "provider": provider,
+                    "model": model,
+                    "message": "Eval job is running, so live load/unload healthcheck was skipped.",
+                    "health_check_mode": "load_unload",
+                    "tag_check_status": tag_check_status,
+                    "tag_installed": tag_installed,
+                    "tag_check_error": tag_check_error,
+                },
+                status=409,
+            )
+            return
+
+        loaded_before = None
+        unload_status = "not_checked"
+        loaded_after_unload = None
+        loaded_after_probe = None
+        unload_error = ""
+        try:
+            loaded_models = self.ollama_loaded_models(base_url)
+            loaded_before = model in loaded_models
+        except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            unload_status = "ps_unavailable"
+            unload_error = str(exc)
+
+        should_unload = bool(model_spec.get("unload_after_health_check", True))
+        try:
+            self.ollama_probe_model(base_url, str(model))
+            try:
+                loaded_after_probe = model in self.ollama_loaded_models(base_url)
+            except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                loaded_after_probe = None
+                unload_error = str(exc)
+        except (urlerror.HTTPError, urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            tag_note = " Tag check was unavailable." if tag_check_status != "ok" else ""
+            self.send_json(
+                {
+                    "status": "load_failed",
+                    "version": version,
+                    "provider": provider,
+                    "model": model,
+                    "message": f"Live /api/chat health check failed at {base_url}: {exc}.{tag_note}".strip(),
+                    "health_check_mode": "load_unload",
+                    "loaded_before_health": loaded_before,
+                    "loaded_after_probe": loaded_after_probe,
+                    "tag_check_status": tag_check_status,
+                    "tag_installed": tag_installed,
+                    "tag_check_error": tag_check_error,
+                },
+                status=503,
+            )
+            return
+
+        if should_unload:
+            try:
+                self.ollama_unload_model(
+                    base_url,
+                    str(model),
+                    timeout=MODEL_LIVE_HEALTH_TIMEOUT_SECONDS,
+                )
+                unload_status = "requested"
+                try:
+                    loaded_after_unload = model in self.ollama_loaded_models(base_url)
+                except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                    loaded_after_unload = None
+                    unload_error = str(exc)
+            except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                unload_status = "error"
+                unload_error = str(exc)
+        else:
+            unload_status = "disabled"
+
+        if unload_status == "requested":
+            message = "Model responded to /api/chat for healthcheck; an unload request was sent."
+        elif unload_status == "disabled":
+            message = "Model responded to /api/chat for healthcheck; unload is disabled for this config."
+        else:
+            message = "Model responded to /api/chat for healthcheck."
         self.send_json(
             {
-                "status": "missing_model",
+                "status": "ok",
                 "version": version,
                 "provider": provider,
                 "model": model,
-                "message": f"Model is not installed in Ollama at {base_url}.",
-            },
-            status=503,
+                "message": message,
+                "health_check_mode": "load_unload",
+                "loaded_before_health": loaded_before,
+                "loaded_after_probe": loaded_after_probe,
+                "unload_after_health_check": should_unload,
+                "unload_status": unload_status,
+                "loaded_after_unload": loaded_after_unload,
+                "unload_error": unload_error,
+                "tag_check_status": tag_check_status,
+                "tag_installed": tag_installed,
+                "tag_check_error": tag_check_error,
+            }
         )
 
     def query_bool(self, params: dict[str, list[str]], name: str, default: bool = False) -> bool:
@@ -1453,8 +1473,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         payload = json.dumps(
             {
                 "model": model,
-                "prompt": "ping",
                 "stream": False,
+                "messages": [{"role": "user", "content": "ping"}],
                 "keep_alive": "30s",
                 "options": {
                     "num_predict": 1,
@@ -1462,7 +1482,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             }
         ).encode("utf-8")
         request = urlrequest.Request(
-            f"{str(base_url).rstrip('/')}/api/generate",
+            f"{str(base_url).rstrip('/')}/api/chat",
             data=payload,
             method="POST",
             headers={"Content-Type": "application/json"},
