@@ -1269,7 +1269,7 @@ function bindRunHealthCheckButton() {
     const targetVersions = evalTargetRegistryIds();
     if (!targetVersions.length || modelHealthCheckInFlight) return;
     try {
-      await syncSelectedModelApis(targetVersions, { requireSelected: false });
+      await syncSelectedModelApis(targetVersions, { requireSelected: false, scope: "all" });
     } finally {
       updateHealthCheckButtonState();
     }
@@ -1297,13 +1297,24 @@ function updateHealthCheckButtonState() {
   });
   if (modelHealthCheckInFlight) {
     const progress = modelHealthCheckProgress;
+    const isSingleCheck = progress?.scope === "single";
     buttons.forEach((button) => {
-      button.textContent = progress ? `확인 중 ${progress.current}/${progress.total}` : "확인 중...";
-      button.title = "등록된 대상 모델 연결 확인 중";
+      button.textContent = isSingleCheck
+        ? "개별 확인 중"
+        : (progress ? `확인 중 ${progress.current}/${progress.total}` : "확인 중...");
+      button.title = isSingleCheck && progress?.label
+        ? `개별 모델 연결 확인 중: ${progress.label}`
+        : "등록된 대상 모델 연결 확인 중";
     });
     if (hint) {
       const label = progress?.label ? ` · ${progress.label}` : "";
-      hint.textContent = progress ? `대상 모델 ${progress.current}/${progress.total} 순차 확인 중${label}` : `대상 모델 ${targetCount}개 확인 중`;
+      hint.textContent = isSingleCheck
+        ? `개별 모델 연결 확인 중${label}`
+        : (
+          progress
+            ? `대상 모델 ${progress.current}/${progress.total} 순차 확인 중${label}`
+            : `대상 모델 ${targetCount}개 확인 중`
+        );
     }
     return;
   }
@@ -1730,6 +1741,7 @@ function updateHeaderJudgeStatus(job = null) {
 async function syncSelectedModelApis(targetVersions = [...state.runConfigVersions], options = {}) {
   if (modelHealthCheckInFlight) return;
   const requireSelected = options.requireSelected !== false;
+  const checkScope = options.scope === "single" ? "single" : "all";
   const selectedVersionsForCheck = [...new Set(targetVersions)]
     .filter((version) => !requireSelected || state.runConfigVersions.has(version));
   const healthButtons = healthCheckButtons();
@@ -1748,9 +1760,10 @@ async function syncSelectedModelApis(targetVersions = [...state.runConfigVersion
         current: index + 1,
         total,
         label: modelLabelForVersion(version),
+        scope: checkScope,
       };
       updateHealthCheckButtonState();
-      await checkModelHealthWithRetry(version, index + 1, total);
+      await checkModelHealthWithRetry(version, index + 1, total, checkScope);
     }
   } finally {
     modelHealthCheckInFlight = false;
@@ -1760,7 +1773,7 @@ async function syncSelectedModelApis(targetVersions = [...state.runConfigVersion
   }
 }
 
-async function checkModelHealthWithRetry(version, index = 1, total = 1) {
+async function checkModelHealthWithRetry(version, index = 1, total = 1, scope = "all") {
   const registry = modelRegistry[version];
   if (!registry?.health_url) {
     state.modelConnections.set(version, {
@@ -1773,9 +1786,12 @@ async function checkModelHealthWithRetry(version, index = 1, total = 1) {
 
   let lastMessage = "";
   for (let attempt = 1; attempt <= modelHealthMaxAttempts; attempt += 1) {
+    const progressMessage = scope === "single"
+      ? `개별 확인 · 시도 ${attempt}/${modelHealthMaxAttempts}`
+      : `순차 확인 ${index}/${total} · 시도 ${attempt}/${modelHealthMaxAttempts}`;
     state.modelConnections.set(version, {
       status: "checking",
-      message: `순차 확인 ${index}/${total} · 시도 ${attempt}/${modelHealthMaxAttempts}`,
+      message: progressMessage,
       registry,
     });
     renderModelConnectionSurfaces();
@@ -2414,7 +2430,7 @@ function bindTargetRegistryButtons() {
       const version = button.dataset.checkModel;
       if (!version || modelHealthCheckInFlight) return;
       setRegistryMessage(`연결 확인 중: ${modelLabelForVersion(version)}`, "");
-      await syncSelectedModelApis([version], { requireSelected: false });
+      await syncSelectedModelApis([version], { requireSelected: false, scope: "single" });
       const stateInfo = state.modelConnections.get(version);
       const ok = ["connected", "installed", "available", "configured"].includes(stateInfo?.status);
       setRegistryMessage(
