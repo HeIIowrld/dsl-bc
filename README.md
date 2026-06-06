@@ -270,6 +270,7 @@ configs:
     provider: ollama
     model: your-local-model
     base_url: http://afsd.iptime.org:11434
+    base_url_env: OLLAMA_BASE_URL
     prompt_version: local_prompt_v1
     eval_target: true
     ui_visible: true
@@ -307,6 +308,7 @@ configs:
     provider: ollama
     model: your-judge-model
     base_url: http://afsd.iptime.org:11434
+    base_url_env: OLLAMA_BASE_URL
     prompt_version: judge_prompt_v1
     evaluation_role: llm_judge
     judge_role: judge

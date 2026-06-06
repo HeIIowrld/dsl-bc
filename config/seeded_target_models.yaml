@@ -10,7 +10,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: reference_v1
   system_prompt: ''
@@ -47,7 +47,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: bc_support_remote_baseline_chat_template_v1
   system_prompt: ''
@@ -84,7 +84,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: bc_support_remote_baseline_v1
   system_prompt: ''
@@ -121,7 +121,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: default_v1
   system_prompt: ''
@@ -158,7 +158,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: default_v1
   system_prompt: ''
@@ -195,7 +195,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: default_v1
   system_prompt: ''
@@ -232,7 +232,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: default_v1
   system_prompt: ''
@@ -269,7 +269,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: default_v1
   system_prompt: ''
@@ -306,7 +306,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: default_v1
   system_prompt: ''
@@ -343,7 +343,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: base_model_reference_v1
   system_prompt: ''
@@ -380,7 +380,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: base_model_reference_v1
   system_prompt: ''
@@ -417,7 +417,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: base_model_reference_v1
   system_prompt: ''
@@ -454,7 +454,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: base_model_reference_v1
   system_prompt: ''
@@ -491,7 +491,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: base_model_reference_v1
   system_prompt: ''
@@ -528,7 +528,7 @@ configs:
   upstream_health_url: ''
   upstream_chat_url: ''
   api_key_env: ''
-  base_url_env: ''
+  base_url_env: OLLAMA_BASE_URL
   local_path: ''
   prompt_version: reference_v1
   system_prompt: ''
