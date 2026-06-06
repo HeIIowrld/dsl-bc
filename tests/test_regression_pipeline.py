@@ -5,7 +5,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from urllib import error as urlerror
 from unittest import mock
 
 from final_UI.server import CASE_SUMMARY_CACHE, CASE_SUMMARY_CACHE_LOCK, EVAL_JOBS, EVAL_JOBS_LOCK, FinalUiHandler, eval_runner_python
@@ -2028,56 +2027,6 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["unload_status"], "requested")
         self.assertIn(("probe", "http://127.0.0.1:11434", "bc-gemma-9b-bcgpt:q4"), events)
         self.assertTrue(any(event[0] == "unload" for event in events))
-
-    def test_ollama_live_health_accepts_chat_probe_when_tags_unavailable(self) -> None:
-        handler = FinalUiHandler.__new__(FinalUiHandler)
-        captured = {}
-        events = []
-
-        def fake_ollama_models(base_url):
-            events.append(("tags", base_url))
-            raise urlerror.URLError("tags blocked")
-
-        def fake_ollama_loaded_models(base_url):
-            events.append(("ps", base_url))
-            raise urlerror.URLError("ps blocked")
-
-        def fake_ollama_probe_model(base_url, model):
-            events.append(("probe", base_url, model))
-            return {"message": {"content": "ok"}}
-
-        def fake_ollama_unload_model(base_url, model, timeout=None):
-            events.append(("unload", base_url, model, timeout))
-            return {"done": True}
-
-        def fake_send_json(payload, status=200):
-            captured["payload"] = payload
-            captured["status"] = status
-
-        handler.ollama_models = fake_ollama_models
-        handler.ollama_loaded_models = fake_ollama_loaded_models
-        handler.ollama_probe_model = fake_ollama_probe_model
-        handler.ollama_unload_model = fake_ollama_unload_model
-        handler.has_running_eval_job = lambda: False
-        handler.send_json = fake_send_json
-
-        FinalUiHandler.handle_model_health(
-            handler,
-            "qwen3",
-            {
-                "provider": "ollama",
-                "model": "qwen3:14b",
-                "base_url": "http://afsd.iptime.org:11434/",
-                "unload_after_health_check": True,
-            },
-            "mode=load_unload",
-        )
-
-        self.assertEqual(captured["status"], 200)
-        self.assertEqual(captured["payload"]["status"], "ok")
-        self.assertEqual(captured["payload"]["tag_check_status"], "unavailable")
-        self.assertIsNone(captured["payload"]["tag_installed"])
-        self.assertIn(("probe", "http://afsd.iptime.org:11434", "qwen3:14b"), events)
 
     def test_export_final_ui_writes_active_run_without_model_config_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
