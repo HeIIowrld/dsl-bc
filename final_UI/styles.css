@@ -1790,6 +1790,7 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   cursor: pointer;
 }
 
+.connection-health,
 .connection-edit {
   padding: 3px 7px;
   border: 1px solid var(--border-hi);
@@ -1797,6 +1798,16 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   background: var(--bg);
   color: var(--text);
   cursor: pointer;
+}
+
+.connection-health {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.connection-health:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .connection-edit:hover {
@@ -3625,4 +3636,3 @@ pre,
     font-size: 18px;
   }
 }
-

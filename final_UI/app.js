@@ -2379,6 +2379,7 @@ function renderTargetRegistry() {
         <div class="connection-actions">
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>
           ${modelConnectionPill(id)}
+          <button type="button" class="connection-health" data-check-model="${escapeHtml(id)}" ${modelHealthCheckInFlight ? "disabled" : ""}>연결 확인</button>
           <button type="button" class="connection-edit" data-edit-model="${escapeHtml(id)}">수정</button>
           <button type="button" class="connection-delete" data-delete-model="${escapeHtml(id)}">삭제</button>
         </div>
@@ -2404,6 +2405,20 @@ function bindTargetRegistryButtons() {
       const version = button.dataset.editModel;
       if (!version) return;
       editRegisteredModel(version);
+    });
+  });
+  document.querySelectorAll("[data-check-model]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const version = button.dataset.checkModel;
+      if (!version || modelHealthCheckInFlight) return;
+      setRegistryMessage(`연결 확인 중: ${modelLabelForVersion(version)}`, "");
+      await syncSelectedModelApis([version], { requireSelected: false });
+      const stateInfo = state.modelConnections.get(version);
+      const ok = ["connected", "installed", "available", "configured"].includes(stateInfo?.status);
+      setRegistryMessage(
+        `${ok ? "연결 확인 완료" : "연결 확인 실패"}: ${modelLabelForVersion(version)}${stateInfo?.message ? ` · ${stateInfo.message}` : ""}`,
+        ok ? "ok" : "error",
+      );
     });
   });
   document.querySelectorAll("[data-delete-model]").forEach((button) => {
