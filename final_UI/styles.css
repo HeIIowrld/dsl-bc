@@ -1701,9 +1701,17 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   min-width: 0;
 }
 
+.target-registry-title-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 6px;
+  min-width: 0;
+}
+
 .target-registry-title {
   display: -webkit-box;
-  min-height: 2.5em;
+  min-height: 1.25em;
   overflow: hidden;
   color: var(--text-head);
   -webkit-box-orient: vertical;
@@ -1734,6 +1742,11 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
 .target-registry-item .connection-actions {
   align-items: center;
   justify-content: flex-start;
+}
+
+.target-registry-title-row .model-status-pill,
+.target-registry-title-row .connection-health {
+  white-space: nowrap;
 }
 
 .registry-item strong,

@@ -2466,6 +2466,8 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn('data-check-model="${escapeHtml(id)}"', app_js)
         self.assertIn('data-delete-model="${escapeHtml(id)}"', app_js)
         self.assertIn("connection-health", styles_css)
+        self.assertIn("target-registry-title-row", app_js)
+        self.assertIn(".target-registry-title-row", styles_css)
         self.assertIn(".filter((id) => modelRegistry[id]?.ui_visible !== false)", app_js)
         self.assertIn('fieldShell(blend).hidden = !showJudgeControls || scoringMode !== "blend"', app_js)
         self.assertIn("label.hidden = !isEnabled", app_js)

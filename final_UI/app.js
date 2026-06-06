@@ -2372,14 +2372,16 @@ function renderTargetRegistry() {
     return `
       <div class="registry-item target-registry-item" title="${escapeHtml(detailTitle)}">
         <div class="target-registry-main">
-          <strong class="target-registry-title">${escapeHtml(modelLabelForVersion(id))}</strong>
+          <div class="target-registry-title-row">
+            <strong class="target-registry-title">${escapeHtml(modelLabelForVersion(id))}</strong>
+            ${modelConnectionPill(id)}
+            <button type="button" class="connection-health" data-check-model="${escapeHtml(id)}" ${modelHealthCheckInFlight ? "disabled" : ""}>연결 확인</button>
+          </div>
           <span class="target-registry-meta">${escapeHtml(spec.provider || "-")} · ${escapeHtml(spec.model || id)}</span>
           <code class="target-registry-code">${escapeHtml(id)} · ${escapeHtml(promptParts.join(" · "))}</code>
         </div>
         <div class="connection-actions">
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>
-          ${modelConnectionPill(id)}
-          <button type="button" class="connection-health" data-check-model="${escapeHtml(id)}" ${modelHealthCheckInFlight ? "disabled" : ""}>연결 확인</button>
           <button type="button" class="connection-edit" data-edit-model="${escapeHtml(id)}">수정</button>
           <button type="button" class="connection-delete" data-delete-model="${escapeHtml(id)}">삭제</button>
         </div>
