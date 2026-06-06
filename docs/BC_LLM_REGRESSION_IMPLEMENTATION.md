@@ -19,28 +19,23 @@ clova_api_url
 
 ## 1. Corpus Build
 
-MVP canonical source-of-truth:
+현재 공유본은 runtime 실행 패키지이므로 원천 수집 자료를 포함하지 않습니다. 원천 수집/코퍼스 빌드 자료는 로컬 `_unused_files/runtime_cleanup_20260606/` 아래로 분리했습니다.
 
 ```text
-sources/bc_cs_notice/out/llm_regression_all_sources.jsonl
+_unused_files/runtime_cleanup_20260606/sources/bc_cs_notice/
 ```
 
-Canonical corpus/evidence 생성:
+원천 코퍼스를 다시 만들 필요가 있는 경우에는 archived 자료를 복원한 뒤 아래 빌더를 사용합니다.
 
 ```powershell
 python .\scripts\build\build_corpus_from_bc_cs_notice.py
 ```
 
-주요 출력:
+주요 출력은 runtime package에 포함하지 않고 로컬 산출물로 관리합니다.
 
 ```text
-out/corpus/documents.jsonl
-out/corpus/chunks.jsonl
-out/corpus/source_versions.jsonl
-out/corpus/tables.jsonl
-out/corpus/facts.jsonl
-out/evidence/evidence_store.jsonl
-out/evidence/hard_negative_pool.jsonl
+out/corpus/*
+out/evidence/*
 ```
 
 현재 baseline count:
@@ -59,40 +54,40 @@ Dataset pool과 profile은 `config/eval_dataset_catalog.yaml`에서 관리합니
 
 ```powershell
 python .\scripts\eval\compose_eval_dataset.py `
-  --profile release_smoke `
+  --profile regression_golden_full `
   --seed 42 `
-  --output .\out\test_cases\composed\release_smoke_seed42.jsonl `
-  --summary .\out\test_cases\composed\release_smoke_seed42.summary.json
+  --output .\out\test_cases\composed\regression_golden_full_seed42.jsonl `
+  --summary .\out\test_cases\composed\regression_golden_full_seed42.summary.json
 ```
 
 배포 판정:
 
 ```powershell
 python .\scripts\eval\compose_eval_dataset.py `
-  --profile release_gate `
+  --profile regression_golden_full `
   --seed 42 `
-  --output .\out\test_cases\composed\release_gate_seed42.jsonl `
-  --summary .\out\test_cases\composed\release_gate_seed42.summary.json
+  --output .\out\test_cases\composed\regression_golden_full_seed42.jsonl `
+  --summary .\out\test_cases\composed\regression_golden_full_seed42.summary.json
 ```
 
 Benchmark smoke:
 
 ```powershell
 python .\scripts\eval\compose_eval_dataset.py `
-  --profile benchmark_smoke `
+  --profile benchmark_final_full `
   --seed 42 `
-  --output .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
-  --summary .\out\test_cases\composed\benchmark_smoke_seed42.summary.json
+  --output .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
+  --summary .\out\test_cases\composed\benchmark_final_full_seed42.summary.json
 ```
 
 Benchmark full:
 
 ```powershell
 python .\scripts\eval\compose_eval_dataset.py `
-  --profile benchmark_full `
+  --profile benchmark_final_full `
   --seed 42 `
-  --output .\out\test_cases\composed\benchmark_full_seed42.jsonl `
-  --summary .\out\test_cases\composed\benchmark_full_seed42.summary.json
+  --output .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
+  --summary .\out\test_cases\composed\benchmark_final_full_seed42.summary.json
 ```
 
 Custom seeded mix:
@@ -141,14 +136,14 @@ deprecated != true
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
-  --cases-file .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
   --config bc_gemma_9b_bcgpt_q4 `
   --config bc_deepseek_8b_bcgpt_q4 `
   --limit 2 `
   --dry-run
 ```
 
-Shadow/candidate fallback을 허용해야 하는 legacy 실행은 명시적으로 켭니다.
+Shadow/candidate fallback을 허용하는 exploratory 실행은 명시적으로 켭니다.
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
@@ -159,7 +154,7 @@ python .\scripts\eval\run_multi_model_eval.py `
 
 ## 5. Local Ollama Live Run
 
-주요 대상 모델은 `config/model_registry.yaml`에 등록되어 있습니다.
+repo에 포함된 seed 대상 모델은 `config/seeded_target_models.yaml`에 등록되어 있습니다. UI에서 추가한 대상 모델과 judge 모델은 각각 `final_UI/data/registered_target_models.json`, `final_UI/data/registered_judge_models.json`에 분리 저장됩니다.
 
 ```text
 bc_gemma_9b_bcgpt_q4       -> bc-gemma-9b-bcgpt:q4
@@ -172,13 +167,13 @@ Static scoring smoke:
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
-  --cases-file .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
   --config bc_gemma_9b_bcgpt_q4 `
   --config bc_deepseek_8b_bcgpt_q4 `
   --limit 2 `
   --keep-alive 5m `
   --timeout 300 `
-  --run-id RUN_LIVE_BENCHMARK_SMOKE `
+  --run-id RUN_LIVE_BENCHMARK_FINAL_FULL `
   --export-final-ui
 ```
 
@@ -186,7 +181,7 @@ LLM-as-judge smoke:
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
-  --cases-file .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
   --config bc_gemma_9b_bcgpt_q4 `
   --config bc_deepseek_8b_bcgpt_q4 `
   --limit 1 `
@@ -224,7 +219,7 @@ set OLLAMA_MAX_LOADED_MODELS=1
 set OLLAMA_NUM_PARALLEL=1
 ```
 
-Runner는 config별 `base_url`로 `/api/tags` preflight를 수행하고, 평가 후 unload 요청과 `/api/ps` snapshot을 기록합니다. 기본 운영은 로컬 Ollama endpoint를 전제로 합니다. 비로컬 endpoint를 쓰는 경우에는 local shell의 `ollama stop` fallback을 실행하지 않고 `fallback_method=skipped_remote_endpoint`로 남깁니다.
+Runner는 config별 `base_url`로 `/api/tags` preflight를 수행하고, 평가 후 unload 요청과 `/api/ps` snapshot을 기록합니다. 비로컬 endpoint를 쓰는 경우에는 local shell의 `ollama stop` fallback을 실행하지 않고 `fallback_method=skipped_remote_endpoint`로 남깁니다.
 
 Final UI의 `연결 확인`도 VRAM 제한 환경을 전제로 순차 실행됩니다.
 
@@ -310,8 +305,8 @@ http://localhost:8512
 2026-05-21 검증된 실제 모델 실행:
 
 ```text
-RUN_LIVE_JUDGE_SMOKE_20260521_171623
-cases: benchmark_smoke seed 42, limit 1
+RUN_LIVE_JUDGE_FINAL_FULL_20260521_171623
+cases: benchmark_final_full seed 42, limit 1
 models: bc-gemma-9b-bcgpt:q4, bc-deepseek-8b-bcgpt:q4
 judge: clova_hcx007_judge
 scoring_mode: static_llm
@@ -339,7 +334,7 @@ python -m py_compile `
 python -m unittest discover -s tests -p "test*.py"
 ```
 
-최근 전체 단위 테스트 기준: 111 tests OK.
+최근 전체 단위 테스트 기준: 112 tests OK.
 
 ## 11. Troubleshooting
 
@@ -353,7 +348,7 @@ shadow/benchmark run에서는 정상 동작입니다.
 UI에서 모델이 offline:
 
 ```text
-config/model_registry.yaml의 config별 base_url로 /api/tags 조회에 실패했거나,
+config/seeded_target_models.yaml 또는 등록 모델 JSON의 config별 base_url로 /api/tags 조회에 실패했거나,
 해당 Ollama 서버에 model tag가 설치되어 있지 않은 상태입니다.
 ```
 

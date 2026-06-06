@@ -21,7 +21,7 @@ current corpus
 MVP의 source-of-truth는 다음 파일이다.
 
 ```text
-sources/bc_cs_notice/out/llm_regression_all_sources.jsonl
+원천 수집 자료는 runtime 공유본에서 제외하고 별도 archive로 관리한다.
 ```
 
 이 파일을 canonical corpus로 변환한 현재 기준 산출물은 다음과 같다.
@@ -35,9 +35,8 @@ evidence_store.jsonl   3,917
 현재 구현 산출물 경로는 다음을 기준으로 한다.
 
 ```text
-out/corpus/documents.jsonl
-out/corpus/chunks.jsonl
-out/evidence/evidence_store.jsonl
+out/corpus/*
+out/evidence/*
 ```
 
 2026-05-21 기준 실제 live smoke run은 `RUN_LIVE_JUDGE_SMOKE_20260521_171623`이며, active gold가 아직 0건이므로 배포 판정은 `not_applicable`로 기록되는 것이 정상 상태다.
@@ -79,7 +78,7 @@ MVP 단계에서는 최종 통합 corpus만 canonical source로 승격한다.
 
 ```text
 source_id: bc_cs_notice_all_sources
-source_path: sources/bc_cs_notice/out/llm_regression_all_sources.jsonl
+source_path: archived source package
 source_role: source_of_truth
 ```
 
@@ -88,9 +87,8 @@ source_role: source_of_truth
 필수 산출물:
 
 ```text
-out/corpus/documents.jsonl
-out/corpus/chunks.jsonl
-out/evidence/evidence_store.jsonl
+out/corpus/*
+out/evidence/*
 ```
 
 각 artifact는 최소한 다음 metadata를 가진다.
@@ -99,7 +97,7 @@ out/evidence/evidence_store.jsonl
 {
   "corpus_id": "bc_cs_notice",
   "corpus_version": "YYYYMMDD",
-  "source_path": "sources/bc_cs_notice/out/llm_regression_all_sources.jsonl",
+  "source_path": "archived source package",
   "source_hash": "string",
   "document_count": 2923,
   "chunk_count": 3917,
@@ -198,7 +196,7 @@ active_failure_cases: 과거 실패가 있으면 10~20개
 
 ## 8. 모델 레지스트리 요구사항
 
-`config/model_registry.yaml`은 모델명만이 아니라 실행 variant를 관리한다.
+`config/seeded_target_models.yaml`은 모델명만이 아니라 seed 대상 실행 variant를 관리한다.
 
 ```yaml
 config_id: bc_gemma_9b_bcgpt_q4_strict_t0
@@ -542,7 +540,7 @@ REM 2. canonical corpus 생성
 py scripts\build\build_corpus_from_bc_cs_notice.py
 
 REM 3. case 생성
-py scripts\generate\generate_cases_from_domain_outputs.py --limit 200
+py scripts\eval\compose_eval_dataset.py --profile benchmark_final_full --seed 42 --output out\test_cases\composed\benchmark_final_full.jsonl
 
 REM 4. dry run
 py scripts\eval\run_multi_model_eval.py --dry-run --limit 3

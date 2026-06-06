@@ -49,8 +49,9 @@ from scripts.eval.run_multi_model_eval import (  # noqa: E402
     write_xlsx as eval_write_xlsx,
 )
 
-USER_REGISTRY_PATH = ROOT / "data" / "user_model_registry.json"
-STATIC_REGISTRY_PATH = PROJECT_ROOT / "config" / "model_registry.yaml"
+REGISTERED_TARGET_MODELS_PATH = ROOT / "data" / "registered_target_models.json"
+REGISTERED_JUDGE_MODELS_PATH = ROOT / "data" / "registered_judge_models.json"
+SEEDED_TARGET_MODELS_PATH = PROJECT_ROOT / "config" / "seeded_target_models.yaml"
 EVAL_DATASET_CATALOG_PATH = PROJECT_ROOT / "config" / "eval_dataset_catalog.yaml"
 EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
 EVAL_ARCHIVE_ROOT = EVAL_RUNS_ROOT / "archive"
@@ -68,25 +69,24 @@ QUESTIONLIST_CSV_DIRS = [
     BENCHMARK_CSV_ROOT,
     REGRESSION_CSV_ROOT,
 ]
-LEGACY_DATASET_PATH_MARKERS = (
+EXCLUDED_DATASET_PATH_MARKERS = (
     "_unused_files",
-    "legacy",
     "archive",
     "backup",
     "tmp",
     "draft",
     "cleanup",
 )
-LEGACY_DATASET_NAME_TOKENS = ("old",)
+EXCLUDED_DATASET_NAME_TOKENS = ("old",)
 ACTIVE_RUN_PATHS = [
     ROOT / "data" / "active_run.json",
     EVAL_RUNS_ROOT / "active_run.json",
 ]
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://afsd.iptime.org:11434").rstrip("/")
 MODEL_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MODEL_HEALTH_TIMEOUT_SECONDS", "8"))
 MODEL_LIVE_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MODEL_LIVE_HEALTH_TIMEOUT_SECONDS", "180"))
 RUN_EXCLUDE_MARKERS = ("SMOKE", "DEBUG", "TEST")
-RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs", "_web_jobs"}
+RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs"}
 MIN_DISPLAY_QUESTIONS = 10
 EMPTY_LATEST_RUN_CSV = {
     "eval_runs.csv": "run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,utl,nac,hal,scored_acc,scored_com,scored_utl,scored_nac,scored_hal,utl_applicable,utl_applicable_rate,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw\n",
@@ -455,6 +455,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/auth/access-log":
             self.handle_auth_access_log(parsed.query)
             return
+        if parsed.path == "/api/model-registry":
+            self.handle_dynamic_model_registry()
+            return
         if parsed.path.startswith("/api/models/"):
             self.handle_model_api(parsed.path, parsed.query)
             return
@@ -488,9 +491,6 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/eval/jobs/"):
             self.handle_eval_job(unquote(parsed.path.rsplit("/", 1)[-1]))
             return
-        if parsed.path == "/data/model_registry.json":
-            self.handle_dynamic_model_registry()
-            return
         if parsed.path in {
             "/data/eval_runs.csv",
             "/data/question_cases.csv",
@@ -514,6 +514,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         dynamic_paths = {
             "/api/auth/session",
             "/api/auth/access-log",
+            "/api/model-registry",
             "/api/questionlist/summary",
             "/api/questionlist/cases",
             "/api/questionlist/datasets",
@@ -523,7 +524,6 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "/api/eval/runs",
             "/api/eval/jobs",
             "/api/eval/answers-template",
-            "/data/model_registry.json",
             "/data/eval_runs.csv",
             "/data/question_cases.csv",
             "/data/run_release_gates.csv",
@@ -806,14 +806,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.send_json({"error": "not found"}, status=404)
 
     def load_registry(self):
-        static_registry = self.load_static_default_targets()
-        user_registry = self.load_json_registry(USER_REGISTRY_PATH)
-        self.mark_registry_source(static_registry, "static", deletable=False)
-        self.mark_registry_source(user_registry, "user", deletable=True)
-        return {**static_registry, **user_registry}
+        seeded_target_registry = self.load_seeded_target_models()
+        target_registry = self.load_registered_target_models_file()
+        judge_registry = self.load_registered_judge_models_file()
+        self.mark_registry_source(seeded_target_registry, "user", deletable=True)
+        self.mark_registry_source(target_registry, "user", deletable=True)
+        self.mark_registry_source(judge_registry, "user", deletable=True)
+        return {**seeded_target_registry, **target_registry, **judge_registry}
 
-    def load_static_default_targets(self):
-        registry = self.load_json_registry(STATIC_REGISTRY_PATH)
+    def load_seeded_target_models(self):
+        registry = self.load_json_registry(SEEDED_TARGET_MODELS_PATH)
         return {
             config_id: spec
             for config_id, spec in registry.items()
@@ -866,6 +868,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             upstream_health_url = config.get("health_url")
         if config.get("api_url") and not str(config.get("api_url")).startswith("/api/models/"):
             upstream_chat_url = config.get("api_url")
+        raw_candidate_role = str(config.get("candidate_role") or "").strip()
+        judge_role = str(config.get("judge_role") or "").strip()
+        evaluation_role = str(config.get("evaluation_role") or config.get("usage_role") or "").strip()
+        if not judge_role and "arbiter" in evaluation_role.lower():
+            judge_role = "arbiter"
+        elif not judge_role and "judge" in evaluation_role.lower():
+            judge_role = "judge"
         normalized = {
             "config_id": config_id,
             "display_name": config.get("display_name") or config.get("name") or config.get("model") or config_id,
@@ -896,11 +905,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "safety_policy": config.get("safety_policy"),
             "role_notes": config.get("role_notes") or "",
             "model_group": config.get("model_group") or "",
-            "candidate_role": config.get("candidate_role") or "",
-            "evaluation_role": config.get("evaluation_role") or config.get("usage_role") or "",
+            "candidate_role": raw_candidate_role,
+            "evaluation_role": evaluation_role,
+            "judge_role": judge_role,
+            "visibility_status": str(config.get("visibility_status") or "").strip(),
             "eval_target": self.config_bool(config.get("eval_target"), default=True),
             "ui_visible": self.config_bool(config.get("ui_visible"), default=True),
-            "default_selected": self.config_bool(config.get("default_selected"), default=False),
+            "run_preselected": self.config_bool(config.get("run_preselected"), default=False),
             "unload_after_health_check": self.config_bool(
                 config.get("unload_after_health_check"),
                 default=provider == "ollama",
@@ -921,10 +932,23 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return False
         role_text = " ".join(
             str(config.get(key) or "")
-            for key in ("evaluation_role", "candidate_role", "safety_policy", "prompt_version", "config_id", "display_name")
+            for key in ("evaluation_role", "judge_role", "safety_policy", "prompt_version", "config_id", "display_name")
         ).lower()
         blocked_markers = ("judge", "router", "vision", "aux")
         return not any(marker in role_text for marker in blocked_markers)
+
+    def is_judge_registry_config(self, config: dict):
+        if not config:
+            return False
+        if str(config.get("visibility_status") or "").strip().lower() == "hidden_by_user":
+            return False
+        if str(config.get("safety_policy") or "").strip().lower() == "hidden_by_user":
+            return False
+        role_text = " ".join(
+            str(config.get(key) or "")
+            for key in ("evaluation_role", "judge_role", "safety_policy", "prompt_version", "config_id", "display_name")
+        ).lower()
+        return "judge" in role_text or "arbiter" in role_text or "hal_lora" in role_text
 
     def safe_config_id(self, value):
         text = str(value or "").strip().lower()
@@ -1019,9 +1043,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "local_path is required for local_path provider"}, status=400)
             return
 
-        user_registry = self.load_user_registry_file()
-        user_registry[normalized["config_id"]] = normalized
-        self.write_user_registry_file(user_registry)
+        target_registry = self.load_registered_target_models_file()
+        judge_registry = self.load_registered_judge_models_file()
+        if self.is_judge_registry_config(normalized):
+            target_registry.pop(normalized["config_id"], None)
+            judge_registry[normalized["config_id"]] = normalized
+        else:
+            judge_registry.pop(normalized["config_id"], None)
+            target_registry[normalized["config_id"]] = normalized
+        self.write_registered_registry_files(target_registry, judge_registry)
         self.send_json({"status": "ok", "config": normalized, "registry": self.load_registry()})
 
     def handle_delete_model_registry_entry(self, config_id: str):
@@ -1030,18 +1060,23 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "config_id is required"}, status=400)
             return
 
-        user_registry = self.load_user_registry_file()
-        static_registry = self.load_static_default_targets()
-        if normalized_id in static_registry:
-            deleted = user_registry.pop(normalized_id, static_registry[normalized_id])
-            user_registry[normalized_id] = self.hidden_registry_override(normalized_id, deleted)
-        elif normalized_id in user_registry:
-            deleted = user_registry.pop(normalized_id)
+        target_registry = self.load_registered_target_models_file()
+        judge_registry = self.load_registered_judge_models_file()
+        seeded_target_registry = self.load_seeded_target_models()
+        if normalized_id in seeded_target_registry:
+            deleted = target_registry.pop(normalized_id, seeded_target_registry[normalized_id])
+            judge_registry.pop(normalized_id, None)
+            target_registry[normalized_id] = self.hidden_registry_override(normalized_id, deleted)
+        elif normalized_id in target_registry:
+            deleted = target_registry.pop(normalized_id)
+            judge_registry.pop(normalized_id, None)
+        elif normalized_id in judge_registry:
+            deleted = judge_registry.pop(normalized_id)
         else:
             self.send_json({"error": f"unknown registered model: {normalized_id}"}, status=404)
             return
 
-        self.write_user_registry_file(user_registry)
+        self.write_registered_registry_files(target_registry, judge_registry)
         self.send_json({"status": "ok", "deleted": deleted, "registry": self.load_registry()})
 
     def hidden_registry_override(self, config_id: str, source_spec: dict):
@@ -1062,23 +1097,36 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "safety_policy": "hidden_by_user",
             "role_notes": "Hidden from the Final UI model registry by user request.",
             "model_group": source_spec.get("model_group") or "",
-            "candidate_role": "hidden_by_user",
-            "evaluation_role": "",
+            "candidate_role": source_spec.get("candidate_role") or "",
+            "evaluation_role": source_spec.get("evaluation_role") or "",
+            "judge_role": source_spec.get("judge_role") or "",
+            "visibility_status": "hidden_by_user",
             "eval_target": False,
             "ui_visible": False,
-            "default_selected": False,
+            "run_preselected": False,
             "options": source_spec.get("options", {}) if isinstance(source_spec.get("options"), dict) else {},
         }
 
-    def write_user_registry_file(self, registry: dict):
-        USER_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        USER_REGISTRY_PATH.write_text(
+    def write_registry_file(self, path: Path, registry: dict):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
             json.dumps({"configs": list(registry.values())}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
 
-    def load_user_registry_file(self):
-        return self.load_json_registry(USER_REGISTRY_PATH)
+    def write_registered_registry_files(self, target_registry: dict, judge_registry: dict):
+        self.write_registry_file(REGISTERED_TARGET_MODELS_PATH, target_registry)
+        self.write_registry_file(REGISTERED_JUDGE_MODELS_PATH, judge_registry)
+
+    def load_registered_target_models_file(self):
+        if REGISTERED_TARGET_MODELS_PATH.exists():
+            return self.load_json_registry(REGISTERED_TARGET_MODELS_PATH)
+        return {}
+
+    def load_registered_judge_models_file(self):
+        if REGISTERED_JUDGE_MODELS_PATH.exists():
+            return self.load_json_registry(REGISTERED_JUDGE_MODELS_PATH)
+        return {}
 
     def read_json_body(self):
         try:
@@ -2413,7 +2461,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         subprocess_env.setdefault("EVAL_JUDGE_JOB_DIR", str(EVAL_ARCHIVE_ROOT / "judge_jobs"))
         subprocess_env.setdefault("EVAL_JUDGE_CHILD_RUN_ROOT", str(EVAL_ARCHIVE_ROOT / "judge_runs"))
 
-        registry_override_path = ""
+        runner_config_path = ""
 
         if not is_tool_agent_run and not skip_scoring and scoring_mode != "static":
             judge_result = self.prepare_judge_config(
@@ -2435,10 +2483,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     self.send_json({"error": weight_error}, status=400)
                     return
             judge_config_label = ", ".join(judge_config_ids)
-            registry_override_path = judge_result.get("registry_path", "")
+            runner_config_path = judge_result.get("runner_config_path", "")
 
-        if not is_tool_agent_run and not registry_override_path:
-            registry_override_path = self.write_run_registry(
+        if not is_tool_agent_run and not runner_config_path:
+            runner_config_path = self.write_runner_model_configs(
                 registry=registry,
                 job_id=job_id,
                 log_dir=log_dir,
@@ -2491,8 +2539,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             ]
             if limit is not None:
                 cmd.extend(["--limit", str(limit)])
-            if registry_override_path:
-                cmd.extend(["--registry", registry_override_path])
+            if runner_config_path:
+                cmd.extend(["--registry", runner_config_path])
             for config_id in configs:
                 cmd.extend(["--config", config_id])
             for suite in suites:
@@ -2679,7 +2727,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         subprocess_env.setdefault("PYTHONUNBUFFERED", "1")
         subprocess_env.setdefault("EVAL_JUDGE_JOB_DIR", str(EVAL_ARCHIVE_ROOT / "judge_jobs"))
         subprocess_env.setdefault("EVAL_JUDGE_CHILD_RUN_ROOT", str(EVAL_ARCHIVE_ROOT / "judge_runs"))
-        registry_override_path = ""
+        runner_config_path = ""
         judge_config_ids: list[str] = []
         judge_config_label = ""
         judge_score_weights = {}
@@ -2722,7 +2770,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     self.send_json({"error": "arbiter conflict handling requires two base judges plus one arbiter config."}, status=400)
                     return
             judge_config_label = ", ".join(judge_config_ids)
-            registry_override_path = judge_result.get("registry_path", "")
+            runner_config_path = judge_result.get("runner_config_path", "")
 
         configs = self.saved_answer_config_ids(source_run_id=source_run_id, answers_csv=answers_csv, default_config_id=payload.get("external_config_id"))
         runner_python = eval_runner_python()
@@ -2744,8 +2792,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "--scoring-mode",
             scoring_mode,
         ]
-        if registry_override_path:
-            cmd.extend(["--registry", registry_override_path])
+        if runner_config_path:
+            cmd.extend(["--registry", runner_config_path])
         if source_run_id:
             cmd.extend(["--source-run-id", source_run_id])
         else:
@@ -3289,11 +3337,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 EVAL_JOBS[loaded_id] = job
 
     def eval_job_dirs(self) -> list[Path]:
-        dirs = [WEB_JOBS_ROOT]
-        legacy = EVAL_RUNS_ROOT / "_web_jobs"
-        if legacy != WEB_JOBS_ROOT and legacy.exists():
-            dirs.append(legacy)
-        return dirs
+        return [WEB_JOBS_ROOT]
 
     def refresh_persisted_job_status(self, job: dict):
         before = self.job_status_snapshot(job)
@@ -3667,7 +3711,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 continue
             role = "benchmark" if directory.name == "benchmark" else "regression"
             for path in sorted(directory.glob("*.csv")):
-                if self.path_has_legacy_dataset_marker(path):
+                if self.path_has_excluded_dataset_marker(path):
                     continue
                 dataset_id = f"{directory.name}__{path.stem}"
                 datasets[dataset_id] = {
@@ -4003,20 +4047,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def catalog_dataset_visible(self, item: dict, path: Path):
         if not isinstance(item, dict) or not self.catalog_item_visible(item):
             return False
-        return path.exists() and not self.path_has_legacy_dataset_marker(path)
+        return path.exists() and not self.path_has_excluded_dataset_marker(path)
 
-    def path_has_legacy_dataset_marker(self, path: Path):
+    def path_has_excluded_dataset_marker(self, path: Path):
         normalized_parts = [str(part).lower() for part in path.parts]
         if any(
             marker in part
             for part in normalized_parts
-            for marker in LEGACY_DATASET_PATH_MARKERS
+            for marker in EXCLUDED_DATASET_PATH_MARKERS
         ):
             return True
         tokens = []
         for part in normalized_parts:
             tokens.extend(token for token in re.split(r"[^a-z0-9]+", part) if token)
-        return any(token in LEGACY_DATASET_NAME_TOKENS for token in tokens)
+        return any(token in EXCLUDED_DATASET_NAME_TOKENS for token in tokens)
 
     def case_value(self, row: dict, key: str):
         current = row
@@ -4128,7 +4172,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 return {
                     "judge_config_id": ", ".join(result_config_ids),
                     "judge_config_ids": result_config_ids,
-                    "registry_path": "",
+                    "runner_config_path": "",
                 }
         else:
             if provider not in {"ollama", "openai_native", "openai_compatible", "generic_api", "clova_studio", "anthropic", "gemini"}:
@@ -4168,6 +4212,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "system_prompt": str(judge_payload.get("system_prompt") or "").strip(),
                 "rag_config": "none",
                 "safety_policy": "qwen2_5_7b_hal_lora",
+                "evaluation_role": "llm_judge",
+                "judge_role": "judge",
+                "eval_target": False,
                 "options": judge_options,
             }
             temp_configs.append(temp_config)
@@ -4177,15 +4224,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         configs = [self.eval_runner_model_config(spec) for spec in registry.values()]
         configs = [config for config in configs if config.get("config_id") not in temp_config_ids]
         configs.extend(self.eval_runner_model_config(config) for config in temp_configs)
-        registry_path = log_dir / f"{job_id}_model_registry.json"
-        registry_path.write_text(
+        runner_config_path = log_dir / f"{job_id}_runner_model_configs.json"
+        runner_config_path.write_text(
             json.dumps({"configs": configs}, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
         return {
             "judge_config_id": ", ".join(result_config_ids),
             "judge_config_ids": result_config_ids,
-            "registry_path": str(registry_path),
+            "runner_config_path": str(runner_config_path),
         }
 
     def eval_runner_model_config(self, config: dict) -> dict:
@@ -4203,9 +4250,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             runner_config.pop(key, None)
         return runner_config
 
-    def write_run_registry(self, *, registry: dict, job_id: str, log_dir: Path) -> str:
-        registry_path = log_dir / f"{job_id}_model_registry.json"
-        registry_path.write_text(
+    def write_runner_model_configs(self, *, registry: dict, job_id: str, log_dir: Path) -> str:
+        runner_config_path = log_dir / f"{job_id}_runner_model_configs.json"
+        runner_config_path.write_text(
             json.dumps(
                 {"configs": [self.eval_runner_model_config(config) for config in registry.values()]},
                 ensure_ascii=False,
@@ -4214,7 +4261,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             + "\n",
             encoding="utf-8",
         )
-        return str(registry_path)
+        return str(runner_config_path)
 
     def default_judge_options(self, provider: str):
         if provider == "openai_native":

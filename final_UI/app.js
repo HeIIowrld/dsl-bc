@@ -39,20 +39,14 @@ const severityLabels = {
 
 const runProfileLabels = {
   single_dataset: "단일 케이스 파일",
-  benchmark_smoke: "벤치마크 일부",
   benchmark_final_full: "벤치마크 전체",
-  benchmark_full: "벤치마크 전체",
-  regression_golden_smoke: "회귀 스모크",
   regression_golden_full: "회귀 전체",
   custom_seeded_mix: "직접 구성",
 };
 
 const runProfileHelp = {
   single_dataset: "선택한 케이스 파일에서 세부 묶음/문항 수 조건으로 빠르게 확인합니다.",
-  benchmark_smoke: "최종 벤치마크 중 일부 문항으로 빠르게 성능을 봅니다.",
   benchmark_final_full: "최종 벤치마크 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
-  benchmark_full: "최종 벤치마크 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
-  regression_golden_smoke: "릴리즈 전 회귀 골든셋 일부를 빠르게 점검합니다.",
   regression_golden_full: "회귀 골든셋 전체를 실행합니다. 배포 차단 판단에 사용합니다.",
   custom_seeded_mix: "풀별 할당량을 직접 입력해 섞어서 실행합니다.",
 };
@@ -61,7 +55,7 @@ const scoringModeLabels = {
   llm_override: "LLM only",
   llm_blended: "LLM blended",
   blend: "LLM+Static blended",
-  static: "Static only",
+  static: "Rule-based only",
   static_llm: "Static + LLM audit",
   answers_only: "답변만 생성",
 };
@@ -95,16 +89,15 @@ const hiddenDatasetIds = new Set([
   "regression__regression_golden_set",
 ]);
 
-const legacyDatasetMarkers = [
+const excludedDatasetMarkers = [
   "_unused_files",
-  "legacy",
   "archive",
   "backup",
   "tmp",
   "draft",
   "cleanup",
 ];
-const legacyDatasetTokens = ["old"];
+const excludedDatasetTokens = ["old"];
 
 const sourceLabels = {
   "\uc0ac\ub0b4FAQ": "BC FAQ",
@@ -280,7 +273,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       fetchCsv(`data/eval_runs.csv${runQuery}`),
       fetchCsv(`data/question_cases.csv${runQuery}`),
       fetchCsvOptional(`data/run_release_gates.csv${runQuery}`, ""),
-      fetchJsonOptional("data/model_registry.json", {}),
+      fetchJsonOptional("api/model-registry", {}),
       fetchJsonOptional("api/questionlist/summary", null),
       fetchJsonOptional("api/questionlist/cases?limit=400", { cases: [] }),
       fetchJsonOptional("api/questionlist/datasets", { datasets: [] }),
@@ -631,8 +624,8 @@ function normalizeQuestionlistCase(d) {
 }
 
 function initializeState() {
-  const resultDefaults = defaultSelectedModelIds();
-  state.resultVersions = new Set(resultDefaults);
+  const runPreselected = runPreselectedModelIds();
+  state.resultVersions = new Set(runPreselected);
   state.runConfigVersions = new Set(evalTargetRegistryIds());
   state.difficulties = new Set(finalQuestionTypes);
   state.sources = new Set(finalQaCategories);
@@ -944,7 +937,7 @@ async function loadSelectedRun(runId) {
   latestRun = runInfo;
   selectedRunId = runInfo?.run_id || selectedRunId;
   evalRunHistory = runHistory?.runs ?? evalRunHistory;
-  state.resultVersions = new Set(defaultSelectedModelIds());
+  state.resultVersions = new Set(runPreselectedModelIds());
   state.selectedQuestion = cases[0]?.question_id ?? null;
   state.questionSearch = "";
   state.failureLimit = 40;
@@ -984,13 +977,13 @@ function evalTargetRegistryIds() {
     .sort((a, b) => modelLabelForVersion(a).localeCompare(modelLabelForVersion(b), "ko"));
 }
 
-function defaultSelectedModelIds() {
+function runPreselectedModelIds() {
   const runIds = unique(runs.map((row) => row.version).filter(Boolean));
   if (runIds.length) return runIds;
   const ids = evalTargetRegistryIds();
   const primary = ids.filter((id) => {
     const spec = modelSpecForVersion(id);
-    return spec.default_selected === true || spec.candidate_role === "finetuned_latest";
+    return spec.run_preselected === true || spec.candidate_role === "finetuned_latest";
   });
   return primary.length ? primary : ids;
 }
@@ -1005,6 +998,7 @@ function isEvalTargetModelId(version) {
   if (spec.eval_target === false || spec.ui_visible === false) return false;
   const roleText = [
     spec.evaluation_role,
+    spec.judge_role,
     spec.candidate_role,
     spec.safety_policy,
     spec.prompt_version,
@@ -1018,7 +1012,7 @@ function isJudgeModelSpec(spec) {
   if (!spec) return false;
   const roleText = [
     spec.evaluation_role,
-    spec.candidate_role,
+    spec.judge_role,
     spec.safety_policy,
     spec.prompt_version,
     spec.config_id,
@@ -1036,7 +1030,7 @@ function judgeModelIds() {
 
 const judgePromptPresets = {
   judge_default_v1: {
-    label: "기본 Judge prompt",
+    label: "표준 Judge prompt",
     version: "judge_v2_acc_com_utl_nac_hal",
     locked: true,
   },
@@ -1934,6 +1928,16 @@ function bindModelRegistryForm() {
 function bindJudgeRegistryForm() {
   const form = document.getElementById("judgeRegistryForm");
   if (!form) return;
+  const copySelect = document.getElementById("judgeCopyTargetBase");
+  const copyStart = document.getElementById("judgeCopyTargetStart");
+  copyStart?.addEventListener("click", () => {
+    if (!copySelect?.value) {
+      setJudgeRegistryMessage("복사할 대상 모델을 먼저 선택하세요.", "error");
+      copySelect?.focus();
+      return;
+    }
+    prefillJudgeFromTarget(copySelect.value);
+  });
   document.getElementById("judgeRegistryReset")?.addEventListener("click", () => {
     resetJudgeRegistryForm(form);
     setJudgeRegistryMessage("새 Judge 모델 등록 모드입니다.", "");
@@ -2012,7 +2016,8 @@ function judgeRegistryPayload(form) {
   payload.eval_target = false;
   payload.ui_visible = true;
   payload.evaluation_role = "llm_judge";
-  payload.candidate_role = payload.system_prompt_preset === "arbiter_conflict_v1" ? "arbiter" : "judge";
+  payload.judge_role = payload.system_prompt_preset === "arbiter_conflict_v1" ? "arbiter" : "judge";
+  payload.candidate_role = "";
   if (!payload.system_prompt_preset) payload.system_prompt_preset = "judge_default_v1";
   if (!payload.prompt_version) payload.prompt_version = judgePromptPresets[payload.system_prompt_preset]?.version || judgePromptPresets.judge_default_v1.version;
   if (payload.system_prompt_preset === "custom" && !payload.system_prompt) {
@@ -2023,6 +2028,58 @@ function judgeRegistryPayload(form) {
   payload.rag_config = "none";
   payload.role_notes = "Registered LLM-as-a-judge config. Not selectable as a target model.";
   return payload;
+}
+
+function renderJudgeCopyTargetSelect() {
+  const select = document.getElementById("judgeCopyTargetBase");
+  const button = document.getElementById("judgeCopyTargetStart");
+  if (!select) return;
+  const current = select.value;
+  const ids = evalTargetRegistryIds();
+  select.innerHTML = [
+    `<option value="">대상 모델 선택</option>`,
+    ...ids.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(modelLabelForVersion(id))}</option>`),
+  ].join("");
+  if (current && ids.includes(current)) select.value = current;
+  if (button) button.disabled = !ids.length;
+}
+
+function prefillJudgeFromTarget(targetId) {
+  const spec = modelSpecForVersion(targetId);
+  if (!spec?.config_id && !modelRegistry[targetId]) return;
+  const label = modelLabelForVersion(targetId);
+  const configId = `${targetId}_judge`;
+  const options = spec.options || {};
+  copySelectField("judgeRegistryProvider", spec.provider || "ollama", "ollama");
+  copyModelField("judgeRegistryConfigId", configId);
+  copyModelField("judgeRegistryDisplayName", `${label} Judge`);
+  copyModelField("judgeRegistryModel", spec.model || targetId);
+  copyModelField("judgeRegistryBaseUrl", spec.base_url || "");
+  copyModelField("judgeRegistryChatUrl", externalEndpointValue(spec, "chat_url", "upstream_chat_url"));
+  copyModelField("judgeRegistryApiKeyEnv", spec.api_key_env || "");
+  copyModelField("judgeRegistryTemperature", options.temperature ?? 0);
+  copyModelField("judgeRegistryTopP", options.top_p ?? options.topP ?? 0.1);
+  copyModelField("judgeRegistryMaxTokens", judgeMaxTokensFromOptions(options));
+  copySelectField("judgeRegistryPromptPreset", "judge_default_v1", "judge_default_v1");
+  copyModelField("judgeRegistryPromptVersion", judgePromptPresets.judge_default_v1.version);
+  copyModelField("judgeRegistrySystemPrompt", "");
+  copyModelField("judgeRegistryOptionsJson", registryOptionsJson(options, [
+    "temperature",
+    "top_p",
+    "topP",
+    "max_completion_tokens",
+    "maxCompletionTokens",
+    "max_output_tokens",
+    "maxOutputTokens",
+    "max_tokens",
+    "maxTokens",
+    "num_predict",
+  ]));
+  updateJudgeRegistryProviderFields();
+  updateJudgePromptPresetFields();
+  openJudgeAdvancedFields();
+  setJudgeRegistryMessage(`Judge 초안: ${label} 설정을 복사했습니다. 필요하면 prompt preset과 옵션을 조정한 뒤 등록하세요.`, "ok");
+  document.getElementById("judgeRegistryConfigId")?.focus();
 }
 
 function modelRegistryPayload(form) {
@@ -2132,7 +2189,7 @@ function externalEndpointValue(spec, proxyKey, upstreamKey) {
 }
 
 function registrySourceLabel(spec) {
-  return spec?.registry_source === "static" ? "기본 설정" : "사용자 등록";
+  return "사용자 등록";
 }
 
 function registryOptionsJson(options, omittedKeys = []) {
@@ -2289,7 +2346,7 @@ function renderTargetRegistry() {
   const variantSelect = document.getElementById("modelPromptVariantOf");
   const quickSelect = document.getElementById("promptVariantQuickBase");
   const ids = evalTargetRegistryIds();
-  populatePromptVariantSelect(variantSelect, ids, "새 기본 설정");
+  populatePromptVariantSelect(variantSelect, ids, "새 대상 모델");
   populatePromptVariantSelect(quickSelect, ids, "기준 모델 선택");
   if (!list) return;
   if (!ids.length) {
@@ -2298,7 +2355,7 @@ function renderTargetRegistry() {
   }
   list.innerHTML = ids.map((id) => {
     const spec = modelSpecForVersion(id);
-    const sourceLabel = registrySourceLabel(spec);
+    const sourceLabel = "사용자 등록";
     const promptParts = [
       spec.prompt_version || "prompt_v1",
       spec.experiment_tag ? `태그 ${spec.experiment_tag}` : "",
@@ -2360,8 +2417,7 @@ function bindTargetRegistryButtons() {
 
 async function deleteRegisteredModel(version) {
   const label = modelLabelForVersion(version);
-  const spec = modelSpecForVersion(version);
-  const sourceNote = spec?.registry_source === "static" ? "기본 설정은 UI에서 숨김 처리됩니다." : "사용자 등록 항목이 삭제됩니다.";
+  const sourceNote = "사용자 등록 항목이 삭제됩니다.";
   if (!window.confirm(`${label} 등록 항목을 삭제할까요? ${sourceNote} 실제 모델 파일/API는 삭제하지 않습니다.`)) {
     return;
   }
@@ -2406,6 +2462,7 @@ function renderJudgeRegistry() {
   const list = document.getElementById("judgeRegistryList");
   const picker = document.getElementById("evalJudgeConfigId");
   const ids = judgeModelIds();
+  renderJudgeCopyTargetSelect();
   const renderPicker = (target, attrName, selectedIds) => {
     if (!target) return;
     const targetIds = evalTargetRegistryIds();
@@ -2459,7 +2516,7 @@ function renderJudgeRegistry() {
   }
   list.innerHTML = ids.map((id) => {
     const spec = modelRegistry[id] || {};
-    const sourceLabel = registrySourceLabel(spec);
+    const sourceLabel = "사용자 등록";
     const endpoint = spec.upstream_chat_url || spec.chat_url || spec.base_url || spec.local_path || "endpoint 없음";
     const promptMeta = [
       spec.prompt_version || "",
@@ -2503,8 +2560,7 @@ function bindJudgeRegistryButtons() {
 
 async function deleteRegisteredJudge(version) {
   const label = modelLabelForVersion(version);
-  const spec = modelSpecForVersion(version);
-  const sourceNote = spec?.registry_source === "static" ? "기본 설정은 UI에서 숨김 처리됩니다." : "사용자 등록 항목이 삭제됩니다.";
+  const sourceNote = "사용자 등록 항목이 삭제됩니다.";
   if (!window.confirm(`${label} Judge 등록 항목을 삭제할까요? ${sourceNote} 실제 모델 파일/API는 삭제하지 않습니다.`)) {
     return;
   }
@@ -3231,7 +3287,7 @@ function selectableDatasets() {
     dataset.exists !== false &&
     Number(dataset.total || 0) > 0 &&
     !hiddenDatasetIds.has(String(dataset.id || "")) &&
-    !datasetHasLegacyMarker(dataset)
+    !datasetHasExcludedMarker(dataset)
   );
 }
 
@@ -3244,7 +3300,7 @@ function datasetRank(dataset) {
   return 50;
 }
 
-function datasetHasLegacyMarker(dataset) {
+function datasetHasExcludedMarker(dataset) {
   const text = [
     dataset.id,
     dataset.name,
@@ -3252,9 +3308,9 @@ function datasetHasLegacyMarker(dataset) {
     dataset.path,
     dataset.source_directory,
   ].map((value) => String(value || "").toLowerCase()).join(" ");
-  if (legacyDatasetMarkers.some((marker) => text.includes(marker))) return true;
+  if (excludedDatasetMarkers.some((marker) => text.includes(marker))) return true;
   const tokens = text.split(/[^a-z0-9]+/).filter(Boolean);
-  return legacyDatasetTokens.some((token) => tokens.includes(token));
+  return excludedDatasetTokens.some((token) => tokens.includes(token));
 }
 
 function preferredDatasetId(currentId = selectedDataset) {
@@ -3275,8 +3331,8 @@ function preferredDatasetForRun(runId, currentId = selectedDataset) {
 
 function preferredRunProfileId(profileIds) {
   const preferred = selectedRunId && String(selectedRunId).startsWith("regression")
-    ? ["regression_golden_full", "regression_golden_smoke", "benchmark_final_full", "benchmark_smoke"]
-    : ["benchmark_final_full", "benchmark_smoke", "regression_golden_full", "regression_golden_smoke"];
+    ? ["regression_golden_full", "benchmark_final_full"]
+    : ["benchmark_final_full", "regression_golden_full"];
   return preferred.find((id) => profileIds.has(id))
     || [...profileIds].find((id) => id !== "custom_seeded_mix")
     || "single_dataset";
@@ -3299,11 +3355,8 @@ function populateRunProfileSelect() {
 
 function profileRank(profileId) {
   return {
-    benchmark_smoke: 0,
-    regression_golden_smoke: 1,
-    benchmark_full: 2,
-    benchmark_final_full: 2,
-    regression_golden_full: 3,
+    benchmark_final_full: 0,
+    regression_golden_full: 1,
   }[profileId] ?? 50;
 }
 
@@ -3829,7 +3882,7 @@ function renderEvalConfigFilters() {
     const spec = modelSpecForVersion(id);
     const selected = state.runConfigVersions.has(id);
     const provider = spec.provider || "history";
-    const role = spec.candidate_role || "candidate";
+    const role = spec.candidate_role || "target";
     const model = spec.model || id;
     const endpoint = modelEndpointLabel(spec);
     const temp = spec.options?.temperature;

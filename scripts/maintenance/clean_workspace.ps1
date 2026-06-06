@@ -79,5 +79,5 @@ Move-WorkspaceItemToArchive -Path (Join-Path $Workspace "out\_audit_evidence_smo
 
 if ($LargeGeneratedOutputs) {
   Move-WorkspaceItemToArchive -Path (Join-Path $Workspace "out\domain_analysis\embedding_cache")
-  Move-WorkspaceItemToArchive -Path (Join-Path $Workspace "out\_web_jobs")
+  Move-WorkspaceItemToArchive -Path (Join-Path $Workspace "out\eval_runs\archive\web_jobs")
 }

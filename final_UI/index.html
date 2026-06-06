@@ -148,7 +148,7 @@
             </label>
             <label>기준 모델
               <select id="modelPromptVariantOf" name="prompt_variant_of">
-                <option value="">새 기본 설정</option>
+                <option value="">새 대상 모델</option>
               </select>
             </label>
             <label>실험 태그
@@ -163,7 +163,7 @@
             <label>모델명
               <input id="modelName" name="model" placeholder="모델명 또는 배포 ID" required>
             </label>
-            <label>기본 URL
+            <label>Base URL
               <input id="modelBaseUrl" name="base_url" placeholder="https://host.example.com">
             </label>
             <label>채팅 API URL
@@ -184,7 +184,7 @@
                 <label>캐시 식별자
                   <input id="modelCacheIdentity" name="cache_identity" placeholder="같은 모델 산출물 ID (선택)">
                 </label>
-                <label>기본 URL 환경변수
+                <label>Base URL 환경변수
                   <input id="modelBaseUrlEnv" name="base_url_env" placeholder="OLLAMA_BASE_URL">
                 </label>
                 <label>프롬프트 버전
@@ -215,6 +215,18 @@
             <h2>채점 모델 관리</h2>
             <span>LLM 평가 모델 / HAL LoRA 모델 등록</span>
           </div>
+          <div class="prompt-variant-builder judge-copy-builder">
+            <div class="prompt-variant-copy">
+              <strong>대상 모델을 Judge로 복사</strong>
+              <span>등록된 대상 모델의 접속 정보를 가져와 Judge 초안을 만듭니다.</span>
+            </div>
+            <label>대상 모델
+              <select id="judgeCopyTargetBase">
+                <option value="">대상 모델 선택</option>
+              </select>
+            </label>
+            <button id="judgeCopyTargetStart" type="button">Judge 초안 만들기</button>
+          </div>
           <form id="judgeRegistryForm" class="model-form">
             <label>제공자
               <select id="judgeRegistryProvider" name="provider">
@@ -236,7 +248,7 @@
             <label>모델명
               <input id="judgeRegistryModel" name="model" placeholder="Qwen2.5-7B-HAL-LoRA / HCX-007" required>
             </label>
-            <label>기본 URL
+            <label>Base URL
               <input id="judgeRegistryBaseUrl" name="base_url" placeholder="https://host.example.com">
             </label>
             <label>채팅 API URL
@@ -259,7 +271,7 @@
                 </label>
                 <label>Judge prompt preset
                   <select id="judgeRegistryPromptPreset" name="system_prompt_preset">
-                    <option value="judge_default_v1">기본 Judge prompt (잠금)</option>
+                    <option value="judge_default_v1">표준 Judge prompt (잠금)</option>
                     <option value="arbiter_conflict_v1">Arbiter 충돌 조정 prompt (잠금)</option>
                     <option value="custom">직접 입력</option>
                   </select>
@@ -344,7 +356,7 @@
                 <option value="llm_override">LLM only</option>
                 <option value="llm_blended">LLM blended</option>
                 <option value="blend">LLM+Static blended</option>
-                <option value="static">Static only</option>
+                <option value="static">Rule-based only</option>
               </select>
               <small id="evalScoringModeHelp" class="field-help">선택한 단일 Judge만으로 채점합니다.</small>
               <div class="scoring-mode-guide" aria-label="평가 및 점수 합산 방식">
@@ -369,7 +381,7 @@
                   <span>LLM Judge : Rule<br><small>사용자 지정 비율 · 기본값 = 50:50</small></span>
                 </div>
                 <div class="scoring-mode-guide-row">
-                  <strong>Static only</strong>
+                  <strong>Rule-based only</strong>
                   <span>Rule-based 채점만 사용, Judge 미호출</span>
                   <span>Rule 100%</span>
                 </div>
@@ -382,8 +394,8 @@
             <label>임베딩 모델명
               <input id="evalStaticEmbeddingModel" name="static_embedding_model" placeholder="bge-m3:latest / nomic-embed-text:latest">
             </label>
-            <label>임베딩 기본 URL
-              <input id="evalStaticEmbeddingBaseUrl" name="static_embedding_base_url" placeholder="선택 입력: Ollama 기본 URL">
+            <label>임베딩 Base URL
+              <input id="evalStaticEmbeddingBaseUrl" name="static_embedding_base_url" placeholder="선택 입력: Ollama Base URL">
             </label>
             <label hidden>채점 모델 제공자
               <select id="evalJudgeProvider" name="judge_provider">
@@ -427,7 +439,7 @@
             <label hidden>채점 모델 API 키
               <input id="evalJudgeApiKey" name="judge_api_key" type="password" autocomplete="off" placeholder="실행에만 사용하고 저장하지 않음">
             </label>
-            <label hidden>채점 모델 기본 URL
+            <label hidden>채점 모델 Base URL
               <input id="evalJudgeBaseUrl" name="judge_base_url" placeholder="선택 입력">
             </label>
             <label hidden>Temperature
@@ -511,7 +523,7 @@
                 <option value="llm_override">LLM only</option>
                 <option value="llm_blended">LLM blended</option>
                 <option value="blend">LLM+Static blended</option>
-                <option value="static">Static only</option>
+                <option value="static">Rule-based only</option>
               </select>
             </label>
             <label>규칙 점수와 LLM 점수 반영 비율
@@ -909,4 +921,3 @@
   <script src="app.js?v=20260528-active-regression"></script>
 </body>
 </html>
-

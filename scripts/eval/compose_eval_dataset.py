@@ -333,12 +333,12 @@ def normalized_case_status(row: dict[str, Any], pool: dict[str, Any]) -> str:
     status = first_text(row.get("case_status"), metadata.get("case_status")).lower()
     if status in {"draft", "shadow", "active", "deprecated"}:
         return status
-    legacy_status = first_text(row.get("status"), metadata.get("status")).lower()
-    if legacy_status in {"shadow", "deprecated", "draft"}:
-        return legacy_status
-    if legacy_status in {"candidate", "generated"}:
+    source_status = first_text(row.get("status"), metadata.get("status")).lower()
+    if source_status in {"shadow", "deprecated", "draft"}:
+        return source_status
+    if source_status in {"candidate", "generated"}:
         return "draft"
-    if legacy_status == "active" and explicit_gold_verified(row, pool) is True:
+    if source_status == "active" and explicit_gold_verified(row, pool) is True:
         return "active"
     role = str(pool.get("role") or "regression").lower()
     if role == "benchmark":

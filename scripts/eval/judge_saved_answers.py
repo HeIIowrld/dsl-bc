@@ -23,8 +23,8 @@ from scripts.eval.run_multi_model_eval import (
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OUT_ROOT,
     DEFAULT_REFUSAL_KEYWORDS,
-    DEFAULT_REGISTRY,
     DEFAULT_RISK,
+    DEFAULT_SEEDED_TARGET_MODELS,
     EvalCancelled,
     HttpChatProvider,
     aggregate_release_gates,
@@ -520,7 +520,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", action="append", default=[], help="Target config_id to judge. Repeat or comma-separate. Defaults to all configs in the source answers.")
     parser.add_argument("--key-file", default="", help="Optional CSV/JSONL with config_id and case_id columns to judge only selected rows.")
     parser.add_argument("--complete-only", action="store_true", help="Drop configs that do not have one ok, non-empty answer for every case.")
-    parser.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    parser.add_argument("--registry", default=str(DEFAULT_SEEDED_TARGET_MODELS))
     parser.add_argument("--matrix", default=str(DEFAULT_MATRIX))
     parser.add_argument("--risk-taxonomy", default=str(DEFAULT_RISK))
     parser.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT))

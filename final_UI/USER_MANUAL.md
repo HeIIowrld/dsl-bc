@@ -99,7 +99,7 @@ Ollama 모델은 다음 순서로 확인합니다.
 | LLM only | 선택한 Judge 점수만 최종 점수로 사용 |
 | LLM blended | 여러 Judge 점수를 사용자 지정 비율로 합산 |
 | LLM+Static blended | Judge 점수와 rule 기반 점수를 함께 합산 |
-| Static only | Judge 호출 없이 rule 기반 점수만 사용 |
+| Rule-based only | Judge 호출 없이 rule 기반 점수만 사용 |
 
 Judge가 3개 이상이어도 동일하게 사용할 수 있습니다. 가중 합산을 선택하면 각 Judge 비중의 총합이 1.0일 때만 적용합니다. 최고점/최저점 제외 평균, 단순 평균, 최고점 기준, 최저점 기준 같은 규칙형 합산은 실행 설정에서 별도 정책으로 기록합니다.
 

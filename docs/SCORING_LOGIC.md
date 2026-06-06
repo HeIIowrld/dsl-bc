@@ -170,6 +170,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_final_ui.ps1 -Port 8512 -
 
 ```text
 http://localhost:8512
-http://localhost:8512/data/model_registry.json
+http://localhost:8512/api/model-registry
 http://localhost:8512/api/questionlist/datasets
 ```

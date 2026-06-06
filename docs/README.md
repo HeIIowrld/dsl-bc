@@ -30,11 +30,14 @@ QA set schema:
 Dataset catalog:
   config/eval_dataset_catalog.yaml
 
-User model registry:
-  final_UI/data/user_model_registry.json
+Registered target models:
+  final_UI/data/registered_target_models.json
 
-Static model registry:
-  config/model_registry.yaml
+Registered Judge models:
+  final_UI/data/registered_judge_models.json
+
+Seeded target model configs:
+  config/seeded_target_models.yaml
 ```
 
 ## Final QA Matrix

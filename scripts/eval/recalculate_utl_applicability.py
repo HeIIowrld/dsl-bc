@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Recalculate UTL applicability and scaled scores for existing eval runs.")
     parser.add_argument("--run-dir", action="append", default=[], help="Run directory to repair. Repeatable.")
     parser.add_argument("--all", action="store_true", help="Repair every eval run under out/eval_runs that has judge_scores.jsonl and config.json.")
-    parser.add_argument("--source-config", default=str(ROOT / "config" / "model_registry.yaml"))
+    parser.add_argument("--source-config", default=str(ROOT / "config" / "seeded_target_models.yaml"))
     parser.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT))
     parser.add_argument("--backup", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--export-final-ui", action="store_true")

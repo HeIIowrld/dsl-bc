@@ -34,7 +34,7 @@ canonical corpus
 | --- | --- |
 | Corpus | BC카드 통합 corpus를 canonical source로 사용 |
 | Dataset | `config/eval_dataset_catalog.yaml` 기반 profile/seed/quota compose |
-| Models | `config/model_registry.yaml` 기반 Ollama 및 judge config 관리 |
+| Models | `config/seeded_target_models.yaml` seed 대상 모델과 UI 등록 대상/Judge 모델 관리 |
 | Runner | `scripts/eval/run_multi_model_eval.py` |
 | Judge | 등록형 LLM-as-judge 지원 |
 | UI | 결과, 비교, 통과/실패 문항 개요, 문항별 모델 상세 응답 분리 표시 |
@@ -45,15 +45,13 @@ canonical corpus
 MVP source-of-truth:
 
 ```text
-sources/bc_cs_notice/out/llm_regression_all_sources.jsonl
+원천 수집 자료는 runtime 공유본에서 제외하고 로컬 `_unused_files/runtime_cleanup_20260606/` 아래에 보관합니다.
 ```
 
 현재 canonical artifact:
 
 ```text
-out/corpus/documents.jsonl
-out/corpus/chunks.jsonl
-out/evidence/evidence_store.jsonl
+corpus/evidence 산출물은 runtime 공유본에 포함하지 않는 로컬 빌드 산출물입니다.
 ```
 
 현재 기준 count:
@@ -92,17 +90,15 @@ Dataset composer는 같은 catalog, seed, quota에 대해 항상 같은 case 조
 
 | Profile | 구성 | 용도 | Gate |
 | --- | ---: | --- | --- |
-| `release_smoke` | 약 100 cases | 빠른 regression 확인 | active gold만 blocking |
-| `release_gate` | 약 300 cases | 배포 전 판정 후보 | active gold만 blocking |
-| `benchmark_smoke` | 약 200 cases | 빠른 benchmark | non-blocking |
-| `benchmark_full` | 약 500 cases | FAQ/금융/카드상품 전체 benchmark | non-blocking |
+| `benchmark_final_full` | 800 cases | 최종 benchmark 전체 | non-blocking |
+| `regression_golden_full` | 300 cases | 회귀 골든셋 전체 | active gold만 blocking |
 | `custom_seeded_mix` | 사용자 지정 | seed/quota 기반 실험 | case metadata에 따라 분리 |
 
 Benchmark case는 기본적으로 `release_gate_eligible=false`입니다.
 
 ## 6. 평가 대상 모델
 
-현재 기본 평가 대상은 registry config로 관리합니다.
+현재 평가 대상은 seed 대상 설정 또는 UI 등록 대상 모델로 관리합니다.
 
 주요 모델:
 
@@ -125,9 +121,11 @@ include_evidence_context
 prompt_version
 model_group
 candidate_role
+evaluation_role
+judge_role
 ```
 
-Ollama endpoint와 provider 설정은 `config/model_registry.yaml`에서 관리합니다.
+Seed 대상 Ollama endpoint와 provider 설정은 `config/seeded_target_models.yaml`에서 관리하고, UI 등록 모델은 역할별 split JSON에 저장합니다.
 
 ## 7. LLM-as-Judge
 
@@ -192,17 +190,17 @@ Benchmark smoke compose:
 
 ```powershell
 python .\scripts\eval\compose_eval_dataset.py `
-  --profile benchmark_smoke `
+  --profile benchmark_final_full `
   --seed 42 `
-  --output .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
-  --summary .\out\test_cases\composed\benchmark_smoke_seed42.summary.json
+  --output .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
+  --summary .\out\test_cases\composed\benchmark_final_full_seed42.summary.json
 ```
 
 Ollama 모델 smoke:
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
-  --cases-file .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
   --config bc_gemma_9b_bcgpt_q4 `
   --config bc_deepseek_8b_bcgpt_q4 `
   --limit 2 `
@@ -215,7 +213,7 @@ CLOVA LLM judge 포함:
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
-  --cases-file .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
   --config bc_gemma_9b_bcgpt_q4 `
   --config bc_deepseek_8b_bcgpt_q4 `
   --limit 1 `
@@ -235,7 +233,7 @@ RUN_LIVE_JUDGE_SMOKE_20260521_171623
 조건:
 
 ```text
-profile: benchmark_smoke seed 42
+profile: benchmark_final_full seed 42
 limit: 1
 models: bc_gemma_9b_bcgpt_q4, bc_deepseek_8b_bcgpt_q4
 judge: clova_hcx007_judge
@@ -295,7 +293,7 @@ final_UI/data/active_run.json
 ```text
 python -m py_compile: OK
 python -m unittest discover -s tests -p "test*.py": 111 tests OK
-compose benchmark_smoke seed42: 200 cases OK
+compose benchmark_final_full seed42: 800 cases OK
 ```
 
 ## 13. 남은 작업

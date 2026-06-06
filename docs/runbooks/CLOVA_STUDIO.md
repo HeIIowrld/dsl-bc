@@ -25,14 +25,14 @@ Regression runner judge config:
 
 ```powershell
 python .\scripts\eval\run_multi_model_eval.py `
-  --cases-file .\out\test_cases\composed\benchmark_smoke_seed42.jsonl `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
   --config bc_gemma_9b_bcgpt_q4 `
   --limit 1 `
   --scoring-mode static_llm `
   --judge-config clova_hcx007_judge
 ```
 
-`config/model_registry.yaml` stores only environment variable names:
+`config/seeded_target_models.yaml` stores only environment variable names:
 
 ```text
 api_key_env: clova_api_key

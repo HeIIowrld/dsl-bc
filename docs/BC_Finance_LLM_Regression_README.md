@@ -22,7 +22,7 @@ source data
 
 | 단계 | 주요 파일 |
 | --- | --- |
-| Corpus build | `scripts/build/build_corpus_from_bc_cs_notice.py` |
+| Corpus build | archived source 복원 시 `scripts/build/build_corpus_from_bc_cs_notice.py` |
 | Questionlist case build | `scripts/eval/build_questionlist_cases.py` |
 | Diverse suite build | `scripts/eval/build_diverse_regression_suites.py` |
 | Sample data case build | `scripts/eval/build_sample_data_cases.py` |
@@ -35,13 +35,8 @@ source data
 ## 현재 데이터 배치
 
 ```text
-sources/bc_cs_notice/         # BC/FINE/CREFIA 수집 원본과 corpus builder
 questionlist/                 # 자동 확장 질문 원본
-data/raw/sample_data/         # 외부 샘플 JSON 데이터
-data/raw/card_product/        # 카드/상품 CSV 더미 및 실제 상품 데이터 입력 위치
 data/archive/old/             # 이전 raw/cache 보관
-out/corpus/                   # canonical corpus
-out/evidence/                 # evidence store
 out/test_cases/               # 실행용 일반 테스트케이스
 out/test_cases/tool_agent/    # tool-agent 전용 시나리오
 out/eval_runs/                # 평가 실행 결과
@@ -160,7 +155,7 @@ deprecated != true
 
 ## 모델 Registry
 
-`config/model_registry.yaml`은 모델 자체가 아니라 실행 config를 정의합니다. 현재 기본 matrix는 로컬 또는 등록된 Ollama 모델, prompt/options 변형, 이전 버전, SOTA reference를 포함합니다.
+`config/seeded_target_models.yaml`은 모델 자체가 아니라 repo에 함께 두는 seed 대상 실행 config를 정의합니다. UI에서 추가한 대상/Judge 모델은 `final_UI/data/registered_target_models.json`과 `final_UI/data/registered_judge_models.json`에 분리 저장됩니다.
 
 ```text
 bc_gemma_9b_bcgpt_q4

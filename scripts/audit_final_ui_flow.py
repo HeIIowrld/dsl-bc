@@ -156,7 +156,11 @@ def audit(url: str, *, headless: bool, screenshot_dir: Path | None) -> dict[str,
                 screenshots.append(str(path))
 
         click_tab(page, "overview", failures)
-        assert_true(page.locator("#resultRunSelect option").count() >= 2, "run selector has fewer than two runs", failures)
+        run_selector_options = page.locator("#resultRunSelect option").count()
+        if state["latestRunId"]:
+            assert_true(run_selector_options >= 2, "run selector has fewer than two runs", failures)
+        elif run_selector_options < 2:
+            warnings.append("run selector history check skipped: no persisted out/eval_runs archive")
         assert_true(page.locator("#resultMatrix .matrix-result-cell").count() > 0, "result matrix has no cells", failures)
         page.locator("#resultMatrix .matrix-result-cell:not(.empty)").first.click()
         page.wait_for_timeout(200)

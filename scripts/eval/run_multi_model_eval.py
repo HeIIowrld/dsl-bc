@@ -26,8 +26,9 @@ from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[2]
 DOTENV_PATH = ROOT / ".env"
-DEFAULT_REGISTRY = ROOT / "config" / "model_registry.yaml"
-DEFAULT_USER_REGISTRY = ROOT / "final_UI" / "data" / "user_model_registry.json"
+DEFAULT_SEEDED_TARGET_MODELS = ROOT / "config" / "seeded_target_models.yaml"
+DEFAULT_REGISTERED_TARGET_MODELS = ROOT / "final_UI" / "data" / "registered_target_models.json"
+DEFAULT_REGISTERED_JUDGE_MODELS = ROOT / "final_UI" / "data" / "registered_judge_models.json"
 DEFAULT_MATRIX = ROOT / "config" / "eval_matrix.yaml"
 DEFAULT_RISK = ROOT / "config" / "risk_taxonomy.yaml"
 DEFAULT_CASES_DIR = ROOT / "questionlist"
@@ -137,7 +138,7 @@ def wait_for_eval_control(
         return
 API_CHAT_PROVIDERS = {"openai_native", "openai_compatible", "generic_api", "clova_studio", "anthropic", "gemini"}
 RUNNABLE_PROVIDERS = {"ollama"} | API_CHAT_PROVIDERS
-DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DEFAULT_OLLAMA_BASE_URL = "http://afsd.iptime.org:11434"
 LLM_JUDGE_MODES = {"audit", "blend", "override"}
 SCORING_MODES = {"static", "static_llm", "llm_override", "blend"}
 SCORE_METRIC_KEYS = ["acc", "com", "utl", "nac", "hal"]
@@ -327,8 +328,11 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def load_model_registry(path: Path) -> dict[str, Any]:
     registry = load_config(path)
-    if DEFAULT_USER_REGISTRY.exists() and path.resolve() == DEFAULT_REGISTRY.resolve():
-        registry = merge_registry(registry, load_config(DEFAULT_USER_REGISTRY))
+    if path.resolve() == DEFAULT_SEEDED_TARGET_MODELS.resolve():
+        split_paths = [DEFAULT_REGISTERED_TARGET_MODELS, DEFAULT_REGISTERED_JUDGE_MODELS]
+        for split_path in split_paths:
+            if split_path.exists():
+                registry = merge_registry(registry, load_config(split_path))
     configs = [
         sanitize_runner_registry_config(config)
         for config in registry.get("configs", [])
@@ -2447,36 +2451,18 @@ class OllamaEmbeddingSimilarityScorer:
         return [self.cache.get(text, []) for text in normalized]
 
     def request_embeddings(self, texts: list[str]) -> list[list[float]]:
-        if self.endpoint != "legacy":
-            payload: dict[str, Any] = {
-                "model": self.model,
-                "input": texts,
-                "truncate": True,
-            }
-            if self.keep_alive is not None:
-                payload["keep_alive"] = self.keep_alive
-            try:
-                data = self.provider.request("POST", "/api/embed", payload)
-            except urllib.error.HTTPError as exc:
-                if exc.code not in {400, 404}:
-                    raise
-                self.endpoint = "legacy"
-            else:
-                embeddings = data.get("embeddings")
-                if isinstance(embeddings, list):
-                    return [embedding_vector(item) for item in embeddings]
-                raise RuntimeError("Ollama /api/embed response did not include embeddings.")
-        return [self.request_legacy_embedding(text) for text in texts]
-
-    def request_legacy_embedding(self, text: str) -> list[float]:
         payload: dict[str, Any] = {
             "model": self.model,
-            "prompt": text,
+            "input": texts,
+            "truncate": True,
         }
         if self.keep_alive is not None:
             payload["keep_alive"] = self.keep_alive
-        data = self.provider.request("POST", "/api/embeddings", payload)
-        return embedding_vector(data.get("embedding"))
+        data = self.provider.request("POST", "/api/embed", payload)
+        embeddings = data.get("embeddings")
+        if isinstance(embeddings, list):
+            return [embedding_vector(item) for item in embeddings]
+        raise RuntimeError("Ollama /api/embed response did not include embeddings.")
 
 
 def semantic_similarity_score(reference: str, answer: str, similarity_scorer: Any | None = None) -> float:
@@ -4776,43 +4762,6 @@ def export_final_ui(
     write_csv(final_ui_data / "question_cases.csv", question_rows)
     write_csv(final_ui_data / "qa_slice_scores.csv", slice_rows or [])
     write_csv(final_ui_data / "run_release_gates.csv", run_release_gates)
-    registry = {
-        config["config_id"]: {
-            "display_name": config.get("display_name") or config.get("name") or config.get("model") or config["config_id"],
-            "provider": config.get("provider"),
-            "model": config.get("model"),
-            "base_url": config.get("base_url", ""),
-            "base_url_env": config.get("base_url_env", ""),
-            "chat_url": config.get("chat_url", ""),
-            "upstream_chat_url": config.get("chat_url") or config.get("api_url", ""),
-            "upstream_health_url": config.get("health_url", ""),
-            "api_key_env": config.get("api_key_env", ""),
-            "prompt_version": config.get("prompt_version", ""),
-            "system_prompt": config.get("system_prompt", ""),
-            "prompt_template": config.get("prompt_template", ""),
-            "query_prompt_template": config.get("query_prompt_template", ""),
-            "prompt_prefix": config.get("prompt_prefix", ""),
-            "prompt_suffix": config.get("prompt_suffix", ""),
-            "prompt_variant_of": config.get("prompt_variant_of", ""),
-            "experiment_tag": config.get("experiment_tag", ""),
-            "include_evidence_context": config.get("include_evidence_context", True),
-            "rag_config": config.get("rag_config", ""),
-            "safety_policy": config.get("safety_policy", ""),
-            "role_notes": config.get("role_notes", ""),
-            "model_group": config.get("model_group", ""),
-            "candidate_role": config.get("candidate_role", ""),
-            "options": config.get("options", {}) if isinstance(config.get("options", {}), dict) else {},
-            "local_path": config.get("local_path") or config.get("model_path", ""),
-            "response_path": config.get("response_path", ""),
-            "api_url": f"/api/models/{config['config_id']}/eval",
-            "health_url": f"/api/models/{config['config_id']}/health",
-        }
-        for config in configs
-    }
-    (final_ui_data / "model_registry.json").write_text(
-        json.dumps(registry, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
     (final_ui_data / "active_run.json").write_text(
         json.dumps({"run_id": run_id}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -4821,13 +4770,13 @@ def export_final_ui(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BC LLM regression cases against multiple model configs.")
-    parser.add_argument("--registry", default=str(DEFAULT_REGISTRY))
+    parser.add_argument("--registry", default=str(DEFAULT_SEEDED_TARGET_MODELS))
     parser.add_argument("--matrix", default=str(DEFAULT_MATRIX))
     parser.add_argument("--risk-taxonomy", default=str(DEFAULT_RISK))
     parser.add_argument("--cases-dir", default=str(DEFAULT_CASES_DIR))
     parser.add_argument("--cases-file", default=None, help="Read a specific JSONL case file instead of default cases-dir files.")
     parser.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT))
-    parser.add_argument("--base-url", default="http://127.0.0.1:11434")
+    parser.add_argument("--base-url", default="http://afsd.iptime.org:11434")
     parser.add_argument("--config", action="append", dest="configs", help="Config id to run. Can be repeated.")
     parser.add_argument("--suite", action="append", dest="suites", help="Suite to run. Can be repeated.")
     parser.add_argument("--limit", type=int, default=None)
@@ -4939,7 +4888,7 @@ def main() -> None:
     eval_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
 
     if not cases:
-        raise SystemExit(f"No test cases found in {args.cases_dir}. Run generate_cases_from_domain_outputs.py first.")
+        raise SystemExit(f"No test cases found in {args.cases_dir}. Provide case files or compose a dataset first.")
 
     print(f"run_id={run_id}")
     print(f"case_source={case_source}")
