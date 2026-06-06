@@ -2464,6 +2464,8 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertNotIn("const matchedRows = (query ? cases : caseData)", app_js)
         self.assertIn('const sourceLabel = "사용자 등록";', app_js)
         self.assertIn('data-check-model="${escapeHtml(id)}"', app_js)
+        self.assertIn("await syncSelectedModelApis([version], { requireSelected: false });", app_js)
+        self.assertIn("const targetVersions = evalTargetRegistryIds();", app_js)
         self.assertIn('data-delete-model="${escapeHtml(id)}"', app_js)
         self.assertIn("connection-health", styles_css)
         self.assertIn("target-registry-title-row", app_js)
