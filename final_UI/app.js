@@ -1389,7 +1389,7 @@ function modelConnectionPill(version) {
     className = "available";
     label = "확인 가능";
   }
-  return `<span class="model-status-pill ${escapeHtml(className)}" title="${escapeHtml(stateInfo?.message || label)}">${escapeHtml(label)}</span>`;
+  return `<span class="model-status-pill ${escapeHtml(className)}" data-status="${escapeHtml(status)}" title="${escapeHtml(stateInfo?.message || label)}">${escapeHtml(label)}</span>`;
 }
 
 function filterSet(name) {
@@ -1655,13 +1655,23 @@ function renderResultRunSelector() {
   const rawLink = document.getElementById("resultRawReportLink");
   if (!select) return;
   const currentId = selectedRunId || latestRun?.run_id || "";
-  select.innerHTML = evalRunHistory.map((run) => {
+  const historyOptions = evalRunHistory.map((run) => {
     const label = [
       run.run_id,
       run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
     ].filter(Boolean).join(" · ");
     return `<option value="${escapeHtml(run.run_id)}" ${run.run_id === currentId ? "selected" : ""}>${escapeHtml(label)}</option>`;
-  }).join("") || `<option value="">결과 없음</option>`;
+  }).join("");
+  const hasExportedRows = Boolean(runs.length || cases.length);
+  select.innerHTML = historyOptions || (
+    hasExportedRows
+      ? `<option value="">현재 내보낸 결과</option>`
+      : `<option value="">결과 없음</option>`
+  );
+  select.disabled = !evalRunHistory.length;
+  select.title = historyOptions
+    ? "과거 실행 결과 선택"
+    : (hasExportedRows ? "data/*.csv로 내보낸 현재 결과입니다." : "선택 가능한 실행 결과가 없습니다.");
   select.value = evalRunHistory.some((run) => run.run_id === currentId) ? currentId : "";
   const current = evalRunHistory.find((run) => run.run_id === currentId) || {};
   if (summary) {
@@ -1676,7 +1686,16 @@ function renderResultRunSelector() {
       <span>${(Number(current.avg_pass_rate || 0) * 100).toFixed(1)}% 통과</span>
       <span>${escapeHtml(scoringModeLabel(current.scoring_mode) || "-")}</span>
       <span>${escapeHtml([current.llm_judge_provider, current.llm_judge_model].filter(Boolean).join(" / ") || scoringModeLabel("static"))}</span>
-    ` : emptyState("선택 가능한 과거 결과가 없습니다.");
+    ` : (
+      hasExportedRows
+        ? `
+          <span><strong>현재 내보낸 결과</strong></span>
+          <span>data/eval_runs.csv 기준</span>
+          <span>${uniqueCaseCount(cases).toLocaleString()}문항</span>
+          <span>${runs.length.toLocaleString()}개 모델 행</span>
+        `
+        : emptyState("선택 가능한 과거 결과가 없습니다.")
+    );
   }
   if (uiLink) {
     uiLink.href = current.report_ui || (currentId ? `?run_id=${encodeURIComponent(currentId)}#overview` : "#overview");
