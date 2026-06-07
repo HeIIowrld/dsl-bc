@@ -3398,6 +3398,12 @@ pre,
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: 11px;
+  text-decoration: none;
+}
+
+.dataset-sample-download {
+  width: fit-content;
+  margin-top: 2px;
 }
 
 .result-detail-card {

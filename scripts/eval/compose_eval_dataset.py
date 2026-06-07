@@ -44,8 +44,12 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def csv_text(row: dict[str, Any], *keys: str) -> str:
+    normalized = {str(key or "").strip().lstrip("\ufeff").lower(): value for key, value in row.items()}
     for key in keys:
-        value = row.get(key)
+        direct_key = str(key or "").strip().lstrip("\ufeff")
+        value = row.get(direct_key)
+        if value in ("", None):
+            value = normalized.get(direct_key.lower())
         text = str(value or "").strip()
         if text:
             return text
@@ -54,17 +58,17 @@ def csv_text(row: dict[str, Any], *keys: str) -> str:
 
 def normalize_csv_case(row: dict[str, Any], *, path: Path, index: int, pool_id: str, pool: dict[str, Any]) -> dict[str, Any] | None:
     role = str(pool.get("role") or "benchmark")
-    question = csv_text(row, "instruction", "question", "문제", "주관식 문제", "input", "질문")
-    answer = csv_text(row, "output", "ground_truth", "정답", "answer", "gold_answer")
+    question = csv_text(row, "instruction", "question", "input", "prompt", "query", "user_question", "문제", "주관식 문제", "질문")
+    answer = csv_text(row, "output", "ground_truth", "answer", "gold_answer", "expected_answer", "expected_output", "reference_answer", "target_answer", "정답", "모범답안", "기준답변")
     if not question and not answer:
         return None
-    stable_id = csv_text(row, "case_id", "id", "question_id")
-    ordinal_id = csv_text(row, "no", "번호")
+    stable_id = csv_text(row, "case_id", "id", "question_id", "qid")
+    ordinal_id = csv_text(row, "no", "row_no", "번호")
     case_id = stable_id or (f"{pool_id}-{ordinal_id}" if ordinal_id else f"{pool_id}-{index:05d}")
-    qa_category = csv_text(row, "qa_category", "대분류", "카테고리", "category", "topic") or role
-    qa_topic = csv_text(row, "qa_topic", "금융토픽", "topic", "출처_용어", "source_term") or qa_category
-    question_type = csv_text(row, "question_type", "문제유형", "qtype", "type") or "grounded_qa"
-    trap = csv_text(row, "forbidden_claims", "오답_유형", "hallucination_trap(모델이 틀리기 쉬운 오답)")
+    qa_category = csv_text(row, "qa_category", "category", "source_type", "topic", "대분류", "카테고리") or role
+    qa_topic = csv_text(row, "qa_topic", "qa_matrix_topic", "topic", "intent", "source_term", "금융토픽", "출처_용어") or qa_category
+    question_type = csv_text(row, "question_type", "qtype", "type", "task_type", "문제유형", "질문유형") or "grounded_qa"
+    trap = csv_text(row, "forbidden_claims", "must_not_include", "hallucination_trap", "오답_유형", "hallucination_trap(모델이 틀리기 쉬운 오답)")
     metadata = {
         "qa_category": qa_category,
         "qa_topic": qa_topic,

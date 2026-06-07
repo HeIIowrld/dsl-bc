@@ -3249,6 +3249,64 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertTrue(captured["payload"]["dataset"]["id"].startswith("user__regression__custom_cases"))
         self.assertEqual(captured["payload"]["dataset"]["total"], 1)
 
+    def test_question_dataset_sample_csv_download_has_required_columns(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_download(payload, *, filename, content_type, status=200):
+            captured["payload"] = payload
+            captured["filename"] = filename
+            captured["content_type"] = content_type
+            captured["status"] = status
+
+        handler.send_download = fake_send_download
+        FinalUiHandler.handle_question_dataset_sample_csv_download(handler)
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["filename"], "question_dataset_sample.csv")
+        self.assertIn("text/csv", captured["content_type"])
+        self.assertTrue(captured["payload"].startswith("id,question,ground_truth"))
+        self.assertIn("SAMPLE_001", captured["payload"])
+
+    def test_question_dataset_csv_aliases_work_across_server_and_eval_parsers(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        content = (
+            "qid,prompt,expected_output,source_type,qa_matrix_topic,task_type,must_not_include\n"
+            "C1,How can I change my BC Card payment date?,Use MyBC or customer support.,faq,payment,procedure,Do not promise instant change.\n"
+        )
+
+        self.assertEqual(FinalUiHandler.validate_question_dataset_csv_content(handler, content), "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alias_cases.csv"
+            path.write_text(content, encoding="utf-8")
+
+            server_rows = list(
+                FinalUiHandler.iter_question_csv(
+                    handler,
+                    path,
+                    dataset_id="user__benchmark__alias_cases",
+                    role="benchmark",
+                )
+            )
+            runner_rows, _ = load_cases_file(path, suites=None, limit=None)
+            from scripts.eval.compose_eval_dataset import read_cases_path as compose_read_cases_path
+
+            composed_rows = compose_read_cases_path(path, pool_id="alias_pool", pool={"role": "benchmark"})
+
+        self.assertEqual(server_rows[0]["case_id"], "C1")
+        self.assertEqual(server_rows[0]["question"], "How can I change my BC Card payment date?")
+        self.assertEqual(server_rows[0]["output"], "Use MyBC or customer support.")
+        self.assertEqual(server_rows[0]["qa_topic"], "카드/결제")
+        self.assertEqual(server_rows[0]["question_type"], "procedure")
+        self.assertEqual(server_rows[0]["forbidden_claims"], ["Do not promise instant change."])
+        self.assertEqual(runner_rows[0]["case_id"], "C1")
+        self.assertEqual(runner_rows[0]["question"], server_rows[0]["question"])
+        self.assertEqual(runner_rows[0]["output"], server_rows[0]["output"])
+        self.assertEqual(composed_rows[0]["case_id"], "C1")
+        self.assertEqual(composed_rows[0]["question"], server_rows[0]["question"])
+        self.assertEqual(composed_rows[0]["output"], server_rows[0]["output"])
+
 
 class FinalUiJavascriptContractTests(unittest.TestCase):
     def test_benchmark_and_regression_tabs_are_separated_in_ui_contract(self) -> None:

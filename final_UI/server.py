@@ -322,6 +322,59 @@ def text_value(*values):
     return ""
 
 
+CSV_QUESTION_FIELD_ALIASES = (
+    "instruction",
+    "question",
+    "input",
+    "prompt",
+    "query",
+    "user_question",
+    "질문",
+    "문제",
+    "주관식 문제",
+)
+CSV_ANSWER_FIELD_ALIASES = (
+    "output",
+    "ground_truth",
+    "answer",
+    "gold_answer",
+    "expected_answer",
+    "expected_output",
+    "reference_answer",
+    "target_answer",
+    "정답",
+    "모범답안",
+    "기준답변",
+)
+CSV_QA_CATEGORY_FIELD_ALIASES = ("qa_category", "category", "source_type", "topic", "대분류", "카테고리")
+CSV_QA_TOPIC_FIELD_ALIASES = ("qa_topic", "qa_matrix_topic", "topic", "intent", "source_term", "금융토픽", "출처_용어")
+CSV_QUESTION_TYPE_FIELD_ALIASES = ("question_type", "qtype", "type", "task_type", "문제유형", "질문유형")
+CSV_FORBIDDEN_FIELD_ALIASES = (
+    "forbidden_claims",
+    "must_not_include",
+    "hallucination_trap",
+    "hallucination_trap(모델이 틀리기 쉬운 오답)",
+    "오답_유형",
+)
+CSV_CASE_ID_FIELD_ALIASES = ("case_id", "id", "question_id", "qid")
+CSV_ORDINAL_FIELD_ALIASES = ("no", "row_no", "번호")
+
+
+def csv_row_value(row: dict, *aliases: str) -> str:
+    normalized = {str(key or "").strip().lstrip("\ufeff").lower(): value for key, value in row.items()}
+    for alias in aliases:
+        key = str(alias or "").strip().lstrip("\ufeff")
+        direct = text_value(row.get(key))
+        if direct:
+            return direct
+        folded = key.lower()
+        if folded in normalized:
+            value = text_value(normalized.get(folded))
+            if value:
+                return value
+    return ""
+
+
 def canonical_qa_category(*values):
     text = " ".join(str(value or "") for value in values).lower()
     if any(token in text for token in ("card_product", "card_qa", "카드상품", "카드 상품")):
@@ -528,6 +581,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/questionlist/datasets":
             self.handle_questionlist_datasets()
+            return
+        if parsed.path == "/api/questionlist/datasets/sample-csv":
+            self.handle_question_dataset_sample_csv_download()
             return
         if parsed.path == "/api/questionlist/dataset-cases":
             self.handle_questionlist_dataset_cases(parsed.query)
@@ -2667,6 +2723,47 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_questionlist_datasets(self):
         self.send_json({"status": "ok", "datasets": self.questionlist_datasets_payload()})
 
+    def handle_question_dataset_sample_csv_download(self):
+        buffer = io.StringIO()
+        fieldnames = [
+            "id",
+            "question",
+            "ground_truth",
+            "qa_category",
+            "qa_topic",
+            "question_type",
+            "forbidden_claims",
+        ]
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    "id": "SAMPLE_001",
+                    "question": "BC카드 결제일 변경 방법을 간단히 설명해줘",
+                    "ground_truth": "마이BC 또는 고객센터 등 공식 채널에서 결제일 변경 가능 여부와 절차를 확인하도록 안내한다.",
+                    "qa_category": "BC FAQ",
+                    "qa_topic": "카드/결제",
+                    "question_type": "단일추론",
+                    "forbidden_claims": "본인확인 없이 즉시 변경된다고 단정",
+                },
+                {
+                    "id": "SAMPLE_002",
+                    "question": "카드 분실 시 가장 먼저 해야 할 일은?",
+                    "ground_truth": "카드 분실을 인지하면 즉시 BC카드 고객센터나 공식 앱/웹에서 분실 신고를 진행하도록 안내한다.",
+                    "qa_category": "BC FAQ",
+                    "qa_topic": "안전/분실",
+                    "question_type": "절차안내",
+                    "forbidden_claims": "신고를 늦춰도 피해 보상이 항상 된다고 안내",
+                },
+            ]
+        )
+        self.send_download(
+            buffer.getvalue(),
+            filename="question_dataset_sample.csv",
+            content_type="text/csv; charset=utf-8",
+        )
+
     def handle_upload_question_dataset(self):
         payload = self.read_json_body()
         if payload is None:
@@ -2723,17 +2820,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not fieldnames:
             return "CSV header row is required."
         normalized_fields = {field.lower() for field in fieldnames}
-        question_fields = {"question", "instruction", "input", "질문", "문제"}
-        answer_fields = {
-            "ground_truth",
-            "output",
-            "answer",
-            "gold_answer",
-            "expected_answer",
-            "expected_output",
-            "정답",
-            "모범답안",
-        }
+        question_fields = {field.lower() for field in CSV_QUESTION_FIELD_ALIASES}
+        answer_fields = {field.lower() for field in CSV_ANSWER_FIELD_ALIASES}
         if not normalized_fields.intersection(question_fields):
             return "CSV must include a question column. Recommended columns: id, question, ground_truth."
         if not normalized_fields.intersection(answer_fields):
@@ -2741,9 +2829,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
         valid_rows = 0
         for row in reader:
-            normalized_row = {str(key or "").strip().lstrip("\ufeff").lower(): value for key, value in row.items()}
-            question = text_value(*(normalized_row.get(field) for field in question_fields))
-            answer = text_value(*(normalized_row.get(field) for field in answer_fields))
+            question = csv_row_value(row, *CSV_QUESTION_FIELD_ALIASES)
+            answer = csv_row_value(row, *CSV_ANSWER_FIELD_ALIASES)
             if question and answer:
                 valid_rows += 1
                 break
@@ -4466,60 +4553,26 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         with path.open(encoding="utf-8-sig", newline="") as file:
             reader = csv.DictReader(file)
             for index, row in enumerate(reader, 1):
-                question = text_value(
-                    row.get("instruction"),
-                    row.get("question"),
-                    row.get("문제"),
-                    row.get("주관식 문제"),
-                    row.get("input"),
-                    row.get("질문"),
-                    row.get("질문"),
-                )
-                output = text_value(
-                    row.get("output"),
-                    row.get("ground_truth"),
-                    row.get("정답"),
-                    row.get("answer"),
-                    row.get("gold_answer"),
-                    row.get("정답"),
-                    row.get("기준답변"),
-                )
+                question = csv_row_value(row, *CSV_QUESTION_FIELD_ALIASES)
+                output = csv_row_value(row, *CSV_ANSWER_FIELD_ALIASES)
                 if not question and not output:
                     continue
                 qa_category = canonical_qa_category(
-                    row.get("qa_category"),
-                    row.get("대분류"),
-                    row.get("카테고리"),
-                    row.get("category"),
-                    row.get("topic"),
-                    row.get("대분류"),
+                    csv_row_value(row, *CSV_QA_CATEGORY_FIELD_ALIASES),
                     role,
                 )
                 question_type = canonical_question_type(
-                    row.get("question_type"),
-                    row.get("문제유형"),
-                    row.get("qtype"),
-                    row.get("type"),
-                    row.get("문제유형"),
-                    row.get("질문유형"),
+                    csv_row_value(row, *CSV_QUESTION_TYPE_FIELD_ALIASES),
                 )
                 qa_topic = canonical_qa_topic(
                     qa_category,
-                    row.get("qa_topic"),
-                    row.get("금융토픽"),
-                    row.get("topic"),
-                    row.get("출처_용어"),
-                    row.get("금융토픽"),
+                    csv_row_value(row, *CSV_QA_TOPIC_FIELD_ALIASES),
                 )
-                stable_case_id = text_value(row.get("case_id"), row.get("id"), row.get("question_id"))
-                ordinal_case_id = text_value(row.get("no"), row.get("번호"))
+                stable_case_id = csv_row_value(row, *CSV_CASE_ID_FIELD_ALIASES)
+                ordinal_case_id = csv_row_value(row, *CSV_ORDINAL_FIELD_ALIASES)
                 case_id = stable_case_id or (f"{dataset_id}-{ordinal_case_id}" if ordinal_case_id else f"{dataset_id}-{index:05d}")
                 is_regression = (role or "").lower() == "regression"
-                trap = text_value(
-                    row.get("forbidden_claims"),
-                    row.get("오답_유형"),
-                    row.get("hallucination_trap(모델이 틀리기 쉬운 오답)"),
-                )
+                trap = csv_row_value(row, *CSV_FORBIDDEN_FIELD_ALIASES)
                 yield {
                     "case_id": case_id,
                     "question_id": case_id,
