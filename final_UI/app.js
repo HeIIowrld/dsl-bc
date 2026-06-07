@@ -2285,6 +2285,7 @@ function renderVersionFiltersOnly() {
 function renderModelConnectionSurfaces() {
   renderVersionFiltersOnly();
   renderTargetRegistry();
+  renderJudgeRegistry();
   renderEvalConfigFilters();
 }
 
@@ -2979,13 +2980,24 @@ function renderJudgeRegistry() {
       spec.prompt_version || "",
       spec.system_prompt_preset ? `preset ${spec.system_prompt_preset}` : "",
     ].filter(Boolean).join(" · ");
+    const detailTitle = [
+      modelLabelForVersion(id),
+      spec.provider || "",
+      spec.model || id,
+      promptMeta,
+      endpoint,
+    ].filter(Boolean).join(" · ");
     return `
-      <div class="registry-item judge-registry-item">
-        <div>
-          <strong>${escapeHtml(modelLabelForVersion(id))}</strong>
-          <span>${escapeHtml(spec.provider || "-")} · ${escapeHtml(spec.model || id)}</span>
-          ${promptMeta ? `<span>${escapeHtml(promptMeta)}</span>` : ""}
-          <code>${escapeHtml(endpoint)}</code>
+      <div class="registry-item judge-registry-item" title="${escapeHtml(detailTitle)}">
+        <div class="target-registry-main">
+          <div class="target-registry-title-row">
+            <strong class="target-registry-title">${escapeHtml(modelLabelForVersion(id))}</strong>
+            ${modelConnectionPill(id)}
+            <button type="button" class="connection-health" data-check-judge="${escapeHtml(id)}" ${modelHealthCheckInFlight ? "disabled" : ""}>연결 확인</button>
+          </div>
+          <span class="target-registry-meta">${escapeHtml(spec.provider || "-")} · ${escapeHtml(spec.model || id)}</span>
+          ${promptMeta ? `<span class="target-registry-meta">${escapeHtml(promptMeta)}</span>` : ""}
+          <code class="target-registry-code">${escapeHtml(endpoint)}</code>
         </div>
         <div class="connection-actions">
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>
@@ -3004,6 +3016,20 @@ function bindJudgeRegistryButtons() {
       const version = button.dataset.editJudge;
       if (!version) return;
       editRegisteredJudge(version);
+    });
+  });
+  document.querySelectorAll("[data-check-judge]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const version = button.dataset.checkJudge;
+      if (!version || modelHealthCheckInFlight) return;
+      setJudgeRegistryMessage(`Judge 연결 확인 중: ${modelLabelForVersion(version)}`, "");
+      await syncSelectedModelApis([version], { requireSelected: false, scope: "single" });
+      const stateInfo = state.modelConnections.get(version);
+      const ok = ["connected", "installed", "available", "configured"].includes(stateInfo?.status);
+      setJudgeRegistryMessage(
+        `${ok ? "Judge 연결 확인 완료" : "Judge 연결 확인 실패"}: ${modelLabelForVersion(version)}${stateInfo?.message ? ` · ${stateInfo.message}` : ""}`,
+        ok ? "ok" : "error",
+      );
     });
   });
   document.querySelectorAll("[data-delete-judge]").forEach((button) => {

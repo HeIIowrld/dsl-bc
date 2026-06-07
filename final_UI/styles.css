@@ -1736,17 +1736,21 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   margin-bottom: 0;
 }
 
+.judge-registry-item,
+.target-registry-item {
+  min-height: 112px;
+  padding: 12px;
+  align-content: space-between;
+  gap: 10px;
+  background: var(--bg-raised);
+}
+
 .judge-registry-item {
   border-left-color: var(--blue);
 }
 
 .target-registry-item {
   border-left-color: var(--accent);
-  min-height: 112px;
-  padding: 12px;
-  align-content: space-between;
-  gap: 10px;
-  background: var(--bg-raised);
 }
 
 .target-registry-main {
