@@ -2883,6 +2883,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         prediction_file = str(payload.get("prediction_file") or "").strip()
         run_id = self.safe_run_id(payload.get("run_id") or f"WEB_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         scoring_mode = str(payload.get("scoring_mode") or "static").strip()
+        requested_scoring_mode = scoring_mode
         if scoring_mode == "llm_blended":
             scoring_mode = "llm_override"
         if scoring_mode not in {"static", "static_llm", "llm_override", "blend"}:
@@ -2929,6 +2930,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": judge_result["error"]}, status=400)
                 return
             judge_config_ids = list(judge_result.get("judge_config_ids") or [judge_result["judge_config_id"]])
+            if requested_scoring_mode == "llm_override" and len(judge_config_ids) > 1:
+                self.send_json({"error": "Single-Judge scoring accepts exactly one judge config. Use llm_blended for multiple judges."}, status=400)
+                return
             if judge_aggregation_method == "weighted_mean":
                 judge_score_weights, weight_error = self.judge_score_weights_from_payload(judge_payload, judge_config_ids)
                 if weight_error:
@@ -3131,6 +3135,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 return
 
         scoring_mode = str(payload.get("scoring_mode") or "static_llm").strip()
+        requested_scoring_mode = scoring_mode
         if scoring_mode == "llm_blended":
             scoring_mode = "llm_override"
         if scoring_mode not in {"static", "static_llm", "llm_override", "blend"}:
@@ -3198,6 +3203,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": judge_result["error"]}, status=400)
                 return
             judge_config_ids = list(judge_result.get("judge_config_ids") or [judge_result["judge_config_id"]])
+            if requested_scoring_mode == "llm_override" and len(judge_config_ids) > 1:
+                self.send_json({"error": "Single-Judge scoring accepts exactly one judge config. Use llm_blended for multiple judges."}, status=400)
+                return
             if judge_aggregation_method == "weighted_mean":
                 judge_score_weights, weight_error = self.judge_score_weights_from_payload(judge_payload, judge_config_ids)
                 if weight_error:

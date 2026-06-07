@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BC 금융 RAG 회귀 평가 대시보드</title>
-  <link rel="stylesheet" href="styles.css?v=20260607-custom-ratio-seed">
+  <link rel="stylesheet" href="styles.css?v=20260607-score-mode-ux">
 </head>
 <body class="theme-internal benchmark-console" data-active-tab="runEval">
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-label="알림"></div>
@@ -368,10 +368,10 @@
             </label>
             <label>채점 방식
               <select id="evalScoringMode" name="scoring_mode">
-                <option value="llm_override">LLM only</option>
-                <option value="llm_blended">LLM blended</option>
-                <option value="blend">LLM+Static blended</option>
-                <option value="static">Rule-based only</option>
+                <option value="llm_override">단일 Judge 채점</option>
+                <option value="llm_blended">여러 Judge 합산</option>
+                <option value="blend">Judge+규칙 혼합</option>
+                <option value="static">규칙 기반만</option>
               </select>
               <small id="evalScoringModeHelp" class="field-help">선택한 단일 Judge만으로 채점합니다.</small>
               <div class="scoring-mode-guide" aria-label="평가 및 점수 합산 방식">
@@ -381,23 +381,23 @@
                   <span>점수 비율</span>
                 </div>
                 <div class="scoring-mode-guide-row">
-                  <strong>LLM only</strong>
-                  <span>선택한 단일 Judge만으로 채점</span>
-                  <span>LLM 100%</span>
+                  <strong>단일 Judge 채점</strong>
+                  <span>선택한 Judge 1개만 최종 점수로 사용</span>
+                  <span>Judge 100%</span>
                 </div>
                 <div class="scoring-mode-guide-row">
-                  <strong>LLM blended</strong>
-                  <span>선택한 여러 Judge 점수를 혼합</span>
+                  <strong>여러 Judge 합산</strong>
+                  <span>선택한 여러 Judge 점수를 합산</span>
                   <span>Judge별 비율<br><small>합계 1 · 기본값 = 균등 분배</small></span>
                 </div>
                 <div class="scoring-mode-guide-row">
-                  <strong>LLM+Static blended</strong>
+                  <strong>Judge+규칙 혼합</strong>
                   <span>Judge 점수와 Rule-based 점수를 혼합</span>
-                  <span>LLM Judge : Rule<br><small>사용자 지정 비율 · 기본값 = 50:50</small></span>
+                  <span>Judge : Rule<br><small>사용자 지정 비율 · 기본값 = 50:50</small></span>
                 </div>
                 <div class="scoring-mode-guide-row">
-                  <strong>Rule-based only</strong>
-                  <span>Rule-based 채점만 사용, Judge 미호출</span>
+                  <strong>규칙 기반만</strong>
+                  <span>규칙 기반 채점만 사용, Judge 미호출</span>
                   <span>Rule 100%</span>
                 </div>
               </div>
@@ -492,25 +492,24 @@
           <pre id="evalJobLog" class="job-log"></pre>
         </article>
 
-        <!-- 2-4. 저장된 결과 점수 다시 계산 -->
+        <!-- 2-4. 기존 실행 점수 재계산 -->
         <details class="card advanced-action-card">
           <summary class="card-head">
-            <h2>저장된 결과 점수 다시 계산</h2>
-            <span>고급 작업 · 모델/LLM 평가 모델 재호출 없음</span>
+            <h2>기존 실행 점수 재계산</h2>
+            <span>저장된 static/Judge 점수만 재조합 · 모델/Judge 재호출 없음</span>
           </summary>
           <form id="evalReblendForm" class="run-form">
-            <label>원본 실행 ID
-              <input id="reblendSourceRunId" name="source_run_id" placeholder="비우면 최신 실행">
+            <label>원본 실행 선택
+              <select id="reblendSourceRunId" name="source_run_id"></select>
             </label>
-            <label>채점 방식
+            <label>재계산 방식
               <select id="reblendScoringMode" name="scoring_mode">
-                <option value="llm_override">LLM only</option>
-                <option value="llm_blended">LLM blended</option>
-                <option value="blend">LLM+Static blended</option>
-                <option value="static">Rule-based only</option>
+                <option value="llm_override">저장된 Judge 점수만</option>
+                <option value="blend">저장된 Judge+규칙 혼합</option>
+                <option value="static">저장된 규칙 점수만</option>
               </select>
             </label>
-            <label>규칙 점수와 LLM 점수 반영 비율
+            <label>Judge 점수 반영 비율
               <input id="reblendWeight" name="blend_weight" type="number" min="0" max="1" step="0.05" value="0.5">
             </label>
             <label class="check-inline">
@@ -519,8 +518,8 @@
             </label>
           </form>
           <button id="evalReblendSubmit" class="secondary-action-button" type="button">
-            <span>새 비중으로 결과 만들기</span>
-            <small>기존 점수로 새 실행 생성</small>
+            <span>재계산 결과 생성</span>
+            <small>선택한 기존 실행에서 새 결과 생성</small>
           </button>
           <div id="evalReblendMessage" class="form-message"></div>
         </details>
@@ -925,6 +924,6 @@
     </main>
   </div><!-- /.layout -->
 
-  <script src="app.js?v=20260607-custom-ratio-seed"></script>
+  <script src="app.js?v=20260607-score-mode-ux"></script>
 </body>
 </html>

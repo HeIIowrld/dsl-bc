@@ -52,19 +52,19 @@ const runProfileHelp = {
 };
 
 const scoringModeLabels = {
-  llm_override: "LLM only",
-  llm_blended: "LLM blended",
-  blend: "LLM+Static blended",
-  static: "Rule-based only",
+  llm_override: "단일 Judge 채점",
+  llm_blended: "여러 Judge 합산",
+  blend: "Judge+규칙 혼합",
+  static: "규칙 기반만",
   static_llm: "Static + LLM audit",
   answers_only: "답변만 생성",
 };
 
 const scoringModeHelp = {
-  llm_override: "선택한 단일 Judge만으로 채점합니다. 최종 점수는 LLM 100%입니다.",
-  llm_blended: "선택한 여러 Judge 점수를 지정 비율로 혼합합니다. Judge는 2개 이상 사용할 수 있고, 기본값은 균등 분배입니다.",
-  blend: "Judge 점수와 Rule-based 점수를 지정 비율로 혼합합니다. 여러 Judge를 선택하면 Judge 점수를 먼저 가중 평균합니다. 기본값은 50:50입니다.",
-  static: "Rule-based 채점만 사용하고 Judge는 호출하지 않습니다. 최종 점수는 Rule 100%입니다.",
+  llm_override: "선택한 Judge 1개만 최종 점수로 사용합니다. 여러 Judge를 선택하려면 여러 Judge 합산을 사용하세요.",
+  llm_blended: "선택한 여러 Judge 점수를 지정 비율로 합산합니다. Judge는 2개 이상 사용할 수 있고, 기본값은 균등 분배입니다.",
+  blend: "Judge 점수와 규칙 기반 점수를 지정 비율로 혼합합니다. 여러 Judge를 선택하면 Judge 점수를 먼저 합산합니다.",
+  static: "규칙 기반 채점만 사용하고 Judge는 호출하지 않습니다. 최종 점수는 Rule 100%입니다.",
   static_llm: "Rule-based 점수는 유지하고 LLM Judge는 평가 의견만 남깁니다.",
 };
 
@@ -1078,6 +1078,27 @@ function selectedJudgeConfigIds() {
     .filter(Boolean))];
 }
 
+function singleJudgeScoringMode(mode = document.getElementById("evalScoringMode")?.value || "static") {
+  return mode === "llm_override";
+}
+
+function multiJudgeScoringMode(mode = document.getElementById("evalScoringMode")?.value || "static") {
+  return mode === "llm_blended" || mode === "blend";
+}
+
+function enforceJudgeSelectionForScoringMode(preferredId = "") {
+  const mode = document.getElementById("evalScoringMode")?.value || "static";
+  if (!singleJudgeScoringMode(mode)) return false;
+  const checked = [...document.querySelectorAll("[data-judge-config]:checked")];
+  if (checked.length <= 1) return false;
+  const keep = checked.find((input) => input.value === preferredId) || checked[0];
+  checked.forEach((input) => {
+    input.checked = input === keep;
+  });
+  state.judgeScoreWeightsTouched = false;
+  return true;
+}
+
 function selectedJudgeAggregationMethod() {
   const value = document.getElementById("evalJudgeAggregationMethod")?.value || "weighted_mean";
   return judgeAggregationLabels[value] ? value : "weighted_mean";
@@ -1089,7 +1110,7 @@ function syncJudgeAggregationControls() {
   const help = document.getElementById("evalJudgeAggregationHelp");
   if (!block || !select) return;
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
-  const visible = scoringMode !== "static" && selectedJudgeConfigIds().length > 1;
+  const visible = multiJudgeScoringMode(scoringMode) && selectedJudgeConfigIds().length > 1;
   block.hidden = !visible;
   block.classList.toggle("field-hidden", !visible);
   if (help) {
@@ -1176,7 +1197,7 @@ function renderJudgeWeightInputs(options = {}) {
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
   const ids = selectedJudgeConfigIds();
   const aggregationMethod = selectedJudgeAggregationMethod();
-  const visible = scoringMode !== "static" && ids.length > 1 && aggregationMethod === "weighted_mean";
+  const visible = multiJudgeScoringMode(scoringMode) && ids.length > 1 && aggregationMethod === "weighted_mean";
   block.hidden = !visible;
   block.classList.toggle("field-hidden", !visible);
   if (!visible) {
@@ -1824,6 +1845,7 @@ function renderAll(options = {}) {
   renderRunMeta();
   renderRunSetupGuide();
   renderResultRunSelector();
+  renderReblendRunSelector();
   if (tab === "overview") {
     renderOverview(runData, gateData);
     renderReleaseGates(gateData);
@@ -2095,6 +2117,34 @@ function formatDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function runHistoryOptionLabel(run) {
+  return [
+    run.run_id,
+    run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
+    Number(run.total_questions || 0) ? `${Number(run.total_questions || 0).toLocaleString()}문항` : "",
+    scoringModeLabel(run.scoring_mode) || "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderReblendRunSelector() {
+  const select = document.getElementById("reblendSourceRunId");
+  if (!select) return;
+  const previousValue = select.value || "";
+  const preferredId = previousValue || selectedRunId || latestRun?.run_id || "";
+  const latestLabel = latestRun?.run_id
+    ? `최신 실행 (${latestRun.run_id})`
+    : "최신 실행 자동 선택";
+  const historyOptions = evalRunHistory.map((run) => `
+    <option value="${escapeHtml(run.run_id)}">${escapeHtml(runHistoryOptionLabel(run))}</option>
+  `).join("");
+  select.innerHTML = `<option value="">${escapeHtml(latestLabel)}</option>${historyOptions}`;
+  select.disabled = !evalRunHistory.length && !latestRun?.run_id;
+  select.title = select.disabled
+    ? "재계산할 실행 결과가 없습니다."
+    : "저장된 실행 결과 중 재계산할 원본을 선택합니다.";
+  select.value = evalRunHistory.some((run) => run.run_id === preferredId) ? preferredId : "";
 }
 
 function latestJudgeMethodLabel() {
@@ -3010,6 +3060,7 @@ function renderJudgeRegistry() {
     target.innerHTML = sections.join("") || emptyState("등록된 Judge 또는 대상 모델이 없습니다.");
   };
   renderPicker(picker, "data-judge-config", selectedJudgeConfigIds());
+  enforceJudgeSelectionForScoringMode();
   syncJudgeAggregationControls();
   renderJudgeWeightInputs();
   if (!list) return;
@@ -3869,8 +3920,8 @@ function syncScoringModeHelp() {
   if (blendTarget) {
     const llm = Math.round(weight * 100);
     blendTarget.textContent = mode === "blend"
-      ? `${weight.toFixed(2)} = LLM ${llm}%, Rule ${100 - llm}%로 최종 점수를 섞습니다.`
-      : "LLM+Static blended에서만 사용합니다.";
+      ? `${weight.toFixed(2)} = Judge ${llm}%, Rule ${100 - llm}%로 최종 점수를 섞습니다.`
+      : "Judge+규칙 혼합에서만 사용합니다.";
   }
 }
 
@@ -4306,6 +4357,7 @@ function initializeEvalRunControls() {
   });
   document.getElementById("evalScoringMode")?.addEventListener("change", () => {
     syncScoringModeHelp();
+    enforceJudgeSelectionForScoringMode();
     syncJudgeAggregationControls();
     renderJudgeWeightInputs();
     renderEvalRunSummary();
@@ -4330,6 +4382,14 @@ function initializeEvalRunControls() {
       renderSelectedModelSummary();
       renderJudgeRegistry();
     }
+    renderEvalRunSummary();
+  });
+  document.getElementById("evalJudgeConfigId")?.addEventListener("change", (event) => {
+    if (event.target?.matches("[data-judge-config]") && event.target.checked) {
+      enforceJudgeSelectionForScoringMode(event.target.value);
+    }
+    syncJudgeAggregationControls();
+    renderJudgeWeightInputs();
     renderEvalRunSummary();
   });
   document.getElementById("evalProfileCards")?.addEventListener("click", (event) => {
@@ -4364,10 +4424,7 @@ function initializeReblendControls() {
   const form = document.getElementById("evalReblendForm");
   const button = document.getElementById("evalReblendSubmit");
   if (!form || !button) return;
-  const sourceInput = document.getElementById("reblendSourceRunId");
-  if (sourceInput && latestRun?.run_id) {
-    sourceInput.placeholder = `비우면 최신 run (${latestRun.run_id})`;
-  }
+  renderReblendRunSelector();
   const scoringMode = document.getElementById("reblendScoringMode");
   const weight = document.getElementById("reblendWeight");
   const syncWeightState = () => {
@@ -4397,9 +4454,9 @@ async function submitReblendRun() {
   const previousText = button?.innerHTML || "";
   if (button) {
     button.disabled = true;
-    button.innerHTML = "<span>재가중 중...</span><small>기존 결과를 새 run으로 작성</small>";
+    button.innerHTML = "<span>재계산 중...</span><small>기존 결과를 새 run으로 작성</small>";
   }
-  setEvalReblendMessage("기존 점수 재가중 중...", "");
+  setEvalReblendMessage("기존 실행 점수를 재계산하는 중...", "");
   try {
     const response = await apiFetch("api/eval/reblend", {
       method: "POST",
@@ -4413,9 +4470,9 @@ async function submitReblendRun() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-    setEvalReblendMessage(`새 run 생성: ${payload.run_id}. Export를 켰으면 새로고침하면 반영됩니다.`, "ok");
+    setEvalReblendMessage(`재계산 결과 생성: ${payload.run_id}. Export를 켰으면 새로고침하면 반영됩니다.`, "ok");
   } catch (error) {
-    setEvalReblendMessage(`재가중 실패: ${error.message}`, "error");
+    setEvalReblendMessage(`재계산 실패: ${error.message}`, "error");
   } finally {
     if (button) {
       button.disabled = false;
@@ -4666,9 +4723,12 @@ function updateRunSubmitState() {
   } else if (scoringMode !== "static" && !selectedJudgeConfigIds().length) {
     disabled = true;
     reason = "등록된 Judge 또는 대상 모델 Judge를 하나 이상 선택하세요.";
+  } else if (scoringMode === "llm_override" && selectedJudgeConfigIds().length > 1) {
+    disabled = true;
+    reason = "단일 Judge 채점은 Judge를 1개만 선택해야 합니다.";
   } else if (scoringMode === "llm_blended" && selectedJudgeConfigIds().length < 2) {
     disabled = true;
-    reason = "LLM blended는 Judge를 2개 이상 선택하세요. 3개 이상도 사용할 수 있습니다.";
+    reason = "여러 Judge 합산은 Judge를 2개 이상 선택하세요. 3개 이상도 사용할 수 있습니다.";
   } else if (scoringMode !== "static" && selectedJudgeConfigIds().length > 1 && aggregationMethod === "weighted_mean" && !judgeScoreWeightStatus(selectedJudgeConfigIds()).valid) {
     disabled = true;
     reason = "Judge별 점수 비중 합계가 1이어야 합니다.";
@@ -4677,6 +4737,7 @@ function updateRunSubmitState() {
   const disabledHint = (() => {
     if (!disabled) return "";
     if (reason.includes("비중 합계")) return "Judge 비중 합계가 1이면 실행 가능";
+    if (reason.includes("1개만")) return "Judge 1개만 선택 필요";
     if (reason.includes("2개 이상")) return "Judge 2개 이상 선택 필요";
     if (reason.includes("대상 모델")) return "대상 모델 등록 필요";
     if (reason.includes("실행할 모델")) return "실행할 모델 선택 필요";
@@ -4725,7 +4786,6 @@ async function startEvalRun(options = {}) {
   const poolQuotas = runProfile === "custom_seeded_mix" ? customPlan.quotas : {};
   const predictionFile = document.getElementById("evalPredictionFile")?.value || "";
   const selectedScoringMode = answerOnly ? "static" : (document.getElementById("evalScoringMode")?.value || "static");
-  const scoringMode = backendScoringMode(selectedScoringMode);
   const staticEmbeddingEnabled = answerOnly ? false : Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value || "";
   const staticEmbeddingBaseUrl = document.getElementById("evalStaticEmbeddingBaseUrl")?.value || "";
@@ -4764,8 +4824,12 @@ async function startEvalRun(options = {}) {
     setEvalRunMessage("등록된 Judge 또는 대상 모델 Judge를 하나 이상 선택하세요.", "error");
     return;
   }
+  if (selectedScoringMode === "llm_override" && judgeConfigIds.length > 1) {
+    setEvalRunMessage("단일 Judge 채점은 Judge를 1개만 선택해야 합니다.", "error");
+    return;
+  }
   if (selectedScoringMode === "llm_blended" && judgeConfigIds.length < 2) {
-    setEvalRunMessage("LLM blended는 Judge를 2개 이상 선택하세요. 3개 이상도 사용할 수 있습니다.", "error");
+    setEvalRunMessage("여러 Judge 합산은 Judge를 2개 이상 선택하세요. 3개 이상도 사용할 수 있습니다.", "error");
     return;
   }
   if (selectedScoringMode !== "static" && judgeConfigIds.length > 1 && judgeAggregationMethod === "weighted_mean" && !judgeScoreWeightStatus(judgeConfigIds).valid) {
@@ -4791,7 +4855,7 @@ async function startEvalRun(options = {}) {
       limit,
       run_id: runId,
       prediction_file: predictionFile,
-      scoring_mode: scoringMode,
+      scoring_mode: selectedScoringMode,
       skip_scoring: answerOnly,
       answer_cache: answerCacheEnabled,
       static_embedding: {
