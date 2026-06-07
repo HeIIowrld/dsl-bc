@@ -748,6 +748,12 @@ input[type="checkbox"] {
 
 input::placeholder, textarea::placeholder { color: var(--text-dim); opacity: .9; }
 
+textarea.readonly-field {
+  color: var(--text);
+  background: var(--bg-muted);
+  cursor: text;
+}
+
 button[type="submit"],
 button.run-submit {
   font-family: var(--font-mono);
