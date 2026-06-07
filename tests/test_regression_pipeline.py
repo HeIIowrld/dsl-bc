@@ -1947,6 +1947,37 @@ class QuestionlistCaseTests(unittest.TestCase):
 
 
 class FinalUiServerHelperTests(unittest.TestCase):
+    def test_latest_run_empty_state_returns_200_missing_payload(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.requested_run_id = lambda query: ""
+        handler.latest_run_dir = lambda: None
+        handler.send_json = fake_send_json
+
+        FinalUiHandler.handle_latest_run(handler)
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "missing")
+        self.assertNotIn("error", captured["payload"])
+
+    def test_favicon_route_returns_no_content(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        calls = []
+
+        handler.path = "/favicon.ico"
+        handler.require_read_auth = lambda: True
+        handler.send_no_content = lambda: calls.append("no_content")
+
+        FinalUiHandler.do_GET(handler)
+        FinalUiHandler.do_HEAD(handler)
+
+        self.assertEqual(calls, ["no_content", "no_content"])
+
     def test_ollama_health_uses_model_specific_base_url(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}

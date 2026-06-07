@@ -455,6 +455,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/auth/access-log":
             self.handle_auth_access_log(parsed.query)
             return
+        if parsed.path == "/favicon.ico":
+            self.send_no_content()
+            return
         if parsed.path == "/api/model-registry":
             self.handle_dynamic_model_registry()
             return
@@ -511,6 +514,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not self.require_read_auth():
             return
         parsed = urlparse(self.path)
+        if parsed.path == "/favicon.ico":
+            self.send_no_content()
+            return
         dynamic_paths = {
             "/api/auth/session",
             "/api/auth/access-log",
@@ -1526,7 +1532,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             self.send_json({"status": "missing", "error": "unknown eval run", "run_id": requested_run_id}, status=404)
             return
         if not latest:
-            self.send_json({"status": "missing", "message": "No eval run found."}, status=404)
+            self.send_json({"status": "missing", "message": "No eval run found."})
             return
         config = self.run_config(latest)
         case_source = config.get("case_source", "")
@@ -4371,6 +4377,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         if not getattr(self, "_head_only", False):
             self.wfile.write(body)
+
+    def send_no_content(self):
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.send_cors_headers()
+        self.end_headers()
 
     def send_download(self, payload: str, *, filename: str, content_type: str, status=200):
         body = ("\ufeff" + payload).encode("utf-8")
