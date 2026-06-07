@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import tempfile
@@ -3306,6 +3307,61 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(composed_rows[0]["case_id"], "C1")
         self.assertEqual(composed_rows[0]["question"], server_rows[0]["question"])
         self.assertEqual(composed_rows[0]["output"], server_rows[0]["output"])
+
+
+class GithubSampleFilesTests(unittest.TestCase):
+    def test_final_ui_sample_files_are_parseable_and_sanitized(self) -> None:
+        sample_dir = Path("final_UI/samples")
+        expected_files = [
+            "README.md",
+            "active_run.sample.json",
+            "registered_target_models.sample.json",
+            "registered_judge_models.sample.json",
+            "server_api_secrets.sample.json",
+            "question_dataset_sample.csv",
+            "question_dataset_aliases.sample.csv",
+            "eval_runs.sample.csv",
+            "question_cases.sample.csv",
+            "qa_slice_scores.sample.csv",
+            "run_release_gates.sample.csv",
+            "regression_diff.sample.csv",
+        ]
+        forbidden_secret_markers = ("sk-", "AIza", "ya29.", "xai-", "gsk_", "nvapi-", "-----BEGIN")
+
+        for name in expected_files:
+            path = sample_dir / name
+            self.assertTrue(path.exists(), f"missing sample file: {path}")
+            text = path.read_text(encoding="utf-8")
+            for marker in forbidden_secret_markers:
+                self.assertNotIn(marker, text)
+
+        for name in ("registered_target_models.sample.json", "registered_judge_models.sample.json"):
+            payload = json.loads((sample_dir / name).read_text(encoding="utf-8"))
+            self.assertIsInstance(payload.get("configs"), list)
+            self.assertGreaterEqual(len(payload["configs"]), 1)
+
+        secrets_payload = json.loads((sample_dir / "server_api_secrets.sample.json").read_text(encoding="utf-8"))
+        self.assertEqual(secrets_payload, {"secrets": {}})
+
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        for name in ("question_dataset_sample.csv", "question_dataset_aliases.sample.csv"):
+            content = (sample_dir / name).read_text(encoding="utf-8")
+            self.assertEqual(FinalUiHandler.validate_question_dataset_csv_content(handler, content), "")
+
+        csv_files = [
+            "question_dataset_sample.csv",
+            "question_dataset_aliases.sample.csv",
+            "eval_runs.sample.csv",
+            "question_cases.sample.csv",
+            "qa_slice_scores.sample.csv",
+            "run_release_gates.sample.csv",
+            "regression_diff.sample.csv",
+        ]
+        for name in csv_files:
+            with (sample_dir / name).open(encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                self.assertTrue(reader.fieldnames, f"missing CSV header: {name}")
+                self.assertGreaterEqual(len(list(reader)), 1, f"missing CSV rows: {name}")
 
 
 class FinalUiJavascriptContractTests(unittest.TestCase):

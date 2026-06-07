@@ -68,6 +68,21 @@ out/eval_runs/   평가 실행 결과
 
 각 폴더의 `.gitkeep`은 폴더 구조 유지용입니다. 실제 CSV, JSON, JSONL, 로그 파일은 로컬에서 생성하거나 복사해 채워 넣습니다. 데이터가 아직 채워지지 않은 상태에서도 UI는 실행됩니다.
 
+## GitHub 샘플 파일
+
+민감정보 없이 구조를 확인할 수 있는 샘플은 `final_UI/samples/`에 있습니다.
+
+| 샘플 | 용도 |
+| --- | --- |
+| `registered_target_models.sample.json` | 대상 모델 등록 JSON 예시 |
+| `registered_judge_models.sample.json` | Judge 모델 등록 JSON 예시 |
+| `server_api_secrets.sample.json` | 서버 API key 저장소의 빈 구조 |
+| `question_dataset_sample.csv` | 테스트셋 업로드용 기본 CSV |
+| `question_dataset_aliases.sample.csv` | 다른 컬럼명 alias CSV |
+| `eval_runs.sample.csv`, `question_cases.sample.csv` | 결과 화면 확인용 CSV 구조 |
+
+실제 API key는 UI에서 저장하거나 `.env`/환경 변수로 주입하고, `final_UI/data/server_api_secrets.json`은 GitHub에 올리지 않습니다.
+
 ## 인증
 
 기본적으로 공개 바인딩(`0.0.0.0`)에서는 인증이 필요합니다.
@@ -89,6 +104,7 @@ app.js           데이터 로딩, 화면 렌더링, 실행 제어
 server.py        정적 파일 서버와 로컬 API
 assets/          UI 로고 이미지
 data/.gitkeep    로컬 데이터 폴더 유지용 파일
+samples/         GitHub 공유용 sanitized sample
 ```
 
 ## 점검

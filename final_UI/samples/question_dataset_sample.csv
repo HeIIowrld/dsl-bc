@@ -1,0 +1,3 @@
+id,question,ground_truth,qa_category,qa_topic,question_type,forbidden_claims
+SAMPLE_001,BC카드 결제일 변경 방법을 간단히 설명해줘,마이BC 또는 고객센터 등 공식 채널에서 결제일 변경 가능 여부와 절차를 확인하도록 안내한다.,BC FAQ,카드/결제,단일추론,본인확인 없이 즉시 변경된다고 단정
+SAMPLE_002,카드 분실 시 가장 먼저 해야 할 일은?,BC카드 고객센터나 공식 앱에서 즉시 분실 신고를 진행하도록 안내한다.,BC FAQ,안전/분실,절차안내,신고를 늦춰도 피해 보상이 항상 된다고 안내

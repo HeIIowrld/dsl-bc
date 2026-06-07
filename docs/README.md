@@ -38,6 +38,9 @@ Registered Judge models:
 
 Seeded target model configs:
   config/seeded_target_models.yaml
+
+Sanitized GitHub samples:
+  final_UI/samples/
 ```
 
 ## Final QA Matrix

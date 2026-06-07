@@ -29,7 +29,7 @@ The checked-in CSV files use compact Korean source columns:
 | `ground_truth` | Reference answer | `output`, `gold_answer`, `required_conditions` |
 | `split_type` | Regression split only | source metadata for regression rows |
 
-Uploaded CSV files should use at least `question` and `ground_truth`; `id` is recommended for stable case IDs.
+Uploaded CSV files should use at least `question` and `ground_truth`; `id` is recommended for stable case IDs. The UI also accepts common aliases such as `prompt` for questions and `expected_output` for answers. Downloadable examples are available from the UI and in `final_UI/samples/question_dataset_sample.csv`.
 
 ## Current Distribution
 
@@ -37,8 +37,8 @@ Benchmark distribution:
 
 | Dimension | Values |
 | --- | --- |
-| `대분류` | `금융정보` 500, `BCfaq` 150, `카드상품` 150 |
-| `금융토픽` | `카드및결제` 250, `BCfaq` 150, `투자및펀드` 100, `일반금융` 100, `대출및여신` 100, `예적금` 100 |
+| `대분류` | `금융정보` 500, `BC FAQ` 150, `카드상품` 150 |
+| `금융토픽` | `카드및결제` 250, `BC FAQ` 150, `투자및펀드` 100, `일반금융` 100, `대출및여신` 100, `예적금` 100 |
 | `문제유형` | `단일추론`, `비교대조`, `복합추론`, `수치추론및계산`, `민감` 각 160 |
 
 Regression distribution:

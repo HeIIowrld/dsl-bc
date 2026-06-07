@@ -1,0 +1,11 @@
+{
+  "run_id": "SAMPLE_RUN_QWEN3",
+  "status": "completed",
+  "stage": "done",
+  "message": "Sample completed run for GitHub documentation.",
+  "started_at": "2026-06-07T09:00:00",
+  "finished_at": "2026-06-07T09:03:00",
+  "total_cases": 2,
+  "completed_cases": 2,
+  "failed_cases": 0
+}

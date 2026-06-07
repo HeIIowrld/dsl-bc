@@ -19,6 +19,7 @@ playwright-report/
 test-results/
 questionlist/user_uploads/
 
+# Runtime UI data is ignored; sanitized GitHub examples live in final_UI/samples/.
 final_UI/data/*
 !final_UI/data/.gitkeep
 !final_UI/data/judge_api_presets.json

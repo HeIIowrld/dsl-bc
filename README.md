@@ -156,6 +156,8 @@ Evidence 활용 여부
 
 `final_UI/data/`의 모델 등록 파일은 역할별로 분리됩니다. `registered_target_models.json`은 답변을 생성하고 비교할 대상 모델을 저장하고, `registered_judge_models.json`은 채점 전용 Judge/Arbiter 모델을 저장합니다. repo에 함께 제공하는 seed 대상 모델은 `config/seeded_target_models.yaml`에 둡니다.
 
+GitHub 공유용 샘플은 `final_UI/samples/`에 따로 둡니다. 이 샘플은 모델 등록 JSON, 빈 API key 저장소 구조, 테스트셋 업로드 CSV, UI 결과 CSV의 최소 예시를 포함합니다. 실제 런타임 파일은 `final_UI/data/`에 생성되며 Git에는 포함하지 않습니다.
+
 원천 수집 자료, 모델 제작 노트북, raw 데이터, 실행 결과, API key, 개인 환경 파일은 공유용 runtime package에서 제외합니다. 이 작업 중 분리한 개발 자료는 로컬 `_unused_files/runtime_cleanup_20260606/` 아래에 보관했습니다.
 
 ---
@@ -698,6 +700,7 @@ python -m unittest tests.test_regression_pipeline
 ## Notes
 
 - `questionlist/`, `out/eval_runs/`, `final_UI/data/` 폴더가 준비되어 있습니다. 각 환경의 평가 데이터와 실행 결과를 해당 위치에 채워 사용하세요.
+- GitHub용 샘플 파일은 `final_UI/samples/`에 있습니다. 이 폴더의 파일은 민감정보 없이 구조만 보여주는 예시입니다.
 - 실제 평가를 실행하려면 모델 설정, API key, 평가 데이터셋을 로컬 환경에 맞게 준비해야 합니다.
 - OpenAI API 등 유료 API Judge를 사용할 때는 비용이 발생할 수 있으므로 실행 전 설정을 확인하세요.
 - 공개 바인딩(`0.0.0.0`)으로 UI를 실행할 때는 반드시 인증을 설정하세요.
