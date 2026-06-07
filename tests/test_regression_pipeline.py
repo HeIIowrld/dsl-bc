@@ -2759,6 +2759,8 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn('data-delete-model="${escapeHtml(id)}"', app_js)
         self.assertIn("connection-health", styles_css)
         self.assertIn(".judge-registry-item,", styles_css)
+        self.assertIn(".judge-registry-item .connection-actions", styles_css)
+        self.assertIn(".judge-registry-item .registry-badge", styles_css)
         self.assertIn("target-registry-title-row", app_js)
         self.assertIn(".target-registry-title-row", styles_css)
         self.assertIn("현재 내보낸 결과", app_js)

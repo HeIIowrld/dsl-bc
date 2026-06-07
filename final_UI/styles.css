@@ -1817,6 +1817,15 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   justify-content: flex-start;
 }
 
+.judge-registry-item .connection-actions {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.judge-registry-item .registry-badge {
+  margin-right: auto;
+}
+
 .target-registry-title-row .model-status-pill,
 .target-registry-title-row .connection-health {
   white-space: nowrap;
