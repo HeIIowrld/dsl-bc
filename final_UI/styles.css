@@ -1526,6 +1526,40 @@ body[data-active-tab="search"] .run-context-filter {
   padding: 6px 10px;
 }
 
+.dataset-upload-form {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(180px, .9fr) minmax(180px, .9fr) minmax(120px, .5fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.dataset-upload-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+
+.dataset-upload-form input,
+.dataset-upload-form select {
+  min-height: 32px;
+}
+
+.dataset-upload-form button {
+  min-height: 32px;
+  white-space: nowrap;
+}
+
 /* ── CASE LIST ───────────────────────────────────────────── */
 .case-list {
   display: flex;
@@ -3609,6 +3643,7 @@ pre,
 @media (max-width: 1100px) {
   .eval-viewer-grid { grid-template-columns: 1fr; }
   .result-detail-card { max-height: 400px; }
+  .dataset-upload-form { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 900px) {
@@ -3616,6 +3651,7 @@ pre,
   .grid.two { grid-template-columns: 1fr; }
   .model-form, .run-form { grid-template-columns: 1fr; }
   .prompt-variant-builder { grid-template-columns: 1fr; }
+  .dataset-upload-form { grid-template-columns: 1fr; }
   .target-registry-list { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
   .method-grid { grid-template-columns: 1fr 1fr; }
   .scoring-mode-guide { grid-template-columns: repeat(2, minmax(0, 1fr)); }

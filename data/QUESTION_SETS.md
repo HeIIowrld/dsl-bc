@@ -12,6 +12,8 @@ The runtime package uses the curated CSV files under `questionlist/` directly. G
 
 `config/eval_dataset_catalog.yaml` is the catalog used by both the UI and `scripts/eval/compose_eval_dataset.py`.
 
+Users with write access can also add CSV testsets from the Final UI testset tab. These files are stored under `questionlist/user_uploads/{benchmark|regression}/`, are auto-discovered as `user__benchmark__...` or `user__regression__...`, and are ignored by Git.
+
 ## Source CSV Schema
 
 The checked-in CSV files use compact Korean source columns:
@@ -26,6 +28,8 @@ The checked-in CSV files use compact Korean source columns:
 | `question` | User-facing prompt | `question`, `instruction` |
 | `ground_truth` | Reference answer | `output`, `gold_answer`, `required_conditions` |
 | `split_type` | Regression split only | source metadata for regression rows |
+
+Uploaded CSV files should use at least `question` and `ground_truth`; `id` is recommended for stable case IDs.
 
 ## Current Distribution
 
@@ -82,3 +86,4 @@ Default reliability threshold:
 | `scripts/eval/compose_eval_dataset.py` | Resolves catalog profiles into JSONL cases |
 | `scripts/eval/run_multi_model_eval.py` | Runs model evaluation and exports UI data |
 | `final_UI/server.py` | Serves dataset summaries and starts evaluation jobs |
+| `questionlist/user_uploads/` | Runtime-only CSV uploads from the UI, excluded from Git |

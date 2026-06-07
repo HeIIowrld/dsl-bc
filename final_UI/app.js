@@ -3723,6 +3723,7 @@ function renderQuestionlist(caseRows) {
 
 function initializeCaseSetControls() {
   populateDatasetSelects();
+  bindDatasetUploadForm();
   const datasetSelect = document.getElementById("datasetSelect");
   const limitInput = document.getElementById("datasetLimit");
 
@@ -3738,6 +3739,74 @@ function initializeCaseSetControls() {
   if (limitInput) {
     limitInput.addEventListener("change", () => loadDatasetCases(datasetSelect?.value || selectedDataset));
   }
+}
+
+function setDatasetUploadMessage(message, type) {
+  const target = document.getElementById("datasetUploadMessage");
+  setPanelMessage(target, message, type);
+}
+
+function bindDatasetUploadForm() {
+  const form = document.getElementById("datasetUploadForm");
+  if (!form || form.dataset.bound === "true") return;
+  form.dataset.bound = "true";
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fileInput = document.getElementById("datasetUploadFile");
+    const nameInput = document.getElementById("datasetUploadName");
+    const roleInput = document.getElementById("datasetUploadRole");
+    const submitButton = form.querySelector('button[type="submit"]');
+    const file = fileInput?.files?.[0];
+    if (!file) {
+      setDatasetUploadMessage("업로드할 CSV 파일을 선택하세요.", "error");
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setDatasetUploadMessage("CSV 파일만 추가할 수 있습니다.", "error");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setDatasetUploadMessage("CSV 파일은 5MB 이하로 올려주세요.", "error");
+      return;
+    }
+
+    if (submitButton) submitButton.disabled = true;
+    setDatasetUploadMessage("CSV 테스트셋을 업로드하는 중입니다.", "");
+    try {
+      const content = await file.text();
+      const response = await apiFetch("api/questionlist/datasets/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          name: nameInput?.value || "",
+          role: roleInput?.value || "benchmark",
+          content,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `업로드 실패 (${response.status})`);
+      }
+
+      questionlistDatasets = payload.datasets ?? questionlistDatasets;
+      selectedDataset = payload.dataset?.id || preferredDatasetId(selectedDataset);
+      populateDatasetSelects();
+      const datasetSelect = document.getElementById("datasetSelect");
+      const evalDatasetSelect = document.getElementById("evalDatasetSelect");
+      if (datasetSelect) datasetSelect.value = selectedDataset;
+      if (evalDatasetSelect) evalDatasetSelect.value = selectedDataset;
+      await loadDatasetCases(selectedDataset);
+      renderEvalProfileCards();
+      renderEvalRunSummary();
+      setDatasetUploadMessage(`테스트셋 추가 완료: ${datasetLabel(payload.dataset || { id: selectedDataset })}`, "ok");
+      form.reset();
+    } catch (error) {
+      setDatasetUploadMessage(error.message || "테스트셋 업로드에 실패했습니다.", "error");
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
 }
 
 function bindRunWithSelectedDatasetButton() {

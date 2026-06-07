@@ -17,6 +17,7 @@ ui_audit_*/
 tmp_smoke_*/
 playwright-report/
 test-results/
+questionlist/user_uploads/
 
 final_UI/data/*
 !final_UI/data/.gitkeep

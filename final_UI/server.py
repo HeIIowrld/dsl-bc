@@ -60,6 +60,7 @@ EVAL_ARCHIVE_ROOT = EVAL_RUNS_ROOT / "archive"
 WEB_JOBS_ROOT = EVAL_ARCHIVE_ROOT / "web_jobs"
 BENCHMARK_CSV_ROOT = PROJECT_ROOT / "questionlist" / "benchmark"
 REGRESSION_CSV_ROOT = PROJECT_ROOT / "questionlist" / "regression"
+USER_UPLOAD_CSV_ROOT = PROJECT_ROOT / "questionlist" / "user_uploads"
 FINAL_BENCHMARK_CASES_PATH = BENCHMARK_CSV_ROOT / "benchmark_dataset_test.csv"
 FINAL_REGRESSION_CASES_PATH = REGRESSION_CSV_ROOT / "regression_golden_set.csv"
 FINAL_QUESTION_SET_SUMMARY_PATH = PROJECT_ROOT / "questionlist" / "question_sets.summary.json"
@@ -70,6 +71,8 @@ QUESTIONLIST_DATASET_FILES: dict[str, Path] = {}
 QUESTIONLIST_CSV_DIRS = [
     BENCHMARK_CSV_ROOT,
     REGRESSION_CSV_ROOT,
+    USER_UPLOAD_CSV_ROOT / "benchmark",
+    USER_UPLOAD_CSV_ROOT / "regression",
 ]
 EXCLUDED_DATASET_PATH_MARKERS = (
     "_unused_files",
@@ -573,6 +576,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/server-api-secrets":
             self.handle_save_server_api_secret()
+            return
+        if parsed.path == "/api/questionlist/datasets/upload":
+            self.handle_upload_question_dataset()
             return
         if parsed.path == "/api/eval/run":
             self.handle_start_eval_run()
@@ -2354,7 +2360,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     )
         self.send_json({"status": "ok", "count": len(cases), "cases": cases})
 
-    def handle_questionlist_datasets(self):
+    def questionlist_datasets_payload(self):
         datasets = []
         seen_dataset_ids = set()
         catalog = self.load_eval_dataset_catalog()
@@ -2383,6 +2389,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "source_format": "csv",
                     "source_directory": dataset["directory"],
                     "auto_discovered": True,
+                    "user_uploaded": bool(dataset.get("user_uploaded")),
                     **self.summarize_case_file(path, dataset_id=dataset["id"], role=dataset["role"]),
                 }
             )
@@ -2425,7 +2432,103 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 }
             )
             seen_dataset_ids.add(str(pool_id))
-        self.send_json({"status": "ok", "datasets": datasets})
+        return datasets
+
+    def handle_questionlist_datasets(self):
+        self.send_json({"status": "ok", "datasets": self.questionlist_datasets_payload()})
+
+    def handle_upload_question_dataset(self):
+        payload = self.read_json_body()
+        if payload is None:
+            self.send_json({"error": "invalid JSON body"}, status=400)
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"error": "request body must be an object"}, status=400)
+            return
+
+        role = self.normalize_question_dataset_role(payload.get("role"))
+        filename = Path(str(payload.get("filename") or "")).name
+        display_name = str(payload.get("name") or "").strip()
+        content = str(payload.get("content") or "")
+        if not content.strip():
+            self.send_json({"error": "CSV content is empty"}, status=400)
+            return
+        if len(content.encode("utf-8")) > 5 * 1024 * 1024:
+            self.send_json({"error": "CSV upload is too large. Keep it under 5 MB."}, status=400)
+            return
+        if filename and Path(filename).suffix.lower() != ".csv":
+            self.send_json({"error": "Only CSV files can be uploaded."}, status=400)
+            return
+
+        validation_error = self.validate_question_dataset_csv_content(content)
+        if validation_error:
+            self.send_json({"error": validation_error}, status=400)
+            return
+
+        stem_source = display_name or Path(filename).stem or f"uploaded_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        target_dir = USER_UPLOAD_CSV_ROOT / role
+        target_path = self.unique_question_upload_path(target_dir, stem_source)
+        normalized_content = content.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(normalized_content, encoding="utf-8")
+
+        with CASE_SUMMARY_CACHE_LOCK:
+            CASE_SUMMARY_CACHE.clear()
+
+        dataset_id = f"user__{role}__{target_path.stem}"
+        datasets = self.questionlist_datasets_payload()
+        uploaded_dataset = next((dataset for dataset in datasets if dataset.get("id") == dataset_id), None)
+        self.send_json({"status": "ok", "dataset": uploaded_dataset, "datasets": datasets})
+
+    def normalize_question_dataset_role(self, value):
+        role = str(value or "benchmark").strip().lower()
+        return role if role in {"benchmark", "regression"} else "benchmark"
+
+    def validate_question_dataset_csv_content(self, content: str):
+        try:
+            reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff")))
+        except csv.Error as exc:
+            return f"CSV parse failed: {exc}"
+        fieldnames = [str(field or "").strip().lstrip("\ufeff") for field in (reader.fieldnames or [])]
+        if not fieldnames:
+            return "CSV header row is required."
+        normalized_fields = {field.lower() for field in fieldnames}
+        question_fields = {"question", "instruction", "input", "질문", "문제"}
+        answer_fields = {
+            "ground_truth",
+            "output",
+            "answer",
+            "gold_answer",
+            "expected_answer",
+            "expected_output",
+            "정답",
+            "모범답안",
+        }
+        if not normalized_fields.intersection(question_fields):
+            return "CSV must include a question column. Recommended columns: id, question, ground_truth."
+        if not normalized_fields.intersection(answer_fields):
+            return "CSV must include an answer column. Recommended columns: id, question, ground_truth."
+
+        valid_rows = 0
+        for row in reader:
+            normalized_row = {str(key or "").strip().lstrip("\ufeff").lower(): value for key, value in row.items()}
+            question = text_value(*(normalized_row.get(field) for field in question_fields))
+            answer = text_value(*(normalized_row.get(field) for field in answer_fields))
+            if question and answer:
+                valid_rows += 1
+                break
+        if not valid_rows:
+            return "CSV must include at least one row with both question and answer text."
+        return ""
+
+    def unique_question_upload_path(self, target_dir: Path, stem_source: str):
+        stem = self.safe_config_id(stem_source) or f"uploaded_dataset_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        target_path = target_dir / f"{stem}.csv"
+        suffix = 2
+        while target_path.exists():
+            target_path = target_dir / f"{stem}_{suffix}.csv"
+            suffix += 1
+        return target_path
 
     def handle_eval_catalog(self):
         catalog = self.load_eval_dataset_catalog()
@@ -4055,14 +4158,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def discover_question_csv_datasets(self):
         datasets = {}
+        upload_root = USER_UPLOAD_CSV_ROOT.resolve()
         for directory in QUESTIONLIST_CSV_DIRS:
             if not directory.exists():
                 continue
-            role = "benchmark" if directory.name == "benchmark" else "regression"
+            role = self.normalize_question_dataset_role(directory.name)
+            try:
+                directory.resolve().relative_to(upload_root)
+                is_user_upload = True
+            except ValueError:
+                is_user_upload = False
             for path in sorted(directory.glob("*.csv")):
-                if self.path_has_excluded_dataset_marker(path):
+                if not is_user_upload and self.path_has_excluded_dataset_marker(path):
                     continue
-                dataset_id = f"{directory.name}__{path.stem}"
+                dataset_id = f"user__{role}__{path.stem}" if is_user_upload else f"{directory.name}__{path.stem}"
                 datasets[dataset_id] = {
                     "id": dataset_id,
                     "name": path.stem,
@@ -4070,6 +4179,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "role": role,
                     "format": "csv",
                     "directory": self.display_path(directory),
+                    "user_uploaded": is_user_upload,
                     "version": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y%m%d_%H%M%S"),
                 }
         return datasets

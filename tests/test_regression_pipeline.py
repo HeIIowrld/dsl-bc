@@ -2674,12 +2674,48 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertIn("raw API key", captured["payload"]["message"])
         self.assertNotIn("AIzaSyLooksLikeRawKeyValue1234567890", captured["payload"]["message"])
 
+    def test_upload_question_dataset_saves_user_csv_and_discovers_it(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.load_eval_dataset_catalog = lambda: {}
+        handler.read_json_body = lambda: {
+            "filename": "custom-cases.csv",
+            "name": "Custom Cases",
+            "role": "regression",
+            "content": "id,question,ground_truth\nC1,BC카드 결제일 변경 방법은?,마이BC에서 변경할 수 있습니다.\n",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            upload_root = Path(tmp) / "questionlist" / "user_uploads"
+            with (
+                mock.patch("final_UI.server.USER_UPLOAD_CSV_ROOT", upload_root),
+                mock.patch(
+                    "final_UI.server.QUESTIONLIST_CSV_DIRS",
+                    [upload_root / "benchmark", upload_root / "regression"],
+                ),
+            ):
+                FinalUiHandler.handle_upload_question_dataset(handler)
+                saved_files = list((upload_root / "regression").glob("*.csv"))
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(len(saved_files), 1)
+        self.assertTrue(captured["payload"]["dataset"]["id"].startswith("user__regression__custom_cases"))
+        self.assertEqual(captured["payload"]["dataset"]["total"], 1)
+
 
 class FinalUiJavascriptContractTests(unittest.TestCase):
     def test_benchmark_and_regression_tabs_are_separated_in_ui_contract(self) -> None:
         app_js = Path("final_UI/app.js").read_text(encoding="utf-8")
         styles_css = Path("final_UI/styles.css").read_text(encoding="utf-8")
         index_html = Path("final_UI/index.html").read_text(encoding="utf-8")
+        gitignore = Path(".gitignore").read_text(encoding="utf-8")
         preset_json = Path("final_UI/data/judge_api_presets.json").read_text(encoding="utf-8")
         server_py = Path("final_UI/server.py").read_text(encoding="utf-8")
         internal_path = Path("final_UI/bc_internal.html")
@@ -2756,6 +2792,13 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn("Judge 연결 확인 완료", app_js)
         self.assertIn('<code class="target-registry-code">${escapeHtml(id)}</code>', app_js)
         self.assertNotIn('<code class="target-registry-code">${escapeHtml(endpoint)}</code>', app_js)
+        self.assertIn('id="datasetUploadForm"', index_html)
+        self.assertIn("function bindDatasetUploadForm", app_js)
+        self.assertIn('apiFetch("api/questionlist/datasets/upload"', app_js)
+        self.assertIn('"/api/questionlist/datasets/upload"', server_py)
+        self.assertIn("USER_UPLOAD_CSV_ROOT", server_py)
+        self.assertIn(".dataset-upload-form", styles_css)
+        self.assertIn("questionlist/user_uploads/", gitignore)
         self.assertIn('await syncSelectedModelApis(targetVersions, { requireSelected: false, scope: "all" });', app_js)
         self.assertIn("const targetVersions = evalTargetRegistryIds();", app_js)
         self.assertIn('scope: "single"', app_js)
