@@ -699,21 +699,42 @@ select {
   white-space: nowrap;
 }
 
-.judge-api-preset-builder {
-  grid-template-columns: minmax(240px, 1.1fr) minmax(220px, 1fr) auto auto auto;
+.judge-registry-panel {
+  --judge-builder-copy-col: clamp(300px, 28vw, 420px);
+}
+
+.judge-registry-panel .prompt-variant-builder {
+  grid-template-columns: var(--judge-builder-copy-col) minmax(0, 1fr) auto auto auto;
+}
+
+.judge-registry-panel .prompt-variant-builder > label {
+  min-width: 0;
+}
+
+.judge-registry-panel .judge-copy-builder {
+  grid-template-columns: var(--judge-builder-copy-col) minmax(0, 1fr) minmax(220px, 310px);
+}
+
+.judge-copy-builder button {
+  width: 100%;
+}
+
+.judge-registry-panel .judge-api-preset-builder {
+  grid-template-columns: var(--judge-builder-copy-col) minmax(260px, 1fr) auto auto auto;
 }
 
 .judge-api-preset-builder button {
   min-width: 0;
 }
 
-.server-api-key-builder {
-  grid-template-columns: minmax(240px, 1.1fr) minmax(190px, .8fr) minmax(240px, 1fr) auto auto;
+.judge-registry-panel .server-api-key-builder {
+  grid-template-columns: var(--judge-builder-copy-col) minmax(220px, .75fr) minmax(280px, 1fr) auto auto;
 }
 
 .server-api-key-builder .registry-message {
   grid-column: 1 / -1;
   min-height: 16px;
+  margin-top: -2px;
 }
 
 input[type="checkbox"] {
