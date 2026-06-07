@@ -898,8 +898,11 @@ function updateJudgeRegistryProviderFields() {
   if (endpointInput) {
     endpointInput.placeholder = provider === "openai_native"
       ? "https://api.openai.com/v1/responses"
-      : "https://host.example.com/v1/chat/completions";
+      : provider === "gemini"
+        ? "비워두면 /v1beta/models/{model}:generateContent 자동 사용"
+        : "https://host.example.com/v1/chat/completions";
   }
+  applyJudgeRegistryProviderDefaults();
 }
 
 function updateJudgePromptPresetFields() {
@@ -1230,6 +1233,90 @@ function judgeProviderDefaults(provider) {
     ollama: { model: "qwen3:14b", key: "not needed", baseUrl: "local Ollama base URL from runner", temperature: 0, topP: 0.1 },
     generic_api: { model: "judge-model", key: "Bearer token", baseUrl: "https://host.example.com", temperature: 0, topP: 0.1 },
   }[provider] || {};
+}
+
+function judgeRegistryProviderDefaults(provider) {
+  const defaults = judgeProviderDefaults(provider);
+  return {
+    clova_studio: {
+      configId: "clova_hcx_007_judge",
+      displayName: "CLOVA HCX-007 Judge",
+      model: "HCX-007",
+      baseUrl: defaults.baseUrl,
+      chatUrl: "",
+      apiKeyEnv: "CLOVA_STUDIO_API_KEY",
+    },
+    openai_native: {
+      configId: "openai_gpt_5_5_judge",
+      displayName: "OpenAI GPT-5.5 Judge",
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+      chatUrl: "https://api.openai.com/v1/responses",
+      apiKeyEnv: "OPENAI_API_KEY",
+    },
+    openai_compatible: {
+      configId: "openai_compatible_judge",
+      displayName: "OpenAI-compatible Judge",
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+      chatUrl: "https://api.openai.com/v1/chat/completions",
+      apiKeyEnv: "OPENAI_API_KEY",
+    },
+    anthropic: {
+      configId: "anthropic_claude_sonnet_4_judge",
+      displayName: "Claude Sonnet 4 Judge",
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+      chatUrl: "https://api.anthropic.com/v1/messages",
+      apiKeyEnv: "ANTHROPIC_API_KEY",
+    },
+    gemini: {
+      configId: "gemini_3_flash_preview_judge",
+      displayName: "Gemini 3 Flash Preview Judge",
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+      chatUrl: "",
+      apiKeyEnv: "GEMINI_API_KEY",
+    },
+    ollama: {
+      configId: "ollama_qwen3_14b_judge",
+      displayName: "Ollama Qwen3 14B Judge",
+      model: defaults.model,
+      baseUrl: "http://afsd.iptime.org:11434",
+      chatUrl: "",
+      apiKeyEnv: "",
+    },
+    generic_api: {
+      configId: "generic_api_judge",
+      displayName: "Generic API Judge",
+      model: defaults.model,
+      baseUrl: defaults.baseUrl,
+      chatUrl: "https://host.example.com/v1/chat/completions",
+      apiKeyEnv: "JUDGE_API_KEY",
+    },
+  }[provider] || {};
+}
+
+function copyJudgeRegistryDefault(id, value) {
+  const control = document.getElementById(id);
+  if (!control || value === undefined || value === null) return;
+  const nextValue = String(value);
+  const previousDefault = control.dataset.providerDefault || "";
+  if (!control.value || control.value === previousDefault) {
+    control.value = nextValue;
+  }
+  control.dataset.providerDefault = nextValue;
+}
+
+function applyJudgeRegistryProviderDefaults() {
+  const provider = document.getElementById("judgeRegistryProvider")?.value || "clova_studio";
+  const defaults = judgeRegistryProviderDefaults(provider);
+  copyJudgeRegistryDefault("judgeRegistryConfigId", defaults.configId || "");
+  copyJudgeRegistryDefault("judgeRegistryDisplayName", defaults.displayName || "");
+  copyJudgeRegistryDefault("judgeRegistryModel", defaults.model || "");
+  copyJudgeRegistryDefault("judgeRegistryBaseUrl", defaults.baseUrl || "");
+  copyJudgeRegistryDefault("judgeRegistryChatUrl", defaults.chatUrl || "");
+  copyJudgeRegistryDefault("judgeRegistryApiKeyEnv", defaults.apiKeyEnv || "");
 }
 
 function splitJudgeConfigIds(value) {
