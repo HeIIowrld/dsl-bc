@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib import error as urlerror
 
 from final_UI.server import CASE_SUMMARY_CACHE, CASE_SUMMARY_CACHE_LOCK, EVAL_JOBS, EVAL_JOBS_LOCK, FinalUiHandler, eval_runner_python
 from scripts.build.build_corpus_from_bc_cs_notice import build_artifacts
@@ -2673,6 +2674,77 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(captured["status"], 503)
         self.assertIn("raw API key", captured["payload"]["message"])
         self.assertNotIn("AIzaSyLooksLikeRawKeyValue1234567890", captured["payload"]["message"])
+
+    def test_gemini_healthcheck_uses_models_endpoint(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+        requested = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=0):
+            requested["url"] = request.full_url
+            requested["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "GEMINI_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "gemini_2_5_pro_judge",
+                {
+                    "provider": "gemini",
+                    "model": "gemini-2.5-pro",
+                    "base_url": "https://generativelanguage.googleapis.com",
+                    "api_key_env": "GEMINI_API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(requested["url"], "https://generativelanguage.googleapis.com/v1beta/models")
+        self.assertEqual(requested["headers"]["X-goog-api-key"], "stored-secret")
+
+    def test_external_healthcheck_404_is_not_success(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        def fake_urlopen(request, timeout=0):
+            raise urlerror.HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "custom_judge",
+                {
+                    "provider": "generic_api",
+                    "model": "custom",
+                    "base_url": "https://vendor.example.com",
+                    "api_key_env": "API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 503)
+        self.assertEqual(captured["payload"]["status"], "endpoint_not_found")
+        self.assertIn("HTTP 404", captured["payload"]["message"])
 
     def test_upload_question_dataset_saves_user_csv_and_discovers_it(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)

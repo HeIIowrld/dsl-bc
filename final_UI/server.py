@@ -1693,6 +1693,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     openai_base_url = openai_base_url[: -len(suffix)].rstrip("/")
                     break
             health_url = openai_base_url + ("/models" if openai_base_url.endswith("/v1") else "/v1/models")
+        if provider == "gemini" and not health_url:
+            env_base_url, _ = provider_env_value(model_spec, "base_url")
+            gemini_base_url = str(base_url or env_base_url or "https://generativelanguage.googleapis.com").rstrip("/")
+            for suffix in ("/v1beta/models", "/v1/models", "/models"):
+                if gemini_base_url.endswith(suffix):
+                    gemini_base_url = gemini_base_url[: -len(suffix)].rstrip("/")
+                    break
+            health_url = gemini_base_url + "/v1beta/models"
         if not health_url and base_url:
             health_url = base_url
         if not health_url:
@@ -1733,14 +1741,18 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     }
                 )
         except urlerror.HTTPError as exc:
-            status = "connected" if exc.code in {401, 403, 404, 405} else "offline"
+            status = "connected" if exc.code in {401, 403, 405} else ("endpoint_not_found" if exc.code == 404 else "offline")
             self.send_json(
                 {
                     "status": status,
                     "version": version,
                     "provider": model_spec.get("provider"),
                     "model": model_spec.get("model"),
-                    "message": f"Health endpoint responded HTTP {exc.code}.",
+                    "message": (
+                        "Health endpoint was not found (HTTP 404). Check base_url/chat_url/health_url."
+                        if exc.code == 404
+                        else f"Health endpoint responded HTTP {exc.code}."
+                    ),
                 },
                 status=200 if status == "connected" else 503,
             )
