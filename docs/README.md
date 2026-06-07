@@ -43,7 +43,7 @@ Sanitized GitHub samples:
   final_UI/samples/
 ```
 
-## Final QA Matrix
+## Bundled QA Matrix
 
 | Dimension | Values |
 | --- | --- |
@@ -51,7 +51,15 @@ Sanitized GitHub samples:
 | 질문유형 | `단일추론(사실추출)`, `비교대조`, `복합추론`, `수치추론/계산`, `민감` |
 | 금융토픽 | `카드/결제`, `대출/여신`, `예적금`, `투자/펀드`, `일반 금융` |
 
+이 표는 현재 함께 제공하는 BC 금융 QA 번들의 기본 매트릭스입니다. 시스템 자체는 다른 `qa_category`, `question_type`, `qa_topic` 값을 받을 수 있으며, 새 값은 UI 필터와 요약에 표시됩니다.
+
 현재 공식 집계는 1차원 점수를 우선합니다. 2차원/셀 단위 집계는 구현되어 있지만, 표본 수가 부족하면 `신뢰도 부족`으로 표시합니다.
+
+## Dataset Extensibility
+
+다른 질문셋을 추가할 때는 `question`과 `ground_truth`에 해당하는 컬럼만 있으면 시작할 수 있습니다. UI 업로드는 `prompt`, `expected_output`, `qid` 같은 alias도 받아들이며, 공유 profile로 운영할 데이터셋은 `config/eval_dataset_catalog.yaml`에 pool/profile로 등록합니다.
+
+다른 질문유형도 사용할 수 있습니다. 예를 들어 `절차안내`, `요약`, `정책판단`, `멀티턴` 같은 값은 `question_type`으로 들어와도 실행과 결과 확인이 가능합니다. 단, 기본 채점 지표는 ACC/COM/UTL/NAC/HAL이므로 완전히 다른 metric을 도입할 때는 Judge rubric, scoring export, UI 표시 계약을 함께 수정해야 합니다.
 
 ## Scoring Summary
 

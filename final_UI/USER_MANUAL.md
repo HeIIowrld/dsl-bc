@@ -66,6 +66,29 @@ Ollama 모델은 다음 순서로 확인합니다.
 | 벤치마크 - `benchmark_dataset_test.csv` | 800 |
 | 회귀 전체 - `regression_golden_set.csv` | 300 |
 
+### 다른 질문셋 추가
+
+현재 벤치마크 시스템은 BC FAQ/금융 QA 전용으로 고정되어 있지 않습니다. CSV가 공통 계약으로 정규화되면 다른 도메인, 다른 질문유형도 실행할 수 있습니다.
+
+최소 컬럼:
+
+| 개념 | 권장 컬럼 | 다른 허용 예시 |
+| --- | --- | --- |
+| 질문 | `question` | `instruction`, `prompt`, `query`, `문제`, `질문` |
+| 기준 답변 | `ground_truth` | `output`, `answer`, `expected_output`, `정답`, `모범답안` |
+| 케이스 ID | `id` | `case_id`, `question_id`, `qid` |
+
+선택 컬럼:
+
+| 개념 | 권장 컬럼 |
+| --- | --- |
+| 분류/도메인 | `qa_category` |
+| 주제/의도 | `qa_topic` |
+| 질문유형 | `question_type` |
+| 금지 주장 | `forbidden_claims` |
+
+새 질문유형은 그대로 요약과 필터에 표시됩니다. 다만 기본 대시보드의 집계 축은 `qa_category`, `question_type`, `qa_topic`이고, 기본 채점 지표는 ACC/COM/UTL/NAC/HAL입니다. 다른 지표 체계를 쓰려면 Judge prompt와 scoring export 계약도 함께 바꿔야 합니다.
+
 ## 4. 실행 탭
 
 실행 탭에서는 두 가지 흐름을 선택합니다.
@@ -96,10 +119,10 @@ Ollama 모델은 다음 순서로 확인합니다.
 
 | 방식 | 의미 |
 | --- | --- |
-| LLM only | 선택한 Judge 점수만 최종 점수로 사용 |
-| LLM blended | 여러 Judge 점수를 사용자 지정 비율로 합산 |
-| LLM+Static blended | Judge 점수와 rule 기반 점수를 함께 합산 |
-| Rule-based only | Judge 호출 없이 rule 기반 점수만 사용 |
+| 단일 Judge 채점 | 선택한 Judge 1개만 최종 점수로 사용 |
+| 여러 Judge 합산 | 여러 Judge 점수를 사용자 지정 비율 또는 집계 방식으로 합산 |
+| Judge+규칙 혼합 | Judge 점수와 rule 기반 점수를 함께 합산 |
+| 규칙 기반만 | Judge 호출 없이 rule 기반 점수만 사용 |
 
 Judge가 3개 이상이어도 동일하게 사용할 수 있습니다. 가중 합산을 선택하면 각 Judge 비중의 총합이 1.0일 때만 적용합니다. 최고점/최저점 제외 평균, 단순 평균, 최고점 기준, 최저점 기준 같은 규칙형 합산은 실행 설정에서 별도 정책으로 기록합니다.
 

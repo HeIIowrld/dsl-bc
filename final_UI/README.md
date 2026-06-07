@@ -40,6 +40,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_final_ui.ps1 -Port 8512 -
 | 문항별 모델 상세 응답 | 문항 단위 모델 답변과 Judge 판단 확인 |
 | 전체 검색 | 질문, 답변, Judge 사유, 오류 유형 검색 |
 
+## 질문셋 확장
+
+Final UI는 현재 포함된 BC FAQ/금융/카드상품 데이터셋 외에도 다른 질문셋을 실행할 수 있습니다. CSV 업로드 또는 `config/eval_dataset_catalog.yaml`에 등록한 dataset pool을 통해 benchmark/regression 후보로 노출됩니다.
+
+최소 입력 계약은 질문과 기준 답변입니다.
+
+| 개념 | 권장 컬럼 | 허용 alias |
+| --- | --- | --- |
+| 질문 | `question` | `instruction`, `input`, `prompt`, `query`, `문제`, `질문` |
+| 기준 답변 | `ground_truth` | `output`, `answer`, `gold_answer`, `expected_output`, `정답` |
+| 질문유형 | `question_type` | `qtype`, `type`, `task_type`, `문제유형`, `질문유형` |
+
+새 `qa_category`, `qa_topic`, `question_type` 값은 필터와 요약에 표시됩니다. 현재 기본 집계 축은 `qa_category`/`question_type`/`qa_topic`이며, 기본 점수 지표는 ACC/COM/UTL/NAC/HAL입니다.
+
 ## 모델 연결 확인
 
 `연결 확인` 버튼은 등록된 대상 모델을 순차적으로 확인합니다. Ollama 모델은 단순 태그 조회만으로 `연결됨` 처리하지 않고, 해당 모델을 짧게 로드해 응답 가능 여부를 확인한 뒤 언로드 요청을 보냅니다. 따라서 모델 수와 크기에 따라 확인 시간이 걸릴 수 있습니다.

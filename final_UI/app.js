@@ -12,7 +12,7 @@ const reliabilityMinimums = {
   threeD: 30,
 };
 
-const finalQaCategories = ["\uc0ac\ub0b4FAQ", "\uae08\uc735\uc815\ubcf4", "\uce74\ub4dc\uc0c1\ud488"];
+const finalQaCategories = ["BC FAQ", "\uae08\uc735\uc815\ubcf4", "\uce74\ub4dc\uc0c1\ud488"];
 const finalQuestionTypes = ["\ub2e8\uc77c\ucd94\ub860(\uc0ac\uc2e4\ucd94\ucd9c)", "\ube44\uad50\ub300\uc870", "\ubcf5\ud569\ucd94\ub860", "\uc218\uce58\ucd94\ub860/\uacc4\uc0b0", "\ubbfc\uac10"];
 const finalFinanceTopics = ["BC FAQ", "\uce74\ub4dc/\uacb0\uc81c", "\ub300\ucd9c/\uc5ec\uc2e0", "\uc608\uc801\uae08", "\ud22c\uc790/\ud380\ub4dc", "\uc77c\ubc18 \uae08\uc735"];
 
@@ -110,8 +110,7 @@ const excludedDatasetMarkers = [
 const excludedDatasetTokens = ["old"];
 
 const sourceLabels = {
-  "\uc0ac\ub0b4FAQ": "BC FAQ",
-  BCfaq: "BC FAQ",
+  "BC FAQ": "BC FAQ",
   "\uae08\uc735\uc815\ubcf4": "\uae08\uc735\uc815\ubcf4",
   "\uce74\ub4dc\uc0c1\ud488": "\uce74\ub4dc\uc0c1\ud488",
   crefia_creditcard_faq: "\uc5ec\uc2e0\ud611\ud68c FAQ",
@@ -6182,9 +6181,9 @@ function canonicalQaCategory(value) {
   const text = String(value ?? "").trim();
   const compact = text.toLowerCase().replace(/\s+/g, "");
   if (includesAny(compact, ["card_product", "card_qa", "\uce74\ub4dc\uc0c1\ud488", "\uce74\ub4dc/\uc0c1\ud488"])) return "\uce74\ub4dc\uc0c1\ud488";
-  if (includesAny(compact, ["internal", "inhouse", "company_faq", "\uc0ac\ub0b4faq", "bcfaq", "html_seed"])) return "\uc0ac\ub0b4FAQ";
+  if (includesAny(compact, ["internal", "inhouse", "company_faq", "bcfaq", "html_seed"])) return "BC FAQ";
   if (includesAny(compact, ["financial", "finance", "regression", "general", "hard_negative", "hardnegative", "edge_case", "edgecase", "\uae08\uc735\uc815\ubcf4", "financial_qa", "financial_faq"])) return "\uae08\uc735\uc815\ubcf4";
-  if (compact.includes("faq")) return "\uc0ac\ub0b4FAQ";
+  if (compact.includes("faq")) return "BC FAQ";
   return text || "\uae08\uc735\uc815\ubcf4";
 }
 
@@ -6212,7 +6211,7 @@ function canonicalQuestionType(value) {
 function canonicalQaTopic(category, value) {
   const text = String(value ?? "").trim();
   const compact = text.toLowerCase().replace(/\s+/g, "");
-  if (category === "\uc0ac\ub0b4FAQ" || includesAny(compact, ["\uc0ac\ub0b4faq", "bcfaq", "faq"])) return "BC FAQ";
+  if (category === "BC FAQ" || includesAny(compact, ["bcfaq", "faq"])) return "BC FAQ";
   if (includesAny(compact, ["\uce74\ub4dc/\uacb0\uc81c", "\uce74\ub4dc\uacb0\uc81c", "\uce74\ub4dc\ubc0f\uacb0\uc81c", "card", "payment", "\uacb0\uc81c", "\uce74\ub4dc"])) return "\uce74\ub4dc/\uacb0\uc81c";
   if (includesAny(compact, ["\ub300\ucd9c/\uc5ec\uc2e0", "\ub300\ucd9c", "\uc5ec\uc2e0", "loan", "credit"])) return "\ub300\ucd9c/\uc5ec\uc2e0";
   if (includesAny(compact, ["\uc608\uc801\uae08", "\uc608/\uc801\uae08", "\uc608\uae08", "\uc801\uae08", "deposit", "savings"])) return "\uc608\uc801\uae08";

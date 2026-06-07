@@ -14,6 +14,48 @@ The runtime package uses the curated CSV files under `questionlist/` directly. G
 
 Users with write access can also add CSV testsets from the Final UI testset tab. These files are stored under `questionlist/user_uploads/{benchmark|regression}/`, are auto-discovered as `user__benchmark__...` or `user__regression__...`, and are ignored by Git.
 
+## Extensibility Contract
+
+The benchmark system is not limited to the bundled BC FAQ/finance/card-product question set. It can run other question sets and other question types as long as each row can be normalized into the common evaluation contract.
+
+Minimum required fields:
+
+| Required concept | Preferred column | Accepted examples |
+| --- | --- | --- |
+| Stable case id | `id` | `case_id`, `question_id`, `qid`; optional but recommended |
+| User question | `question` | `instruction`, `input`, `prompt`, `query`, `user_question`, `문제`, `질문` |
+| Reference answer | `ground_truth` | `output`, `answer`, `gold_answer`, `expected_answer`, `expected_output`, `reference_answer`, `정답`, `모범답안` |
+
+Optional grouping fields:
+
+| Concept | Preferred column | Accepted examples |
+| --- | --- | --- |
+| Domain/category | `qa_category` | `category`, `source_type`, `대분류`, `카테고리` |
+| Topic/intent | `qa_topic` | `qa_matrix_topic`, `intent`, `금융토픽` |
+| Question type | `question_type` | `qtype`, `type`, `task_type`, `문제유형`, `질문유형` |
+| Forbidden or risky claims | `forbidden_claims` | `must_not_include`, `hallucination_trap`, `오답_유형` |
+
+New domains and new question types are accepted and displayed in summaries. The currently documented 3x5x5 matrix is the bundled BC finance benchmark matrix, not a hard system limit.
+
+Extension routes:
+
+| Route | Use when | Where it lands |
+| --- | --- | --- |
+| Final UI CSV upload | A user wants to add a benchmark/regression file without editing the repo | `questionlist/user_uploads/{benchmark|regression}/` |
+| Dataset catalog edit | A shared dataset should become a named profile/pool | `config/eval_dataset_catalog.yaml` |
+| Direct CLI cases file | A one-off experiment should run from a local CSV/JSONL | `--cases-file` in eval scripts |
+
+What remains fixed by default:
+
+| Area | Current default |
+| --- | --- |
+| Score fields | `ACC`, `COM`, `UTL`, `NAC`, `HAL` |
+| Dashboard slice axes | `qa_category`, `question_type`, `qa_topic` |
+| Reliability threshold | 30 cases per displayed aggregate slice |
+| Release gate activation | Requires reviewed metadata such as `case_status=active` and `gold_verified=true` |
+
+If a new domain needs different metrics, update the Judge prompt/rubric and scoring export contract together. If it only needs new categories, topics, or question types, CSV metadata is enough.
+
 ## Source CSV Schema
 
 The checked-in CSV files use compact Korean source columns:

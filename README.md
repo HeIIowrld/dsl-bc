@@ -339,10 +339,20 @@ questionlist/regression/regression_golden_set.csv
 ```text
 case_id
 question
-gold_answer 또는 expected_answer
+ground_truth, gold_answer 또는 expected_answer
 source/category/suite 등 분류 정보
 필요한 경우 evidence 또는 근거 문서
 ```
+
+다른 질문셋이나 질문유형도 사용할 수 있습니다. 실행에 꼭 필요한 것은 질문과 기준 답변이며, `qa_category`, `qa_topic`, `question_type`은 필터와 집계를 위한 메타데이터입니다. 새 값은 UI에 표시되지만, 현재 기본 대시보드 축은 `qa_category`/`question_type`/`qa_topic`, 기본 채점 지표는 ACC/COM/UTL/NAC/HAL입니다.
+
+확장 방법:
+
+| 방법 | 용도 |
+| --- | --- |
+| Final UI CSV 업로드 | 사용자가 직접 benchmark/regression CSV를 추가 |
+| `config/eval_dataset_catalog.yaml` pool/profile 등록 | 팀 공용 데이터셋을 실행 탭에 노출 |
+| CLI `--cases-file` 지정 | 일회성 실험 또는 외부 JSONL/CSV 평가 |
 
 ### Benchmark Dataset
 
