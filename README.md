@@ -286,7 +286,7 @@ configs:
 configs:
   - config_id: external_api_llm
     display_name: External API LLM
-    provider: openai_compatible
+    provider: generic_api
     model: your-model-name
     base_url: https://your-model-host.example.com
     chat_url: https://your-model-host.example.com/v1/chat/completions

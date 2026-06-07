@@ -35,10 +35,18 @@ from scripts.eval.run_multi_model_eval import (  # noqa: E402
     SCORE_METRIC_KEYS,
     aggregate_release_gates as eval_aggregate_release_gates,
     aggregate_runs as eval_aggregate_runs,
+    anthropic_chat_url,
+    anthropic_payload,
     apply_llm_judge as eval_apply_llm_judge,
     build_regression_diff as eval_build_regression_diff,
     canonical_error_type as eval_canonical_error_type,
+    clova_chat_url,
+    clova_payload,
     export_final_ui as eval_export_final_ui,
+    gemini_chat_url,
+    gemini_payload,
+    openai_chat_url,
+    openai_responses_url,
     qa_slice_score_rows as eval_qa_slice_score_rows,
     question_case_rows as eval_question_case_rows,
     read_cases_path as eval_read_cases_path,
@@ -1024,7 +1032,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         config_id = self.safe_config_id(config.get("config_id") or config.get("model") or config.get("display_name"))
         if not config_id:
             return None
-        provider = str(config.get("provider") or "openai_compatible").strip()
+        provider = str(config.get("provider") or "generic_api").strip()
         if provider == "api":
             provider = "generic_api"
         if provider not in ALLOWED_PROVIDERS:
@@ -1812,34 +1820,48 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return default
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
+    def external_api_live_probe_request(self, model_spec: dict) -> tuple[str, dict]:
+        provider = str(model_spec.get("provider") or "")
+        model = str(model_spec.get("model") or "")
+        messages = [{"role": "user", "content": "ping"}]
+        if provider == "openai_native":
+            return openai_responses_url(model_spec), {
+                "model": model,
+                "input": "ping",
+                "max_output_tokens": 1,
+                "store": False,
+            }
+        if provider == "openai_compatible":
+            return openai_chat_url(model_spec), {
+                "model": model,
+                "messages": messages,
+                "max_tokens": 1,
+            }
+        if provider == "clova_studio":
+            return clova_chat_url(model_spec), clova_payload(
+                messages=messages,
+                options={"maxTokens": 1, "includeAiFilters": False},
+            )
+        if provider == "anthropic":
+            return anthropic_chat_url(model_spec), anthropic_payload(
+                model=model,
+                messages=messages,
+                options={"max_tokens": 1},
+            )
+        if provider == "gemini":
+            return gemini_chat_url(model_spec), gemini_payload(
+                messages=messages,
+                options={"maxOutputTokens": 1},
+            )
+        return str(model_spec.get("chat_url") or model_spec.get("api_url") or model_spec.get("base_url") or "").strip(), {
+            "model": model,
+            "messages": messages,
+            "options": {"max_tokens": 1, "max_completion_tokens": 1, "max_output_tokens": 1},
+        }
+
     def handle_external_api_health(self, version: str, model_spec: dict):
         health_url = model_spec.get("upstream_health_url") or ""
-        base_url = str(model_spec.get("base_url") or "").rstrip("/")
         provider = str(model_spec.get("provider") or "")
-        if provider in {"openai_native", "openai_compatible"} and not health_url:
-            env_base_url, _ = provider_env_value(model_spec, "base_url")
-            openai_base_url = str(base_url or env_base_url or "https://api.openai.com").rstrip("/")
-            for suffix in ("/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses", "/v1/models", "/models"):
-                if openai_base_url.endswith(suffix):
-                    openai_base_url = openai_base_url[: -len(suffix)].rstrip("/")
-                    break
-            health_url = openai_base_url + ("/models" if openai_base_url.endswith("/v1") else "/v1/models")
-        if provider == "anthropic" and not health_url:
-            env_base_url, _ = provider_env_value(model_spec, "base_url")
-            anthropic_base_url = str(base_url or env_base_url or "https://api.anthropic.com").rstrip("/")
-            for suffix in ("/v1/messages", "/messages", "/v1/models", "/models"):
-                if anthropic_base_url.endswith(suffix):
-                    anthropic_base_url = anthropic_base_url[: -len(suffix)].rstrip("/")
-                    break
-            health_url = anthropic_base_url + ("/models" if anthropic_base_url.endswith("/v1") else "/v1/models")
-        if provider == "gemini" and not health_url:
-            env_base_url, _ = provider_env_value(model_spec, "base_url")
-            gemini_base_url = str(base_url or env_base_url or "https://generativelanguage.googleapis.com").rstrip("/")
-            for suffix in ("/v1beta/models", "/v1/models", "/models"):
-                if gemini_base_url.endswith(suffix):
-                    gemini_base_url = gemini_base_url[: -len(suffix)].rstrip("/")
-                    break
-            health_url = gemini_base_url + "/v1beta/models"
         headers = self.auth_headers(model_spec)
         if headers is None:
             env_error = self.api_key_env_name_error(model_spec.get("api_key_env"))
@@ -1854,20 +1876,29 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 status=503,
             )
             return
+        is_live_probe = not bool(health_url)
+        if is_live_probe:
+            health_url, payload = self.external_api_live_probe_request(model_spec)
+        else:
+            payload = None
         if not health_url:
             self.send_json(
                 {
-                    "status": "configured",
+                    "status": "missing_endpoint",
                     "version": version,
                     "provider": model_spec.get("provider"),
                     "model": model_spec.get("model"),
-                    "message": "API credentials are configured. Set health_url to enable a live HTTP health check.",
-                    "health_check_mode": "credentials_only",
-                }
+                    "message": "chat_url, base_url, or health_url is required for API health checks.",
+                    "health_check_mode": "live_probe",
+                },
+                status=503,
             )
             return
         try:
-            request = urlrequest.Request(health_url, method="GET", headers=headers)
+            request_kwargs = {"method": "POST" if is_live_probe else "GET", "headers": headers}
+            if payload is not None:
+                request_kwargs["data"] = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            request = urlrequest.Request(health_url, **request_kwargs)
             with urlrequest.urlopen(request, timeout=MODEL_HEALTH_TIMEOUT_SECONDS) as response:
                 self.send_json(
                     {
@@ -1875,11 +1906,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         "version": version,
                         "provider": model_spec.get("provider"),
                         "model": model_spec.get("model"),
-                        "message": f"Health endpoint responded HTTP {response.status}.",
+                        "message": (
+                            f"Live model probe responded HTTP {response.status}."
+                            if is_live_probe
+                            else f"Health endpoint responded HTTP {response.status}."
+                        ),
+                        "health_check_mode": "live_probe" if is_live_probe else "health_endpoint",
                     }
                 )
         except urlerror.HTTPError as exc:
-            if exc.code == 405:
+            if exc.code == 405 and not is_live_probe:
                 status = "connected"
             elif exc.code in {401, 403}:
                 status = "auth_failed"
@@ -1887,6 +1923,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 status = "endpoint_not_found"
             else:
                 status = "offline"
+            target_label = "Live model probe" if is_live_probe else "Health endpoint"
             self.send_json(
                 {
                     "status": status,
@@ -1894,12 +1931,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "provider": model_spec.get("provider"),
                     "model": model_spec.get("model"),
                     "message": (
-                        "Health endpoint was not found (HTTP 404). Check base_url/chat_url/health_url."
+                        f"{target_label} was not found (HTTP 404). Check base_url/chat_url/health_url."
                         if exc.code == 404
-                        else "Health endpoint rejected the configured API key or permission (HTTP %s)." % exc.code
+                        else f"{target_label} rejected the configured API key or permission (HTTP {exc.code})."
                         if exc.code in {401, 403}
-                        else f"Health endpoint responded HTTP {exc.code}."
+                        else f"{target_label} responded HTTP {exc.code}."
                     ),
+                    "health_check_mode": "live_probe" if is_live_probe else "health_endpoint",
                 },
                 status=200 if status == "connected" else 503,
             )
@@ -1911,6 +1949,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "provider": model_spec.get("provider"),
                     "model": model_spec.get("model"),
                     "message": f"API is not reachable: {exc}",
+                    "health_check_mode": "live_probe" if is_live_probe else "health_endpoint",
                 },
                 status=503,
             )

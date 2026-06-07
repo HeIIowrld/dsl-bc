@@ -2743,7 +2743,7 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertIn("raw API key", captured["payload"]["message"])
         self.assertNotIn("AIzaSyLooksLikeRawKeyValue1234567890", captured["payload"]["message"])
 
-    def test_gemini_healthcheck_uses_models_endpoint(self) -> None:
+    def test_gemini_healthcheck_without_health_url_posts_generate_content_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
         requested = {}
@@ -2763,7 +2763,9 @@ class FinalUiServerHelperTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout=0):
             requested["url"] = request.full_url
+            requested["method"] = request.get_method()
             requested["headers"] = dict(request.header_items())
+            requested["payload"] = json.loads(request.data.decode("utf-8"))
             return FakeResponse()
 
         handler.send_json = fake_send_json
@@ -2782,10 +2784,14 @@ class FinalUiServerHelperTests(unittest.TestCase):
 
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "ok")
-        self.assertEqual(requested["url"], "https://generativelanguage.googleapis.com/v1beta/models")
+        self.assertEqual(captured["payload"]["health_check_mode"], "live_probe")
+        self.assertEqual(requested["method"], "POST")
+        self.assertEqual(requested["url"], "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent")
         self.assertEqual(requested["headers"]["X-goog-api-key"], "stored-secret")
+        self.assertEqual(requested["payload"]["contents"][0]["parts"][0]["text"], "ping")
+        self.assertEqual(requested["payload"]["generationConfig"]["maxOutputTokens"], 1)
 
-    def test_openai_compatible_healthcheck_uses_models_endpoint(self) -> None:
+    def test_openai_native_healthcheck_without_health_url_posts_responses_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
         requested = {}
@@ -2805,7 +2811,9 @@ class FinalUiServerHelperTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout=0):
             requested["url"] = request.full_url
+            requested["method"] = request.get_method()
             requested["headers"] = dict(request.header_items())
+            requested["payload"] = json.loads(request.data.decode("utf-8"))
             return FakeResponse()
 
         handler.send_json = fake_send_json
@@ -2813,21 +2821,27 @@ class FinalUiServerHelperTests(unittest.TestCase):
         with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
             FinalUiHandler.handle_external_api_health(
                 handler,
-                "openai_compatible_judge",
+                "openai_native_judge",
                 {
-                    "provider": "openai_compatible",
+                    "provider": "openai_native",
                     "model": "gpt-5.5",
-                    "base_url": "https://api.openai.com/v1/chat/completions",
+                    "base_url": "https://api.openai.com",
                     "api_key_env": "OPENAI_API_KEY",
                 },
             )
 
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "ok")
-        self.assertEqual(requested["url"], "https://api.openai.com/v1/models")
+        self.assertEqual(captured["payload"]["health_check_mode"], "live_probe")
+        self.assertEqual(requested["method"], "POST")
+        self.assertEqual(requested["url"], "https://api.openai.com/v1/responses")
         self.assertEqual(requested["headers"]["Authorization"], "Bearer stored-secret")
+        self.assertEqual(requested["payload"]["model"], "gpt-5.5")
+        self.assertEqual(requested["payload"]["input"], "ping")
+        self.assertEqual(requested["payload"]["max_output_tokens"], 1)
+        self.assertIs(requested["payload"]["store"], False)
 
-    def test_anthropic_healthcheck_uses_models_endpoint_and_version_header(self) -> None:
+    def test_anthropic_healthcheck_without_health_url_posts_messages_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
         requested = {}
@@ -2847,7 +2861,9 @@ class FinalUiServerHelperTests(unittest.TestCase):
 
         def fake_urlopen(request, timeout=0):
             requested["url"] = request.full_url
+            requested["method"] = request.get_method()
             requested["headers"] = dict(request.header_items())
+            requested["payload"] = json.loads(request.data.decode("utf-8"))
             return FakeResponse()
 
         handler.send_json = fake_send_json
@@ -2866,21 +2882,43 @@ class FinalUiServerHelperTests(unittest.TestCase):
 
         self.assertEqual(captured["status"], 200)
         self.assertEqual(captured["payload"]["status"], "ok")
-        self.assertEqual(requested["url"], "https://api.anthropic.com/v1/models")
+        self.assertEqual(captured["payload"]["health_check_mode"], "live_probe")
+        self.assertEqual(requested["method"], "POST")
+        self.assertEqual(requested["url"], "https://api.anthropic.com/v1/messages")
         self.assertEqual(requested["headers"]["X-api-key"], "stored-secret")
         self.assertEqual(requested["headers"]["Anthropic-version"], "2023-06-01")
+        self.assertEqual(requested["payload"]["model"], "claude-sonnet-4-20250514")
+        self.assertEqual(requested["payload"]["max_tokens"], 1)
+        self.assertEqual(requested["payload"]["messages"][0]["content"], "ping")
 
-    def test_commercial_healthcheck_without_live_endpoint_checks_secret_only(self) -> None:
+    def test_clova_healthcheck_without_health_url_posts_chat_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
+        requested = {}
 
         def fake_send_json(payload, status=200):
             captured["payload"] = payload
             captured["status"] = status
 
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=0):
+            requested["url"] = request.full_url
+            requested["method"] = request.get_method()
+            requested["headers"] = dict(request.header_items())
+            requested["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
         handler.send_json = fake_send_json
         handler.provider_api_key_value = lambda config: ("stored-secret", "CLOVA_STUDIO_API_KEY")
-        with mock.patch("final_UI.server.urlrequest.urlopen") as urlopen_mock:
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
             FinalUiHandler.handle_external_api_health(
                 handler,
                 "clova_hcx007_judge",
@@ -2892,10 +2930,14 @@ class FinalUiServerHelperTests(unittest.TestCase):
                 },
             )
 
-        self.assertFalse(urlopen_mock.called)
         self.assertEqual(captured["status"], 200)
-        self.assertEqual(captured["payload"]["status"], "configured")
-        self.assertEqual(captured["payload"]["health_check_mode"], "credentials_only")
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(captured["payload"]["health_check_mode"], "live_probe")
+        self.assertEqual(requested["method"], "POST")
+        self.assertEqual(requested["url"], "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007")
+        self.assertEqual(requested["headers"]["Authorization"], "Bearer stored-secret")
+        self.assertEqual(requested["payload"]["messages"][0]["content"], "ping")
+        self.assertEqual(requested["payload"]["maxTokens"], 1)
 
     def test_commercial_healthcheck_without_live_endpoint_reports_missing_secret(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
@@ -3048,6 +3090,9 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn("function matrixKeysByCount(items, key)", app_js)
         self.assertIn("function judgeProviderDefaults", app_js)
         self.assertIn("function judgeRegistryProviderDefaults", app_js)
+        self.assertIn("function providerForRegistrySelect", app_js)
+        self.assertNotIn('<option value="openai_compatible"', index_html)
+        self.assertNotIn('<option value="openai_compatible"', internal_html)
         self.assertIn("LLM-as-a-Judge", app_js)
         self.assertIn("Arbiter Judge", app_js)
         self.assertIn("promptInput.readOnly = locked", app_js)

@@ -1303,7 +1303,6 @@ function judgeProviderDefaults(provider) {
     registered: { model: "", key: "saved env", baseUrl: "saved config", temperature: 0, topP: 0.1 },
     clova_studio: { model: "HCX-007", key: "CLOVA Studio API key", baseUrl: "https://clovastudio.stream.ntruss.com", temperature: 0, topP: 0.1 },
     openai_native: { model: "gpt-5.5", key: "OpenAI API key", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
-    openai_compatible: { model: "gpt-5.5", key: "OpenAI API key", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
     anthropic: { model: "claude-sonnet-4-20250514", key: "Anthropic API key", baseUrl: "https://api.anthropic.com", temperature: 0, topP: 0.1 },
     gemini: { model: "gemini-2.5-pro", key: "Gemini API key", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
     ollama: { model: "qwen3:14b", key: "not needed", baseUrl: "local Ollama base URL from runner", temperature: 0, topP: 0.1 },
@@ -1328,14 +1327,6 @@ function judgeRegistryProviderDefaults(provider) {
       model: defaults.model,
       baseUrl: defaults.baseUrl,
       chatUrl: "https://api.openai.com/v1/responses",
-      apiKeyEnv: "OPENAI_API_KEY",
-    },
-    openai_compatible: {
-      configId: "openai_compatible_judge",
-      displayName: "OpenAI-compatible Judge",
-      model: defaults.model,
-      baseUrl: defaults.baseUrl,
-      chatUrl: "https://api.openai.com/v1/chat/completions",
       apiKeyEnv: "OPENAI_API_KEY",
     },
     anthropic: {
@@ -1371,6 +1362,11 @@ function judgeRegistryProviderDefaults(provider) {
       apiKeyEnv: "JUDGE_API_KEY",
     },
   }[provider] || {};
+}
+
+function providerForRegistrySelect(provider, fallback = "generic_api") {
+  const value = String(provider || "").trim();
+  return value === "openai_compatible" ? "generic_api" : (value || fallback);
 }
 
 function generatedJudgeApiKeyEnv(provider, configId) {
@@ -1427,7 +1423,7 @@ function normalizeJudgeApiPresetClient(preset) {
   return {
     id,
     label: String(preset.label || id).trim(),
-    provider: String(preset.provider || "generic_api").trim(),
+    provider: providerForRegistrySelect(preset.provider, "generic_api"),
     configId: String(preset.configId || preset.config_id || "").trim(),
     displayName: String(preset.displayName || preset.display_name || preset.label || model).trim(),
     model,
@@ -1489,7 +1485,7 @@ function applyJudgeApiPreset(preset = selectedJudgeApiPreset()) {
     setJudgeRegistryMessage("적용할 Judge API 프리셋을 선택하세요.", "error");
     return;
   }
-  copySelectField("judgeRegistryProvider", preset.provider || "clova_studio", "clova_studio");
+  copySelectField("judgeRegistryProvider", providerForRegistrySelect(preset.provider, "clova_studio"), "clova_studio");
   updateJudgeRegistryProviderFields();
   copyModelField("judgeRegistryConfigId", preset.configId || "");
   copyModelField("judgeRegistryDisplayName", preset.displayName || preset.label || "");
@@ -2570,7 +2566,7 @@ function prefillJudgeFromTarget(targetId) {
   const label = modelLabelForVersion(targetId);
   const configId = `${targetId}_judge`;
   const options = spec.options || {};
-  copySelectField("judgeRegistryProvider", spec.provider || "ollama", "ollama");
+  copySelectField("judgeRegistryProvider", providerForRegistrySelect(spec.provider, "ollama"), "ollama");
   copyModelField("judgeRegistryConfigId", configId);
   copyModelField("judgeRegistryDisplayName", `${label} Judge`);
   copyModelField("judgeRegistryModel", spec.model || targetId);
@@ -2737,7 +2733,7 @@ function editRegisteredModel(version) {
   const spec = modelSpecForVersion(version);
   const form = document.getElementById("modelRegistryForm");
   if (!spec || !form) return;
-  copySelectField("modelProvider", spec.provider || "openai_native", "openai_native");
+  copySelectField("modelProvider", providerForRegistrySelect(spec.provider, "openai_native"), "openai_native");
   copyModelField("modelPromptVariantOf", spec.prompt_variant_of || "");
   copyModelField("modelExperimentTag", spec.experiment_tag || "");
   copyModelField("modelConfigId", spec.config_id || version);
@@ -2789,7 +2785,7 @@ function editRegisteredJudge(version) {
   const preset = judgePromptPresets[spec.system_prompt_preset]
     ? spec.system_prompt_preset
     : (spec.system_prompt_preset ? "custom" : "judge_default_v1");
-  copySelectField("judgeRegistryProvider", spec.provider || "clova_studio", "clova_studio");
+  copySelectField("judgeRegistryProvider", providerForRegistrySelect(spec.provider, "clova_studio"), "clova_studio");
   copyModelField("judgeRegistryConfigId", spec.config_id || version);
   copyModelField("judgeRegistryDisplayName", spec.display_name || spec.model || version);
   copyModelField("judgeRegistryModel", spec.model || version);
