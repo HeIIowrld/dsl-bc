@@ -1840,7 +1840,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return openai_responses_url(model_spec), {
                 "model": model,
                 "input": "ping",
-                "max_output_tokens": 1,
+                "max_output_tokens": 16,
                 "store": False,
             }
         if provider == "openai_compatible":
@@ -1941,6 +1941,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     }
                 )
         except urlerror.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            body_preview = re.sub(r"\s+", " ", body).strip()[:600]
             if exc.code == 405 and not is_live_probe:
                 status = "connected"
             elif exc.code in {401, 403}:
@@ -1963,6 +1968,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         if exc.code in {401, 403}
                         else f"{target_label} responded HTTP {exc.code}."
                     ),
+                    "upstream_error": body_preview,
                     "health_check_mode": "live_probe" if is_live_probe else "health_endpoint",
                 },
                 status=200 if status == "connected" else 503,

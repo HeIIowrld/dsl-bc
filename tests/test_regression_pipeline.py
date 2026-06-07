@@ -2945,8 +2945,42 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(requested["headers"]["Authorization"], "Bearer stored-secret")
         self.assertEqual(requested["payload"]["model"], "gpt-5.5")
         self.assertEqual(requested["payload"]["input"], "ping")
-        self.assertEqual(requested["payload"]["max_output_tokens"], 1)
+        self.assertEqual(requested["payload"]["max_output_tokens"], 16)
         self.assertIs(requested["payload"]["store"], False)
+
+    def test_external_healthcheck_http_400_includes_upstream_error_preview(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeBody:
+            def read(self):
+                return b'{"error":{"message":"Unsupported model: gpt-test","type":"invalid_request_error"}}'
+
+        def fake_urlopen(request, timeout=0):
+            raise urlerror.HTTPError(request.full_url, 400, "Bad Request", hdrs=None, fp=FakeBody())
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "OPENAI_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "openai_native_judge",
+                {
+                    "provider": "openai_native",
+                    "model": "gpt-test",
+                    "base_url": "https://api.openai.com",
+                    "api_key_env": "OPENAI_API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 503)
+        self.assertEqual(captured["payload"]["status"], "offline")
+        self.assertIn("HTTP 400", captured["payload"]["message"])
+        self.assertIn("Unsupported model", captured["payload"]["upstream_error"])
 
     def test_anthropic_healthcheck_without_health_url_posts_messages_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
