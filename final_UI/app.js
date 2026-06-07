@@ -51,6 +51,16 @@ const runProfileHelp = {
   custom_seeded_mix: "총 샘플 수, 풀별 비율, 랜덤 시드를 직접 입력해 섞어서 실행합니다.",
 };
 
+const targetSelectionModeLabels = {
+  single: "단일 모델 실행",
+  multi: "여러 모델 비교 실행",
+};
+
+const targetSelectionModeHelp = {
+  single: "한 번에 1개 모델만 실행합니다. 비교가 필요하면 여러 모델 비교 실행을 선택하세요.",
+  multi: "선택한 여러 대상 모델을 같은 케이스 파일로 순차 실행해 비교합니다.",
+};
+
 const scoringModeLabels = {
   llm_override: "단일 Judge 채점",
   llm_blended: "여러 Judge 합산",
@@ -999,6 +1009,30 @@ function evalTargetRegistryIds() {
   return Object.keys(modelRegistry || {})
     .filter(isEvalTargetModelId)
     .sort((a, b) => modelLabelForVersion(a).localeCompare(modelLabelForVersion(b), "ko"));
+}
+
+function targetSelectionMode() {
+  const value = document.getElementById("evalTargetSelectionMode")?.value || "single";
+  return targetSelectionModeLabels[value] ? value : "single";
+}
+
+function multiTargetSelectionMode(mode = targetSelectionMode()) {
+  return mode === "multi";
+}
+
+function enforceTargetSelectionMode(preferredId = "") {
+  if (multiTargetSelectionMode()) return false;
+  const ids = evalTargetRegistryIds();
+  const selected = ids.filter((id) => state.runConfigVersions.has(id));
+  if (selected.length <= 1) return false;
+  const keep = selected.includes(preferredId) ? preferredId : selected[0];
+  state.runConfigVersions = new Set([keep]);
+  document.querySelectorAll("[data-eval-config]").forEach((input) => {
+    const isSelected = input.value === keep;
+    input.checked = isSelected;
+    input.closest(".model-card")?.classList.toggle("selected", isSelected);
+  });
+  return true;
 }
 
 function runPreselectedModelIds() {
@@ -3911,6 +3945,12 @@ function syncRunProfileHelp() {
   if (target) target.textContent = runProfileDescription(profile);
 }
 
+function syncTargetSelectionModeHelp() {
+  const mode = targetSelectionMode();
+  const target = document.getElementById("evalTargetSelectionHelp");
+  if (target) target.textContent = targetSelectionModeHelp[mode] || "";
+}
+
 function syncScoringModeHelp() {
   const mode = document.getElementById("evalScoringMode")?.value || "static";
   const target = document.getElementById("evalScoringModeHelp");
@@ -4343,6 +4383,12 @@ function initializeEvalRunControls() {
       loadDatasetCases(selectedDataset);
     });
   }
+  document.getElementById("evalTargetSelectionMode")?.addEventListener("change", () => {
+    enforceTargetSelectionMode();
+    syncTargetSelectionModeHelp();
+    renderEvalConfigFilters();
+    renderEvalRunSummary();
+  });
   initializeJudgeControls();
   initializeStaticEmbeddingControls();
   const form = document.getElementById("evalRunForm");
@@ -4378,6 +4424,7 @@ function initializeEvalRunControls() {
     if (event.target?.matches("[data-eval-config]")) {
       if (event.target.checked) state.runConfigVersions.add(event.target.value);
       else state.runConfigVersions.delete(event.target.value);
+      enforceTargetSelectionMode(event.target.value);
       event.target.closest(".model-card")?.classList.toggle("selected", event.target.checked);
       renderSelectedModelSummary();
       renderJudgeRegistry();
@@ -4416,6 +4463,7 @@ function initializeEvalRunControls() {
     answerOnlyButton.onclick = () => startEvalRun({ answerOnly: true });
   }
   syncRunProfileHelp();
+  syncTargetSelectionModeHelp();
   syncScoringModeHelp();
   renderEvalRunSummary();
 }
@@ -4566,7 +4614,11 @@ function renderEvalConfigFilters() {
   const target = document.getElementById("evalConfigFilters");
   if (!target) return;
   ensureModelPickerShell(target);
+  enforceTargetSelectionMode();
   const ids = evalTargetRegistryIds();
+  const mode = targetSelectionMode();
+  const inputType = multiTargetSelectionMode(mode) ? "checkbox" : "radio";
+  const inputName = multiTargetSelectionMode(mode) ? "" : ' name="eval_config"';
   target.innerHTML = ids.map((id) => {
     const spec = modelSpecForVersion(id);
     const selected = state.runConfigVersions.has(id);
@@ -4580,7 +4632,7 @@ function renderEvalConfigFilters() {
     const variantLabel = spec.prompt_variant_of ? `variant of ${spec.prompt_variant_of}` : "base";
     return `
       <label class="model-card ${selected ? "selected" : ""}">
-        <input type="checkbox" data-eval-config value="${escapeHtml(id)}" ${selected ? "checked" : ""}>
+        <input type="${inputType}"${inputName} data-eval-config value="${escapeHtml(id)}" ${selected ? "checked" : ""}>
         <span class="model-card-top">
           <strong>${escapeHtml(modelLabelForVersion(id))}</strong>
           <em>${escapeHtml(provider)}</em>
@@ -4604,7 +4656,7 @@ function ensureModelPickerShell(target) {
   if (!panel) return;
   panel.classList.add("model-picker-panel");
   const heading = panel.querySelector("h3");
-  if (heading) heading.textContent = "모델";
+  if (heading) heading.textContent = "실행 모델";
   const summary = document.createElement("div");
   summary.id = "selectedModelSummary";
   summary.className = "selected-model-summary";
@@ -4621,14 +4673,17 @@ function renderSelectedModelSummary() {
   if (!target) return;
   const selected = evalTargetRegistryIds().filter((id) => state.runConfigVersions.has(id));
   if (!selected.length) {
-    target.innerHTML = "<strong>실행 모델</strong><span>없음</span>";
+    target.innerHTML = `<strong>${escapeHtml(targetSelectionModeLabels[targetSelectionMode()])}</strong><span>선택한 모델 없음</span>`;
     return;
   }
   const chips = selected.slice(0, 3)
     .map((id) => `<span class="model-chip">${escapeHtml(modelLabelForVersion(id))}</span>`)
     .join("");
   const more = selected.length > 3 ? `<span class="model-chip muted">+${selected.length - 3}</span>` : "";
-  target.innerHTML = `<strong>실행 모델 ${selected.length}</strong><div>${chips}${more}</div>`;
+  const label = multiTargetSelectionMode()
+    ? `비교 모델 ${selected.length}개`
+    : "실행 모델 1개";
+  target.innerHTML = `<strong>${escapeHtml(label)}</strong><div>${chips}${more}</div>`;
 }
 
 function modelEndpointLabel(spec) {
@@ -4652,6 +4707,7 @@ function renderEvalRunSummary() {
   const selectedSummary = questionlistDatasets.find((item) => item.id === dataset) ?? {};
   const profile = evalCatalog?.profiles?.[runProfile] ?? {};
   const isProfileRun = runProfile !== "single_dataset";
+  const targetMode = targetSelectionMode();
   const modelCount = [...document.querySelectorAll("[data-eval-config]:checked")].length;
   const limitRaw = document.getElementById("evalLimit")?.value ?? "";
   const dryRun = Boolean(document.getElementById("evalDryRun")?.checked);
@@ -4675,6 +4731,7 @@ function renderEvalRunSummary() {
     <strong>${escapeHtml(caseLabel || "테스트 범위")}</strong>
     <span>${escapeHtml([
       modelCount ? `모델 ${modelCount}개` : "선택한 모델 없음",
+      targetSelectionModeLabels[targetMode],
       customPlanForSummary ? `샘플 ${customPlanForSummary.total}` : (limitRaw ? `제한 ${limitRaw}` : ""),
       customPlanForSummary ? `seed ${customPlanForSummary.seed ?? "?"}` : "",
       scoringModeLabel(scoringMode),
@@ -4694,6 +4751,7 @@ function renderEvalRunSummary() {
 function updateRunSubmitState() {
   const targetCount = evalTargetRegistryIds().length;
   const selectedCount = [...document.querySelectorAll("[data-eval-config]:checked")].length;
+  const targetMode = targetSelectionMode();
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
   const runProfile = document.getElementById("evalRunProfile")?.value || "single_dataset";
   const aggregationMethod = selectedJudgeAggregationMethod();
@@ -4708,6 +4766,9 @@ function updateRunSubmitState() {
   } else if (selectedCount === 0) {
     disabled = true;
     reason = "실행할 모델을 하나 이상 선택하세요.";
+  } else if (targetMode === "single" && selectedCount > 1) {
+    disabled = true;
+    reason = "단일 모델 실행은 대상 모델을 1개만 선택해야 합니다.";
   } else if (staticEmbeddingEnabled && !staticEmbeddingModel) {
     disabled = true;
     reason = "정적 임베딩 유사도를 사용하려면 embedding model을 입력하세요.";
@@ -4737,6 +4798,7 @@ function updateRunSubmitState() {
   const disabledHint = (() => {
     if (!disabled) return "";
     if (reason.includes("비중 합계")) return "Judge 비중 합계가 1이면 실행 가능";
+    if (reason.includes("단일 모델")) return "모델 1개만 선택 필요";
     if (reason.includes("1개만")) return "Judge 1개만 선택 필요";
     if (reason.includes("2개 이상")) return "Judge 2개 이상 선택 필요";
     if (reason.includes("대상 모델")) return "대상 모델 등록 필요";
@@ -4765,9 +4827,14 @@ function updateRunSubmitState() {
   });
   const answerOnlyButton = document.getElementById("answerOnlyRunSubmit");
   if (answerOnlyButton) {
-    const answerDisabled = targetCount === 0 || selectedCount === 0;
+    const answerDisabled = targetCount === 0 || selectedCount === 0 || (targetMode === "single" && selectedCount > 1);
+    const answerReason = targetCount === 0
+      ? "설정 탭에서 대상 모델을 먼저 등록하세요."
+      : selectedCount === 0
+        ? "실행할 모델을 하나 이상 선택하세요."
+        : "단일 모델 실행은 대상 모델을 1개만 선택해야 합니다.";
     answerOnlyButton.disabled = answerDisabled;
-    answerOnlyButton.title = answerDisabled ? (targetCount === 0 ? "설정 탭에서 대상 모델을 먼저 등록하세요." : "실행할 모델을 하나 이상 선택하세요.") : "LLM judge 없이 답변셋만 생성";
+    answerOnlyButton.title = answerDisabled ? answerReason : "LLM judge 없이 답변셋만 생성";
     answerOnlyButton.setAttribute("aria-disabled", answerDisabled ? "true" : "false");
   }
 }
@@ -4776,6 +4843,7 @@ async function startEvalRun(options = {}) {
   const answerOnly = Boolean(options.answerOnly);
   const runProfile = document.getElementById("evalRunProfile")?.value || "single_dataset";
   const dataset = document.getElementById("evalDatasetSelect")?.value || selectedDataset;
+  const selectedTargetMode = targetSelectionMode();
   const configs = [...document.querySelectorAll("[data-eval-config]:checked")].map((input) => input.value);
   const suites = [];
   const limitRaw = document.getElementById("evalLimit")?.value ?? "";
@@ -4820,6 +4888,10 @@ async function startEvalRun(options = {}) {
     setEvalRunMessage("테스트를 실행할 모델을 하나 이상 선택해야 합니다.", "error");
     return;
   }
+  if (selectedTargetMode === "single" && configs.length > 1) {
+    setEvalRunMessage("단일 모델 실행은 대상 모델을 1개만 선택해야 합니다.", "error");
+    return;
+  }
   if (selectedScoringMode !== "static" && !judgeConfigIds.length) {
     setEvalRunMessage("등록된 Judge 또는 대상 모델 Judge를 하나 이상 선택하세요.", "error");
     return;
@@ -4848,6 +4920,7 @@ async function startEvalRun(options = {}) {
     body: JSON.stringify({
       dataset,
       run_profile: runProfile,
+      target_selection_mode: selectedTargetMode,
       seed,
       pool_quotas: poolQuotas,
       configs,

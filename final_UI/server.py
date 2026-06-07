@@ -2856,6 +2856,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             if self.safe_config_id(config_id)
         ]
         configs = [config_id for config_id in configs if config_id in registry]
+        target_selection_mode = str(payload.get("target_selection_mode") or "single").strip()
+        if target_selection_mode not in {"single", "multi"}:
+            self.send_json({"error": f"unknown target_selection_mode: {target_selection_mode}"}, status=400)
+            return
         non_target_configs = [
             config_id for config_id in configs if not self.is_eval_target_model(registry.get(config_id, {}))
         ]
@@ -2870,6 +2874,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         if not configs and not is_tool_agent_run:
             self.send_json({"error": "Select at least one registered model config."}, status=400)
+            return
+        if target_selection_mode == "single" and len(configs) > 1 and not is_tool_agent_run:
+            self.send_json({"error": "Single-model runs accept exactly one target model. Use multi target mode for comparisons."}, status=400)
             return
 
         suites = [str(suite).strip() for suite in payload.get("suites", []) if str(suite).strip()]
