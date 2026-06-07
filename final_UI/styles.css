@@ -877,6 +877,44 @@ button.run-submit small {
   margin-top: 0;
 }
 
+.run-step-two-action {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 7px;
+  min-width: 0;
+}
+
+.run-cache-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 40px;
+  margin: 0;
+  padding: 7px 10px;
+  color: var(--text);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.run-cache-option strong,
+.run-cache-option small {
+  display: block;
+}
+
+.run-cache-option strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.run-cache-option small {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
 .run-button-row {
   position: sticky;
   bottom: 0;
