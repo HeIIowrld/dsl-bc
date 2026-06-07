@@ -615,7 +615,9 @@ class EvalScoringTests(unittest.TestCase):
         )
         self.assertEqual(payload["contents"][0]["role"], "user")
         self.assertEqual(payload["generationConfig"]["maxOutputTokens"], 512)
-        self.assertEqual(payload["generationConfig"]["responseFormat"]["text"]["mimeType"], "application/json")
+        self.assertEqual(payload["generationConfig"]["responseMimeType"], "application/json")
+        self.assertEqual(payload["generationConfig"]["responseSchema"]["required"], ["pass"])
+        self.assertNotIn("responseFormat", payload["generationConfig"])
 
     def test_extract_response_text_supports_openai_and_custom_paths(self) -> None:
         self.assertEqual(

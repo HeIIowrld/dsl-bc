@@ -1765,12 +1765,8 @@ def gemini_payload(
     if stop:
         generation_config["stopSequences"] = stop if isinstance(stop, list) else [str(stop)]
     if response_schema:
-        generation_config["responseFormat"] = {
-            "text": {
-                "mimeType": "application/json",
-                "schema": response_schema,
-            }
-        }
+        generation_config["responseMimeType"] = "application/json"
+        generation_config["responseSchema"] = response_schema
     payload: dict[str, Any] = {"contents": contents}
     if system_parts:
         payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
