@@ -45,10 +45,10 @@ const runProfileLabels = {
 };
 
 const runProfileHelp = {
-  single_dataset: "선택한 케이스 파일에서 세부 묶음/문항 수 조건으로 빠르게 확인합니다.",
+  single_dataset: "선택한 케이스 파일 전체를 기준으로 빠르게 확인합니다.",
   benchmark_final_full: "최종 벤치마크 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
   regression_golden_full: "회귀 골든셋 전체를 실행합니다. 배포 차단 판단에 사용합니다.",
-  custom_seeded_mix: "풀별 할당량을 직접 입력해 섞어서 실행합니다.",
+  custom_seeded_mix: "총 샘플 수, 풀별 비율, 랜덤 시드를 직접 입력해 섞어서 실행합니다.",
 };
 
 const scoringModeLabels = {
@@ -3983,7 +3983,7 @@ function renderEvalProfileCards() {
     {
       id: "custom_seeded_mix",
       description: runProfileDescription("custom_seeded_mix"),
-      meta: "풀 할당량 직접 입력",
+      meta: customPoolPlanLabel(),
     },
   ];
   target.innerHTML = cards.map(({ id, description, meta }) => {
@@ -3997,6 +3997,76 @@ function renderEvalProfileCards() {
   }).join("");
 }
 
+function defaultCustomPoolTotal() {
+  const customTotal = document.getElementById("evalCustomTotal");
+  if (customTotal) {
+    const explicit = Number(customTotal.value);
+    return Number.isFinite(explicit) ? Math.floor(explicit) : 0;
+  }
+  const limit = Number(document.getElementById("evalLimit")?.value || 0);
+  if (Number.isFinite(limit) && limit > 0) return Math.floor(limit);
+  return 20;
+}
+
+function customRandomSeed() {
+  const raw = document.getElementById("evalRandomSeed")?.value ?? evalCatalog.default_seed ?? 42;
+  const seed = Number(raw === "" ? evalCatalog.default_seed ?? 42 : raw);
+  return Number.isInteger(seed) && seed >= 0 ? seed : null;
+}
+
+function customPoolWeightEntries() {
+  return [...document.querySelectorAll("[data-pool-weight]")]
+    .map((input) => ({
+      poolId: input.dataset.poolWeight,
+      weight: Number(input.value || 0),
+    }))
+    .filter((entry) => entry.poolId && Number.isFinite(entry.weight) && entry.weight > 0);
+}
+
+function poolQuotasFromWeights(entries, total) {
+  const positive = entries.filter((entry) => entry.weight > 0);
+  if (!positive.length || total <= 0) return {};
+  const weightTotal = positive.reduce((sum, entry) => sum + entry.weight, 0);
+  const exact = positive.map((entry, index) => {
+    const raw = (entry.weight / weightTotal) * total;
+    const quota = Math.floor(raw);
+    return {
+      ...entry,
+      index,
+      quota,
+      remainder: raw - quota,
+    };
+  });
+  let allocated = exact.reduce((sum, entry) => sum + entry.quota, 0);
+  [...exact]
+    .sort((a, b) => b.remainder - a.remainder || b.weight - a.weight || a.index - b.index)
+    .forEach((entry) => {
+      if (allocated >= total) return;
+      entry.quota += 1;
+      allocated += 1;
+    });
+  return Object.fromEntries(exact.filter((entry) => entry.quota > 0).map((entry) => [entry.poolId, entry.quota]));
+}
+
+function customPoolPlan() {
+  const total = defaultCustomPoolTotal();
+  const seed = customRandomSeed();
+  const weights = customPoolWeightEntries();
+  return {
+    total,
+    seed,
+    weights,
+    quotas: poolQuotasFromWeights(weights, total),
+  };
+}
+
+function customPoolPlanLabel() {
+  const plan = customPoolPlan();
+  const quotaTotal = Object.values(plan.quotas).reduce((sum, value) => sum + Number(value || 0), 0);
+  if (!quotaTotal) return "총 샘플 수와 풀별 비율 입력";
+  return `${quotaTotal.toLocaleString()}개 · seed ${plan.seed ?? "?"}`;
+}
+
 function renderCustomPoolInputs() {
   const target = document.getElementById("evalCustomPools");
   if (!target) return;
@@ -4008,20 +4078,51 @@ function renderCustomPoolInputs() {
   const pools = Object.entries(evalCatalog?.pools || {});
   target.innerHTML = `
     <h3>직접 구성</h3>
+    <div class="custom-pool-controls">
+      <label>
+        <span>총 샘플 수</span>
+        <input id="evalCustomTotal" type="number" min="1" max="100000" step="1" value="${escapeHtml(String(defaultCustomPoolTotal()))}">
+      </label>
+      <label>
+        <span>랜덤 시드</span>
+        <input id="evalRandomSeed" type="number" min="0" max="2147483647" step="1" value="${escapeHtml(String(evalCatalog.default_seed ?? 42))}">
+      </label>
+      <span id="customPoolPlanSummary" class="custom-pool-summary"></span>
+    </div>
     <div class="pool-grid">
       ${pools.map(([poolId, pool]) => `
         <label>
           <span>${escapeHtml(pool.label || poolId)} · ${escapeHtml(pool.role || "")}</span>
-          <input data-pool-quota="${escapeHtml(poolId)}" type="number" min="0" max="100000" value="0" placeholder="기본값 ${Number(pool.default_quota || 0)}">
+          <input data-pool-weight="${escapeHtml(poolId)}" type="number" min="0" max="100000" step="0.1" value="1" placeholder="0이면 제외">
+          <small>비율 입력 · 최대 ${Number(pool.default_quota || 0).toLocaleString()}개</small>
         </label>
       `).join("")}
     </div>
   `;
+  const refresh = () => {
+    const summary = document.getElementById("customPoolPlanSummary");
+    const plan = customPoolPlan();
+    const quotaEntries = Object.entries(plan.quotas);
+    const quotaText = quotaEntries.map(([poolId, quota]) => `${poolId} ${quota}`).join(" / ");
+    if (summary) {
+      summary.textContent = quotaEntries.length
+        ? `생성 예정: ${quotaEntries.reduce((sum, [, quota]) => sum + Number(quota || 0), 0).toLocaleString()}개 · ${quotaText}`
+        : "비율이 0보다 큰 풀을 하나 이상 입력하세요.";
+    }
+    renderEvalProfileCards();
+    renderEvalRunSummary();
+  };
+  target.querySelectorAll("#evalCustomTotal, #evalRandomSeed, [data-pool-weight]").forEach((input) => {
+    input.addEventListener("input", refresh);
+    input.addEventListener("change", refresh);
+  });
+  refresh();
 }
 
 function updateEvalRunMode() {
   const profile = document.getElementById("evalRunProfile")?.value || "single_dataset";
   const isProfileRun = profile !== "single_dataset";
+  const isCustomRun = profile === "custom_seeded_mix";
   const datasetSelect = document.getElementById("evalDatasetSelect");
   const limit = document.getElementById("evalLimit");
   const selectedCaseFile = datasetSelect?.value || selectedDataset;
@@ -4038,6 +4139,8 @@ function updateEvalRunMode() {
   }
   configCard?.classList.toggle("profile-run", isProfileRun);
   if (limit) {
+    const label = limit.closest("label");
+    if (label) label.hidden = isCustomRun;
     limit.placeholder = isProfileRun ? "profile 기본값 사용" : "예: 10";
   }
   renderEvalRunSummary();
@@ -4501,6 +4604,7 @@ function renderEvalRunSummary() {
   const staticEmbeddingEnabled = Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value || "";
   const aggregationMethod = selectedJudgeAggregationMethod();
+  const customPlanForSummary = isProfileRun && runProfile === "custom_seeded_mix" ? customPoolPlan() : null;
   const judgeCount = scoringMode === "static"
     ? 0
     : selectedJudgeConfigIds().length;
@@ -4514,7 +4618,8 @@ function renderEvalRunSummary() {
     <strong>${escapeHtml(caseLabel || "테스트 범위")}</strong>
     <span>${escapeHtml([
       modelCount ? `모델 ${modelCount}개` : "선택한 모델 없음",
-      limitRaw ? `제한 ${limitRaw}` : "",
+      customPlanForSummary ? `샘플 ${customPlanForSummary.total}` : (limitRaw ? `제한 ${limitRaw}` : ""),
+      customPlanForSummary ? `seed ${customPlanForSummary.seed ?? "?"}` : "",
       scoringModeLabel(scoringMode),
       staticEmbeddingEnabled ? `embedding ${staticEmbeddingModel || "on"}` : "",
       judgeCount ? `Judge ${judgeCount}개` : "",
@@ -4533,9 +4638,11 @@ function updateRunSubmitState() {
   const targetCount = evalTargetRegistryIds().length;
   const selectedCount = [...document.querySelectorAll("[data-eval-config]:checked")].length;
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
+  const runProfile = document.getElementById("evalRunProfile")?.value || "single_dataset";
   const aggregationMethod = selectedJudgeAggregationMethod();
   const staticEmbeddingEnabled = Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value?.trim() || "";
+  const customPlanForSubmit = runProfile === "custom_seeded_mix" ? customPoolPlan() : null;
   let disabled = false;
   let reason = "선택한 모델과 실행 범위로 평가를 시작합니다.";
   if (targetCount === 0) {
@@ -4547,6 +4654,15 @@ function updateRunSubmitState() {
   } else if (staticEmbeddingEnabled && !staticEmbeddingModel) {
     disabled = true;
     reason = "정적 임베딩 유사도를 사용하려면 embedding model을 입력하세요.";
+  } else if (customPlanForSubmit && (!Number.isInteger(customPlanForSubmit.seed) || customPlanForSubmit.seed < 0)) {
+    disabled = true;
+    reason = "직접 구성 랜덤 시드는 0 이상의 정수여야 합니다.";
+  } else if (customPlanForSubmit && customPlanForSubmit.total < 1) {
+    disabled = true;
+    reason = "직접 구성 총 샘플 수는 1 이상이어야 합니다.";
+  } else if (customPlanForSubmit && !Object.values(customPlanForSubmit.quotas).some((value) => Number(value) > 0)) {
+    disabled = true;
+    reason = "직접 구성은 하나 이상의 풀 비율을 0보다 크게 입력해야 합니다.";
   } else if (scoringMode !== "static" && !selectedJudgeConfigIds().length) {
     disabled = true;
     reason = "등록된 Judge 또는 대상 모델 Judge를 하나 이상 선택하세요.";
@@ -4565,6 +4681,9 @@ function updateRunSubmitState() {
     if (reason.includes("대상 모델")) return "대상 모델 등록 필요";
     if (reason.includes("실행할 모델")) return "실행할 모델 선택 필요";
     if (reason.includes("embedding model")) return "임베딩 모델명 입력 필요";
+    if (reason.includes("랜덤 시드")) return "랜덤 시드 입력 필요";
+    if (reason.includes("총 샘플 수")) return "총 샘플 수 입력 필요";
+    if (reason.includes("풀 비율")) return "풀 비율 입력 필요";
     return reason;
   })();
 
@@ -4599,12 +4718,11 @@ async function startEvalRun(options = {}) {
   const configs = [...document.querySelectorAll("[data-eval-config]:checked")].map((input) => input.value);
   const suites = [];
   const limitRaw = document.getElementById("evalLimit")?.value ?? "";
-  const limit = limitRaw === "" ? null : Number(limitRaw);
+  const limit = runProfile === "custom_seeded_mix" ? null : (limitRaw === "" ? null : Number(limitRaw));
   const runId = document.getElementById("evalRunId")?.value || "";
-  const seed = Number(evalCatalog.default_seed || 42);
-  const poolQuotas = Object.fromEntries(
-    [...document.querySelectorAll("[data-pool-quota]")].map((input) => [input.dataset.poolQuota, Number(input.value || 0)])
-  );
+  const customPlan = customPoolPlan();
+  const seed = runProfile === "custom_seeded_mix" ? customPlan.seed : Number(evalCatalog.default_seed || 42);
+  const poolQuotas = runProfile === "custom_seeded_mix" ? customPlan.quotas : {};
   const predictionFile = document.getElementById("evalPredictionFile")?.value || "";
   const selectedScoringMode = answerOnly ? "static" : (document.getElementById("evalScoringMode")?.value || "static");
   const scoringMode = backendScoringMode(selectedScoringMode);
@@ -4626,8 +4744,16 @@ async function startEvalRun(options = {}) {
   const exportFinalUi = answerOnly ? false : Boolean(document.getElementById("evalExportFinalUi")?.checked);
   const answerCacheEnabled = document.getElementById("evalAnswerCacheEnabled")?.checked !== false;
 
+  if (runProfile === "custom_seeded_mix" && (!Number.isInteger(seed) || seed < 0)) {
+    setEvalRunMessage("직접 구성 랜덤 시드는 0 이상의 정수여야 합니다.", "error");
+    return;
+  }
+  if (runProfile === "custom_seeded_mix" && customPlan.total < 1) {
+    setEvalRunMessage("직접 구성 총 샘플 수는 1 이상이어야 합니다.", "error");
+    return;
+  }
   if (runProfile === "custom_seeded_mix" && !Object.values(poolQuotas).some((value) => Number(value) > 0)) {
-    setEvalRunMessage("직접 구성은 하나 이상의 풀 할당량을 1 이상으로 입력해야 합니다.", "error");
+    setEvalRunMessage("직접 구성은 하나 이상의 풀 비율을 0보다 크게 입력해야 합니다.", "error");
     return;
   }
   if (!configs.length) {
@@ -4659,7 +4785,7 @@ async function startEvalRun(options = {}) {
       dataset,
       run_profile: runProfile,
       seed,
-      pool_quotas: runProfile === "custom_seeded_mix" ? poolQuotas : {},
+      pool_quotas: poolQuotas,
       configs,
       suites,
       limit,
