@@ -1037,12 +1037,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             provider = "generic_api"
         if provider not in ALLOWED_PROVIDERS:
             provider = "generic_api"
-        upstream_health_url = config.get("upstream_health_url") or config.get("external_health_url")
-        upstream_chat_url = config.get("upstream_chat_url") or config.get("external_chat_url")
-        if config.get("health_url") and not str(config.get("health_url")).startswith("/api/models/"):
-            upstream_health_url = config.get("health_url")
-        if config.get("api_url") and not str(config.get("api_url")).startswith("/api/models/"):
-            upstream_chat_url = config.get("api_url")
+        chat_url = self.external_http_url(config.get("chat_url"))
+        upstream_health_url = self.external_http_url(config.get("upstream_health_url") or config.get("external_health_url"))
+        upstream_chat_url = self.external_http_url(config.get("upstream_chat_url") or config.get("external_chat_url"))
+        if self.external_http_url(config.get("health_url")):
+            upstream_health_url = self.external_http_url(config.get("health_url"))
+        if self.external_http_url(config.get("api_url")):
+            upstream_chat_url = self.external_http_url(config.get("api_url"))
+        responses_url = self.external_http_url(config.get("responses_url") or config.get("response_url"))
         raw_candidate_role = str(config.get("candidate_role") or "").strip()
         judge_role = str(config.get("judge_role") or "").strip()
         evaluation_role = str(config.get("evaluation_role") or config.get("usage_role") or "").strip()
@@ -1057,12 +1059,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "model": config.get("model") or config_id,
             "cache_identity": str(config.get("cache_identity") or config.get("model_artifact_id") or "").strip(),
             "base_url": str(config.get("base_url") or "").rstrip("/"),
-            "chat_url": str(config.get("chat_url") or upstream_chat_url or "").strip(),
-            "responses_url": str(config.get("responses_url") or config.get("response_url") or "").strip(),
+            "chat_url": str(chat_url or upstream_chat_url or "").strip(),
+            "responses_url": responses_url,
             "health_url": f"/api/models/{config_id}/health",
             "api_url": f"/api/models/{config_id}/eval",
             "upstream_health_url": str(upstream_health_url or "").strip(),
-            "upstream_chat_url": str(upstream_chat_url or config.get("chat_url") or "").strip(),
+            "upstream_chat_url": str(upstream_chat_url or chat_url or "").strip(),
             "api_key_env": str(config.get("api_key_env") or "").strip(),
             "base_url_env": str(config.get("base_url_env") or "").strip(),
             "local_path": str(config.get("local_path") or config.get("model_path") or "").strip(),
@@ -1130,6 +1132,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         text = "".join(ch if ch.isalnum() else "_" for ch in text)
         text = "_".join(part for part in text.split("_") if part)
         return text[:80]
+
+    def external_http_url(self, value):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        parsed = urlparse(text)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return text
+        return ""
 
     def judge_config_ids_from_payload(self, judge_payload: dict):
         raw_values = []
@@ -1683,7 +1694,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         )
         try:
             installed = self.ollama_models(base_url)
-        except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (urlerror.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
             self.send_json(
                 {
                     "status": "offline",
@@ -1732,7 +1743,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             try:
                 loaded_models = self.ollama_loaded_models(base_url)
                 loaded_before = model in loaded_models
-            except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            except (urlerror.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                 unload_status = "ps_unavailable"
                 unload_error = str(exc)
 
@@ -1741,10 +1752,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 self.ollama_probe_model(base_url, str(model))
                 try:
                     loaded_after_probe = model in self.ollama_loaded_models(base_url)
-                except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                except (urlerror.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                     loaded_after_probe = None
                     unload_error = str(exc)
-            except (urlerror.HTTPError, urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            except (urlerror.HTTPError, urlerror.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                 self.send_json(
                     {
                         "status": "load_failed",
@@ -1770,10 +1781,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     unload_status = "requested"
                     try:
                         loaded_after_unload = model in self.ollama_loaded_models(base_url)
-                    except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                    except (urlerror.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                         loaded_after_unload = None
                         unload_error = str(exc)
-                except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                except (urlerror.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
                     unload_status = "error"
                     unload_error = str(exc)
             else:
@@ -1821,6 +1832,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     def external_api_live_probe_request(self, model_spec: dict) -> tuple[str, dict]:
+        model_spec = self.external_probe_model_spec(model_spec)
         provider = str(model_spec.get("provider") or "")
         model = str(model_spec.get("model") or "")
         messages = [{"role": "user", "content": "ping"}]
@@ -1859,8 +1871,21 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "options": {"max_tokens": 1, "max_completion_tokens": 1, "max_output_tokens": 1},
         }
 
+    def external_probe_model_spec(self, model_spec: dict) -> dict:
+        spec = dict(model_spec)
+        upstream_chat_url = self.external_http_url(spec.get("upstream_chat_url"))
+        if upstream_chat_url:
+            spec["chat_url"] = upstream_chat_url
+        for key in ("chat_url", "api_url", "responses_url", "response_url"):
+            value = self.external_http_url(spec.get(key))
+            if value:
+                spec[key] = value
+            else:
+                spec.pop(key, None)
+        return spec
+
     def handle_external_api_health(self, version: str, model_spec: dict):
-        health_url = model_spec.get("upstream_health_url") or ""
+        health_url = self.external_http_url(model_spec.get("upstream_health_url"))
         provider = str(model_spec.get("provider") or "")
         headers = self.auth_headers(model_spec)
         if headers is None:
@@ -1881,6 +1906,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             health_url, payload = self.external_api_live_probe_request(model_spec)
         else:
             payload = None
+        health_url = self.external_http_url(health_url)
         if not health_url:
             self.send_json(
                 {
@@ -1941,7 +1967,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 },
                 status=200 if status == "connected" else 503,
             )
-        except (urlerror.URLError, TimeoutError) as exc:
+        except (urlerror.URLError, TimeoutError, ValueError) as exc:
             self.send_json(
                 {
                     "status": "offline",
@@ -4909,13 +4935,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def eval_runner_model_config(self, config: dict) -> dict:
         runner_config = dict(config)
-        upstream_chat_url = str(runner_config.get("upstream_chat_url") or "").strip()
-        if upstream_chat_url and not str(runner_config.get("chat_url") or "").strip():
+        chat_url = self.external_http_url(runner_config.get("chat_url"))
+        upstream_chat_url = self.external_http_url(runner_config.get("upstream_chat_url"))
+        if upstream_chat_url and not chat_url:
             runner_config["chat_url"] = upstream_chat_url
 
-        for key in ("api_url", "health_url"):
+        for key in ("api_url", "health_url", "chat_url", "upstream_chat_url", "upstream_health_url", "responses_url", "response_url"):
             value = str(runner_config.get(key) or "").strip()
-            if value.startswith("/api/models/"):
+            if value and not self.external_http_url(value):
                 runner_config.pop(key, None)
 
         for key in ("registry_source", "deletable"):

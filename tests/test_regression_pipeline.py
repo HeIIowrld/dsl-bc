@@ -47,6 +47,7 @@ from scripts.eval.run_multi_model_eval import (
     question_case_rows,
     output_from_answer_cache,
     run_llm_judge,
+    sanitize_runner_registry_config,
     score_fingerprint,
     score_with_optional_llm_judge,
     run_type_for_cases,
@@ -375,6 +376,46 @@ class EvalScoringTests(unittest.TestCase):
         self.assertEqual(payload["input"][0]["content"][0]["text"], "Return JSON.")
         self.assertEqual(payload["max_output_tokens"], 16)
         self.assertEqual(payload["text"]["format"]["type"], "json_schema")
+
+    def test_api_url_helpers_ignore_internal_proxy_urls(self) -> None:
+        self.assertEqual(
+            openai_chat_url(
+                {
+                    "chat_url": "/api/models/openai_judge/eval",
+                    "base_url": "https://api.openai.com",
+                }
+            ),
+            "https://api.openai.com/v1/chat/completions",
+        )
+        self.assertEqual(
+            openai_responses_url(
+                {
+                    "api_url": "/api/models/openai_judge/eval",
+                    "base_url": "https://api.openai.com",
+                }
+            ),
+            "https://api.openai.com/v1/responses",
+        )
+        self.assertEqual(
+            clova_chat_url(
+                {
+                    "api_url": "/api/models/clova_hcx007_judge/eval",
+                    "model": "HCX-007",
+                    "base_url": "https://clovastudio.stream.ntruss.com",
+                }
+            ),
+            "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007",
+        )
+        self.assertEqual(
+            gemini_chat_url(
+                {
+                    "chat_url": "/api/models/gemini_judge/eval",
+                    "model": "gemini-2.5-pro",
+                    "base_url": "https://generativelanguage.googleapis.com",
+                }
+            ),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        )
 
     def test_openai_payload_supports_reasoning_and_json_schema(self) -> None:
         payload = openai_payload(
@@ -2180,6 +2221,60 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(config["query_prompt_template"], "Q={question}")
         self.assertEqual(config["options"]["temperature"], 0.2)
 
+    def test_normalize_model_config_does_not_promote_internal_proxy_urls_to_upstream(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        config = FinalUiHandler.normalize_model_config(
+            handler,
+            {
+                "config_id": "clova_hcx007_judge",
+                "provider": "clova_studio",
+                "model": "HCX-007",
+                "base_url": "https://clovastudio.stream.ntruss.com",
+                "health_url": "/api/models/clova_hcx007_judge/health",
+                "api_url": "/api/models/clova_hcx007_judge/eval",
+                "upstream_health_url": "",
+                "upstream_chat_url": "",
+                "api_key_env": "CLOVA_STUDIO_API_KEY",
+                "evaluation_role": "llm_judge",
+                "judge_role": "judge",
+            },
+        )
+
+        self.assertEqual(config["health_url"], "/api/models/clova_hcx007_judge/health")
+        self.assertEqual(config["api_url"], "/api/models/clova_hcx007_judge/eval")
+        self.assertEqual(config["upstream_health_url"], "")
+        self.assertEqual(config["upstream_chat_url"], "")
+        self.assertEqual(config["chat_url"], "")
+
+    def test_runner_config_sanitizers_drop_internal_proxy_urls(self) -> None:
+        raw = {
+            "config_id": "clova_hcx007_judge",
+            "provider": "clova_studio",
+            "model": "HCX-007",
+            "base_url": "https://clovastudio.stream.ntruss.com",
+            "chat_url": "/api/models/clova_hcx007_judge/eval",
+            "api_url": "/api/models/clova_hcx007_judge/eval",
+            "health_url": "/api/models/clova_hcx007_judge/health",
+            "upstream_chat_url": "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007",
+            "upstream_health_url": "/api/models/clova_hcx007_judge/health",
+            "responses_url": "/api/models/clova_hcx007_judge/eval",
+        }
+
+        sanitized = sanitize_runner_registry_config(raw)
+        self.assertEqual(sanitized["chat_url"], "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007")
+        self.assertNotIn("api_url", sanitized)
+        self.assertNotIn("health_url", sanitized)
+        self.assertNotIn("upstream_health_url", sanitized)
+        self.assertNotIn("responses_url", sanitized)
+
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        runner_config = FinalUiHandler.eval_runner_model_config(handler, raw)
+        self.assertEqual(runner_config["chat_url"], "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007")
+        self.assertNotIn("api_url", runner_config)
+        self.assertNotIn("health_url", runner_config)
+        self.assertNotIn("upstream_health_url", runner_config)
+        self.assertNotIn("responses_url", runner_config)
+
     def test_pool_overrides_from_payload_validates_values(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
 
@@ -2938,6 +3033,54 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(requested["headers"]["Authorization"], "Bearer stored-secret")
         self.assertEqual(requested["payload"]["messages"][0]["content"], "ping")
         self.assertEqual(requested["payload"]["maxTokens"], 1)
+
+    def test_clova_healthcheck_ignores_internal_proxy_api_url_for_live_probe(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+        requested = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=0):
+            requested["url"] = request.full_url
+            requested["method"] = request.get_method()
+            requested["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "CLOVA_STUDIO_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "clova_hcx007_judge",
+                {
+                    "provider": "clova_studio",
+                    "model": "HCX-007",
+                    "base_url": "https://clovastudio.stream.ntruss.com",
+                    "health_url": "/api/models/clova_hcx007_judge/health",
+                    "api_url": "/api/models/clova_hcx007_judge/eval",
+                    "upstream_health_url": "",
+                    "upstream_chat_url": "",
+                    "api_key_env": "CLOVA_STUDIO_API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["health_check_mode"], "live_probe")
+        self.assertEqual(requested["method"], "POST")
+        self.assertEqual(requested["url"], "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007")
+        self.assertEqual(requested["payload"]["messages"][0]["content"], "ping")
 
     def test_commercial_healthcheck_without_live_endpoint_reports_missing_secret(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)

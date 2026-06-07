@@ -314,6 +314,16 @@ def provider_env_value(config: dict[str, Any], kind: str) -> tuple[str, str]:
     return env_first(names)
 
 
+def absolute_http_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urllib.parse.urlparse(text)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return text
+    return ""
+
+
 def load_config(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     try:
@@ -343,9 +353,12 @@ def load_model_registry(path: Path) -> dict[str, Any]:
 
 def sanitize_runner_registry_config(config: dict[str, Any]) -> dict[str, Any]:
     sanitized = dict(config)
-    for key in ("chat_url", "api_url", "health_url"):
+    upstream_chat_url = absolute_http_url(sanitized.get("upstream_chat_url"))
+    if upstream_chat_url and not absolute_http_url(sanitized.get("chat_url")):
+        sanitized["chat_url"] = upstream_chat_url
+    for key in ("chat_url", "api_url", "health_url", "upstream_chat_url", "upstream_health_url", "responses_url", "response_url"):
         value = str(sanitized.get(key) or "").strip()
-        if value.startswith("/api/models/"):
+        if value and not absolute_http_url(value):
             sanitized.pop(key, None)
     sanitized.pop("registry_source", None)
     sanitized.pop("deletable", None)
@@ -1328,6 +1341,7 @@ class HttpChatProvider:
             time.sleep(min(max(sleep_seconds, 0.0), interval))
 
     def request_json(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        url = absolute_http_url(url)
         if not url:
             raise RuntimeError("chat_url or base_url is required for API provider")
         request = urllib.request.Request(
@@ -1387,7 +1401,11 @@ class HttpChatProvider:
             chat_url = gemini_chat_url(config)
             payload = gemini_payload(messages=messages, options=options, response_schema=response_schema)
         else:
-            chat_url = str(config.get("chat_url") or config.get("api_url") or config.get("base_url") or "").strip()
+            chat_url = (
+                absolute_http_url(config.get("chat_url"))
+                or absolute_http_url(config.get("api_url"))
+                or absolute_http_url(config.get("base_url"))
+            )
             payload = {
                 "model": model,
                 "messages": messages,
@@ -1423,7 +1441,7 @@ def openai_url_with_endpoint(url: str, endpoint: str) -> str:
 
 
 def openai_chat_url(config: dict[str, Any]) -> str:
-    explicit = str(config.get("chat_url") or config.get("api_url") or "").strip()
+    explicit = absolute_http_url(config.get("chat_url")) or absolute_http_url(config.get("api_url"))
     if explicit:
         return explicit
     env_base_url, _ = provider_env_value(config, "base_url")
@@ -1432,10 +1450,10 @@ def openai_chat_url(config: dict[str, Any]) -> str:
 
 
 def openai_responses_url(config: dict[str, Any]) -> str:
-    explicit = str(config.get("responses_url") or config.get("response_url") or "").strip()
+    explicit = absolute_http_url(config.get("responses_url")) or absolute_http_url(config.get("response_url"))
     if explicit:
         return explicit
-    endpoint_url = str(config.get("chat_url") or config.get("api_url") or "").strip()
+    endpoint_url = absolute_http_url(config.get("chat_url")) or absolute_http_url(config.get("api_url"))
     if endpoint_url:
         return openai_url_with_endpoint(endpoint_url, "responses")
     env_base_url, _ = provider_env_value(config, "base_url")
@@ -1557,7 +1575,7 @@ def openai_responses_payload(
 
 
 def clova_chat_url(config: dict[str, Any]) -> str:
-    explicit = str(config.get("chat_url") or config.get("api_url") or "").strip()
+    explicit = absolute_http_url(config.get("chat_url")) or absolute_http_url(config.get("api_url"))
     model = urllib.parse.quote(str(config.get("model") or ""), safe="")
     if explicit:
         return explicit.format(model=model, modelName=model)
@@ -1639,7 +1657,7 @@ def clova_payload(
 
 
 def anthropic_chat_url(config: dict[str, Any]) -> str:
-    explicit = str(config.get("chat_url") or config.get("api_url") or "").strip()
+    explicit = absolute_http_url(config.get("chat_url")) or absolute_http_url(config.get("api_url"))
     if explicit:
         return explicit
     base_url = str(config.get("base_url") or "https://api.anthropic.com").rstrip("/")
@@ -1697,7 +1715,7 @@ def anthropic_payload(
 
 
 def gemini_chat_url(config: dict[str, Any]) -> str:
-    explicit = str(config.get("chat_url") or config.get("api_url") or "").strip()
+    explicit = absolute_http_url(config.get("chat_url")) or absolute_http_url(config.get("api_url"))
     model = urllib.parse.quote(str(config.get("model") or ""), safe="")
     if explicit:
         return explicit.format(model=model, modelName=model)
@@ -1950,7 +1968,7 @@ def ensure_ollama_models(provider: OllamaProvider, configs: list[dict[str, Any]]
         return set()
     try:
         installed = set(provider.installed_models())
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         raise SystemExit(f"Ollama is not reachable. Start Ollama at {provider.base_url}. Error: {exc}") from exc
     missing = sorted(model for model in requested if model not in installed)
     if missing and not allow_missing:
@@ -1993,7 +2011,7 @@ def ensure_ollama_models_by_endpoint(
         )
         try:
             installed = set(provider.installed_models())
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise SystemExit(f"Ollama is not reachable at {provider.base_url}. Error: {exc}") from exc
         missing = sorted(model for model in requested if model not in installed)
         if missing and not allow_missing:
@@ -2051,7 +2069,7 @@ def ollama_ps_snapshot(provider: OllamaProvider) -> dict[str, Any]:
             "models": models,
             "model_names": sorted(str(model.get("name") or model.get("model") or "") for model in models),
         }
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         return {
             "status": "error",
             "base_url": provider.base_url,
@@ -2086,7 +2104,7 @@ def unload_ollama_model(
     try:
         provider.unload_model(model)
         event["status"] = "requested"
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         event["status"] = "error"
         event["error"] = str(exc)
         if is_local_ollama_endpoint(provider.base_url):
