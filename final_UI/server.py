@@ -1852,7 +1852,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if provider == "clova_studio":
             return clova_chat_url(model_spec), clova_payload(
                 messages=messages,
-                options={"maxTokens": 1, "includeAiFilters": False},
+                options={"max_completion_tokens": 1, "includeAiFilters": False},
             )
         if provider == "anthropic":
             return anthropic_chat_url(model_spec), anthropic_payload(

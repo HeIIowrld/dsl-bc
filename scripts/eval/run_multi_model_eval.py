@@ -1648,7 +1648,7 @@ def clova_payload(
     elif response_format or (thinking and thinking.get("effort") != "none"):
         payload["maxCompletionTokens"] = max_tokens if max_tokens is not None else 1024
     elif max_tokens is not None:
-        payload["maxTokens"] = max_tokens
+        payload["maxCompletionTokens"] = max_tokens
 
     stop = option_value(options, "stop")
     if stop is not None and not (thinking and thinking.get("effort") != "none"):

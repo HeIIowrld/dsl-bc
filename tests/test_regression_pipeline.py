@@ -457,6 +457,16 @@ class EvalScoringTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"effort": "none"})
         self.assertEqual(payload["responseFormat"]["type"], "json")
 
+    def test_clova_payload_maps_max_tokens_to_v3_max_completion_tokens(self) -> None:
+        payload = clova_payload(
+            messages=[{"role": "user", "content": "ping"}],
+            options={"max_tokens": 1, "include_ai_filters": False},
+        )
+
+        self.assertEqual(payload["maxCompletionTokens"], 1)
+        self.assertIs(payload["includeAiFilters"], False)
+        self.assertNotIn("maxTokens", payload)
+
     def test_clova_auth_uses_lowercase_env_alias(self) -> None:
         provider = HttpChatProvider(timeout=1)
         with mock.patch.dict(os.environ, {"clova_api_key": "secret"}, clear=False):
@@ -3032,7 +3042,8 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(requested["url"], "https://clovastudio.stream.ntruss.com/v3/chat-completions/HCX-007")
         self.assertEqual(requested["headers"]["Authorization"], "Bearer stored-secret")
         self.assertEqual(requested["payload"]["messages"][0]["content"], "ping")
-        self.assertEqual(requested["payload"]["maxTokens"], 1)
+        self.assertEqual(requested["payload"]["maxCompletionTokens"], 1)
+        self.assertNotIn("maxTokens", requested["payload"])
 
     def test_clova_healthcheck_ignores_internal_proxy_api_url_for_live_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
