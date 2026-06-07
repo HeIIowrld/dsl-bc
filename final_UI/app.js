@@ -1981,11 +1981,21 @@ function renderAuthPanel() {
     formatDateTime(entry.timestamp),
     entry.user || "anonymous",
     authRoleLabel(entry.role || ""),
-    entry.remote_addr || "-",
+    entry.client_addr || entry.remote_addr || "-",
+    accessLogProxyLabel(entry),
     `${entry.method || ""} ${entry.path || ""}`.trim(),
     entry.status || "",
   ]);
-  logTarget.innerHTML = table(["시간", "계정", "권한", "IP", "요청", "응답"], rows);
+  logTarget.innerHTML = table(["시간", "계정", "권한", "사용자 IP", "프록시/출처", "요청", "응답"], rows);
+}
+
+function accessLogProxyLabel(entry) {
+  const clientIp = entry.client_addr || entry.remote_addr || "";
+  const parts = [];
+  if (entry.client_ip_source) parts.push(entry.client_ip_source);
+  if (entry.peer_addr && entry.peer_addr !== clientIp) parts.push(`via ${entry.peer_addr}`);
+  if (entry.proxy_headers_trusted === false && (entry.x_forwarded_for || entry.cf_connecting_ip)) parts.push("헤더 미신뢰");
+  return parts.length ? parts.join(" · ") : "-";
 }
 
 function authStatusItem(label, value, hint = "", tone = "") {

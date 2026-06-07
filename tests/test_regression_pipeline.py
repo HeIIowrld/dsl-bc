@@ -1979,6 +1979,74 @@ class FinalUiServerHelperTests(unittest.TestCase):
 
         self.assertEqual(calls, ["no_content", "no_content"])
 
+    def test_access_log_uses_cloudflare_connecting_ip_from_trusted_proxy(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.client_address = ("173.245.48.10", 443)
+        handler.headers = {"CF-Connecting-IP": "203.0.113.8"}
+
+        with mock.patch.dict(os.environ, {"FINAL_UI_TRUST_PROXY_HEADERS": "cloudflare", "FINAL_UI_TRUSTED_PROXIES": ""}, clear=False):
+            info = FinalUiHandler.request_ip_info(handler)
+
+        self.assertEqual(info["remote_addr"], "203.0.113.8")
+        self.assertEqual(info["client_addr"], "203.0.113.8")
+        self.assertEqual(info["peer_addr"], "173.245.48.10")
+        self.assertEqual(info["client_ip_source"], "CF-Connecting-IP")
+        self.assertTrue(info["proxy_headers_trusted"])
+
+    def test_access_log_ignores_spoofed_forwarded_for_from_untrusted_peer(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.client_address = ("198.51.100.9", 443)
+        handler.headers = {"X-Forwarded-For": "203.0.113.8"}
+
+        with mock.patch.dict(os.environ, {"FINAL_UI_TRUST_PROXY_HEADERS": "cloudflare", "FINAL_UI_TRUSTED_PROXIES": ""}, clear=False):
+            info = FinalUiHandler.request_ip_info(handler)
+
+        self.assertEqual(info["remote_addr"], "198.51.100.9")
+        self.assertEqual(info["client_addr"], "198.51.100.9")
+        self.assertEqual(info["peer_addr"], "198.51.100.9")
+        self.assertEqual(info["client_ip_source"], "socket")
+        self.assertFalse(info["proxy_headers_trusted"])
+        self.assertEqual(info["x_forwarded_for"], "203.0.113.8")
+
+    def test_access_log_uses_forwarded_ip_from_local_proxy(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.client_address = ("127.0.0.1", 443)
+        handler.headers = {"X-Forwarded-For": "203.0.113.8, 173.245.48.10"}
+
+        with mock.patch.dict(os.environ, {"FINAL_UI_TRUST_PROXY_HEADERS": "cloudflare", "FINAL_UI_TRUSTED_PROXIES": ""}, clear=False):
+            info = FinalUiHandler.request_ip_info(handler)
+
+        self.assertEqual(info["remote_addr"], "203.0.113.8")
+        self.assertEqual(info["client_addr"], "203.0.113.8")
+        self.assertEqual(info["peer_addr"], "127.0.0.1")
+        self.assertEqual(info["client_ip_source"], "X-Forwarded-For")
+        self.assertTrue(info["proxy_headers_trusted"])
+
+    def test_access_log_trusts_explicit_private_gateway(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.client_address = ("192.168.0.254", 443)
+        handler.headers = {"CF-Connecting-IP": "203.0.113.8"}
+
+        with mock.patch.dict(os.environ, {"FINAL_UI_TRUST_PROXY_HEADERS": "cloudflare", "FINAL_UI_TRUSTED_PROXIES": ""}, clear=False):
+            info = FinalUiHandler.request_ip_info(handler)
+
+        self.assertEqual(info["remote_addr"], "203.0.113.8")
+        self.assertEqual(info["peer_addr"], "192.168.0.254")
+        self.assertEqual(info["client_ip_source"], "CF-Connecting-IP")
+        self.assertTrue(info["proxy_headers_trusted"])
+
+    def test_access_log_can_disable_proxy_header_trust(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.client_address = ("173.245.48.10", 443)
+        handler.headers = {"CF-Connecting-IP": "203.0.113.8"}
+
+        with mock.patch.dict(os.environ, {"FINAL_UI_TRUST_PROXY_HEADERS": "none"}, clear=False):
+            info = FinalUiHandler.request_ip_info(handler)
+
+        self.assertEqual(info["remote_addr"], "173.245.48.10")
+        self.assertEqual(info["client_ip_source"], "socket")
+        self.assertFalse(info["proxy_headers_trusted"])
+
     def test_ollama_health_uses_model_specific_base_url(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}

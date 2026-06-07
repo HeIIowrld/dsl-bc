@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import base64
+import ipaddress
 import io
 import json
 import os
@@ -225,6 +226,42 @@ ACCESS_LOG_PATH = ROOT / "data" / "access_log.jsonl"
 ACCESS_LOG_LOCK = threading.Lock()
 ACCESS_LOG_MAX_BYTES = int(os.environ.get("FINAL_UI_ACCESS_LOG_MAX_BYTES", str(512 * 1024)))
 ACCESS_LOG_KEEP_LINES = int(os.environ.get("FINAL_UI_ACCESS_LOG_KEEP_LINES", "2000"))
+LOCAL_PROXY_CIDRS = (
+    "127.0.0.0/8",
+    "::1/128",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+)
+CLOUDFLARE_PROXY_CIDRS = (
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+    "2400:cb00::/32",
+    "2606:4700::/32",
+    "2803:f800::/32",
+    "2405:b500::/32",
+    "2405:8100::/32",
+    "2a06:98c0::/29",
+    "2c0f:f248::/32",
+)
+LOCAL_PROXY_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in LOCAL_PROXY_CIDRS)
+CLOUDFLARE_PROXY_NETWORKS = tuple(ipaddress.ip_network(cidr) for cidr in CLOUDFLARE_PROXY_CIDRS)
 
 
 def env_first(names: list[str]) -> tuple[str, str]:
@@ -769,6 +806,100 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     continue
         self.send_json({"entries": entries, "count": len(entries)})
 
+    def parse_ip_literal(self, value: str) -> str:
+        text = str(value or "").strip().strip('"').strip("'")
+        if not text:
+            return ""
+        if text.startswith("[") and "]" in text:
+            text = text[1 : text.index("]")]
+        elif text.count(":") == 1 and "." in text:
+            text = text.rsplit(":", 1)[0]
+        if "%" in text:
+            text = text.split("%", 1)[0]
+        try:
+            return str(ipaddress.ip_address(text))
+        except ValueError:
+            return ""
+
+    def first_forwarded_ip(self, value: str) -> str:
+        for part in str(value or "").split(","):
+            parsed = self.parse_ip_literal(part)
+            if parsed:
+                return parsed
+        return ""
+
+    def proxy_networks_from_env(self):
+        networks = []
+        for item in os.environ.get("FINAL_UI_TRUSTED_PROXIES", "").split(","):
+            cidr = item.strip()
+            if not cidr:
+                continue
+            try:
+                networks.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                continue
+        return tuple(networks)
+
+    def ip_in_networks(self, value: str, networks) -> bool:
+        parsed = self.parse_ip_literal(value)
+        if not parsed:
+            return False
+        address = ipaddress.ip_address(parsed)
+        return any(address in network for network in networks)
+
+    def proxy_headers_trusted(self, peer_addr: str) -> bool:
+        mode = os.environ.get("FINAL_UI_TRUST_PROXY_HEADERS", "cloudflare").strip().lower()
+        if mode in {"0", "false", "no", "off", "none"}:
+            return False
+        if mode in {"1", "true", "yes", "on", "all"}:
+            return True
+        env_networks = self.proxy_networks_from_env()
+        if env_networks and self.ip_in_networks(peer_addr, env_networks):
+            return True
+        if mode in {"strict_cloudflare", "cloudflare_strict"}:
+            return self.ip_in_networks(peer_addr, CLOUDFLARE_PROXY_NETWORKS)
+        if mode in {"cloudflare", "cf", ""}:
+            trusted_networks = (*CLOUDFLARE_PROXY_NETWORKS, *LOCAL_PROXY_NETWORKS)
+            return self.ip_in_networks(peer_addr, trusted_networks)
+        return self.ip_in_networks(peer_addr, env_networks)
+
+    def request_ip_info(self) -> dict:
+        headers = getattr(self, "headers", {}) or {}
+        peer_addr = self.parse_ip_literal(self.client_address[0] if getattr(self, "client_address", None) else "")
+        header_values = {
+            "cf_connecting_ip": str(headers.get("CF-Connecting-IP") or "").strip(),
+            "cf_connecting_ipv6": str(headers.get("CF-Connecting-IPv6") or "").strip(),
+            "true_client_ip": str(headers.get("True-Client-IP") or "").strip(),
+            "x_real_ip": str(headers.get("X-Real-IP") or "").strip(),
+            "x_forwarded_for": str(headers.get("X-Forwarded-For") or "").strip(),
+        }
+        trusted = self.proxy_headers_trusted(peer_addr)
+        client_addr = peer_addr
+        source = "socket"
+        if trusted:
+            candidates = [
+                ("CF-Connecting-IP", header_values["cf_connecting_ip"]),
+                ("CF-Connecting-IPv6", header_values["cf_connecting_ipv6"]),
+                ("True-Client-IP", header_values["true_client_ip"]),
+                ("X-Real-IP", header_values["x_real_ip"]),
+                ("X-Forwarded-For", self.first_forwarded_ip(header_values["x_forwarded_for"])),
+            ]
+            for candidate_source, candidate in candidates:
+                parsed = self.parse_ip_literal(candidate)
+                if parsed:
+                    client_addr = parsed
+                    source = candidate_source
+                    break
+        result = {
+            "remote_addr": client_addr,
+            "client_addr": client_addr,
+            "peer_addr": peer_addr,
+            "client_ip_source": source,
+            "proxy_headers_trusted": trusted,
+        }
+        result.update({key: value for key, value in header_values.items() if value})
+        return result
+
     def log_request(self, code="-", size="-") -> None:
         super().log_request(code, size)
         try:
@@ -777,7 +908,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             status = 0
         entry = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "remote_addr": self.client_address[0] if self.client_address else "",
+            **self.request_ip_info(),
             "method": self.command,
             "path": urlparse(self.path).path,
             "status": status,
