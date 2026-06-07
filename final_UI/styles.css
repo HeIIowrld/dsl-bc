@@ -1576,6 +1576,19 @@ body[data-active-tab="search"] .run-context-filter {
   letter-spacing: .07em;
 }
 
+.control-row > label:has(input, select, textarea) {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.control-row > label:has(input, select, textarea) > input,
+.control-row > label:has(input, select, textarea) > select,
+.control-row > label:has(input, select, textarea) > textarea {
+  width: 100%;
+}
+
 .control-row select,
 .control-row input[type="number"] {
   width: auto;
@@ -1598,6 +1611,7 @@ body[data-active-tab="search"] .run-context-filter {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;

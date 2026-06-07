@@ -86,6 +86,86 @@ def search_model_counts(page) -> list[dict[str, Any]]:
     )
 
 
+def layout_alignment_issues(page) -> list[str]:
+    return page.evaluate(
+        """() => {
+          const issues = [];
+          const visible = (el) => {
+            if (!el || el.hidden || el.matches('input[type="hidden"]')) return false;
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' &&
+              (el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+          };
+          const rectOf = (el) => {
+            const rect = el.getBoundingClientRect();
+            return {
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              right: Math.round(rect.right),
+              bottom: Math.round(rect.bottom),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            };
+          };
+          const textOf = (el) => (el.innerText || el.textContent || el.id || el.tagName)
+            .trim().replace(/\\s+/g, ' ').slice(0, 64);
+          const containers = [...document.querySelectorAll([
+            '.panel.active .model-form',
+            '.panel.active .run-form',
+            '.panel.active .prompt-variant-builder',
+            '.panel.active .dataset-upload-form',
+            '.panel.active .control-row',
+            '.panel.active .search-controls',
+            '.panel.active .question-picker-controls',
+          ].join(','))].filter(visible);
+
+          for (const container of containers) {
+            const containerName = container.id || [...container.classList].join('.') || container.tagName.toLowerCase();
+            const children = [...container.children].filter(visible);
+            for (let i = 0; i < children.length; i += 1) {
+              for (let j = i + 1; j < children.length; j += 1) {
+                const a = children[i];
+                const b = children[j];
+                if (a.contains(b) || b.contains(a)) continue;
+                const ar = rectOf(a);
+                const br = rectOf(b);
+                const xOverlap = Math.min(ar.right, br.right) - Math.max(ar.left, br.left);
+                const yOverlap = Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top);
+                if (xOverlap > 2 && yOverlap > 2) {
+                  issues.push(`${containerName}: overlapping controls "${textOf(a)}" / "${textOf(b)}"`);
+                }
+              }
+            }
+
+            const fields = children
+              .filter((el) => el.matches('label, .field-block'))
+              .map((el) => {
+                const control = el.querySelector('input:not([type="hidden"]), select, textarea');
+                return control && visible(control)
+                  ? { field: el, rect: rectOf(el), inputRect: rectOf(control) }
+                  : null;
+              })
+              .filter(Boolean);
+            const rows = new Map();
+            for (const item of fields) {
+              const key = Math.round(item.rect.top / 4) * 4;
+              if (!rows.has(key)) rows.set(key, []);
+              rows.get(key).push(item);
+            }
+            for (const row of rows.values()) {
+              if (row.length < 2) continue;
+              const tops = row.map((item) => item.inputRect.top);
+              const spread = Math.max(...tops) - Math.min(...tops);
+              if (spread > 3) {
+                issues.push(`${containerName}: input y-axis spread ${spread}px in "${row.map((item) => textOf(item.field)).join(' / ')}"`);
+              }
+            }
+          }
+          return issues;
+        }"""
+    )
+
+
 def audit(url: str, *, headless: bool, screenshot_dir: Path | None) -> dict[str, Any]:
     failures: list[str] = []
     warnings: list[str] = []
@@ -149,6 +229,8 @@ def audit(url: str, *, headless: bool, screenshot_dir: Path | None) -> dict[str,
 
         for tab_id in ["settings", "caseSets", "runEval", "overview", "compare", "failures", "explorer", "search"]:
             click_tab(page, tab_id, failures)
+            for issue in layout_alignment_issues(page):
+                failures.append(f"{tab_id} layout: {issue}")
             if screenshot_dir:
                 screenshot_dir.mkdir(parents=True, exist_ok=True)
                 path = screenshot_dir / f"{tab_id}.png"
