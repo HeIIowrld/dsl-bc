@@ -2717,6 +2717,144 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(requested["url"], "https://generativelanguage.googleapis.com/v1beta/models")
         self.assertEqual(requested["headers"]["X-goog-api-key"], "stored-secret")
 
+    def test_openai_compatible_healthcheck_uses_models_endpoint(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+        requested = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=0):
+            requested["url"] = request.full_url
+            requested["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "OPENAI_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "openai_compatible_judge",
+                {
+                    "provider": "openai_compatible",
+                    "model": "gpt-5.5",
+                    "base_url": "https://api.openai.com/v1/chat/completions",
+                    "api_key_env": "OPENAI_API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(requested["url"], "https://api.openai.com/v1/models")
+        self.assertEqual(requested["headers"]["Authorization"], "Bearer stored-secret")
+
+    def test_anthropic_healthcheck_uses_models_endpoint_and_version_header(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+        requested = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(request, timeout=0):
+            requested["url"] = request.full_url
+            requested["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "ANTHROPIC_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "anthropic_judge",
+                {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-20250514",
+                    "base_url": "https://api.anthropic.com/v1/messages",
+                    "api_key_env": "ANTHROPIC_API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(requested["url"], "https://api.anthropic.com/v1/models")
+        self.assertEqual(requested["headers"]["X-api-key"], "stored-secret")
+        self.assertEqual(requested["headers"]["Anthropic-version"], "2023-06-01")
+
+    def test_commercial_healthcheck_without_live_endpoint_checks_secret_only(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("stored-secret", "CLOVA_STUDIO_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen") as urlopen_mock:
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "clova_hcx007_judge",
+                {
+                    "provider": "clova_studio",
+                    "model": "HCX-007",
+                    "base_url": "https://clovastudio.stream.ntruss.com",
+                    "api_key_env": "CLOVA_STUDIO_API_KEY",
+                },
+            )
+
+        self.assertFalse(urlopen_mock.called)
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "configured")
+        self.assertEqual(captured["payload"]["health_check_mode"], "credentials_only")
+
+    def test_commercial_healthcheck_without_live_endpoint_reports_missing_secret(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("", "CLOVA_STUDIO_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen") as urlopen_mock:
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "clova_hcx007_judge",
+                {
+                    "provider": "clova_studio",
+                    "model": "HCX-007",
+                    "base_url": "https://clovastudio.stream.ntruss.com",
+                    "api_key_env": "CLOVA_STUDIO_API_KEY",
+                },
+            )
+
+        self.assertFalse(urlopen_mock.called)
+        self.assertEqual(captured["status"], 503)
+        self.assertEqual(captured["payload"]["status"], "missing_secret")
+
     def test_external_healthcheck_404_is_not_success(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
@@ -2738,6 +2876,7 @@ class FinalUiServerHelperTests(unittest.TestCase):
                     "provider": "generic_api",
                     "model": "custom",
                     "base_url": "https://vendor.example.com",
+                    "upstream_health_url": "https://vendor.example.com/health",
                     "api_key_env": "API_KEY",
                 },
             )
@@ -2745,6 +2884,35 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(captured["status"], 503)
         self.assertEqual(captured["payload"]["status"], "endpoint_not_found")
         self.assertIn("HTTP 404", captured["payload"]["message"])
+
+    def test_external_healthcheck_auth_error_is_not_success(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        def fake_urlopen(request, timeout=0):
+            raise urlerror.HTTPError(request.full_url, 401, "Unauthorized", hdrs=None, fp=None)
+
+        handler.send_json = fake_send_json
+        handler.provider_api_key_value = lambda config: ("bad-secret", "OPENAI_API_KEY")
+        with mock.patch("final_UI.server.urlrequest.urlopen", fake_urlopen):
+            FinalUiHandler.handle_external_api_health(
+                handler,
+                "openai_judge",
+                {
+                    "provider": "openai_native",
+                    "model": "gpt-5.5",
+                    "base_url": "https://api.openai.com",
+                    "api_key_env": "OPENAI_API_KEY",
+                },
+            )
+
+        self.assertEqual(captured["status"], 503)
+        self.assertEqual(captured["payload"]["status"], "auth_failed")
+        self.assertIn("HTTP 401", captured["payload"]["message"])
 
     def test_upload_question_dataset_saves_user_csv_and_discovers_it(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)

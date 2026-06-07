@@ -1685,7 +1685,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         health_url = model_spec.get("upstream_health_url") or ""
         base_url = str(model_spec.get("base_url") or "").rstrip("/")
         provider = str(model_spec.get("provider") or "")
-        if provider == "openai_native" and not health_url:
+        if provider in {"openai_native", "openai_compatible"} and not health_url:
             env_base_url, _ = provider_env_value(model_spec, "base_url")
             openai_base_url = str(base_url or env_base_url or "https://api.openai.com").rstrip("/")
             for suffix in ("/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses", "/v1/models", "/models"):
@@ -1693,6 +1693,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     openai_base_url = openai_base_url[: -len(suffix)].rstrip("/")
                     break
             health_url = openai_base_url + ("/models" if openai_base_url.endswith("/v1") else "/v1/models")
+        if provider == "anthropic" and not health_url:
+            env_base_url, _ = provider_env_value(model_spec, "base_url")
+            anthropic_base_url = str(base_url or env_base_url or "https://api.anthropic.com").rstrip("/")
+            for suffix in ("/v1/messages", "/messages", "/v1/models", "/models"):
+                if anthropic_base_url.endswith(suffix):
+                    anthropic_base_url = anthropic_base_url[: -len(suffix)].rstrip("/")
+                    break
+            health_url = anthropic_base_url + ("/models" if anthropic_base_url.endswith("/v1") else "/v1/models")
         if provider == "gemini" and not health_url:
             env_base_url, _ = provider_env_value(model_spec, "base_url")
             gemini_base_url = str(base_url or env_base_url or "https://generativelanguage.googleapis.com").rstrip("/")
@@ -1701,19 +1709,6 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     gemini_base_url = gemini_base_url[: -len(suffix)].rstrip("/")
                     break
             health_url = gemini_base_url + "/v1beta/models"
-        if not health_url and base_url:
-            health_url = base_url
-        if not health_url:
-            self.send_json(
-                {
-                    "status": "configured",
-                    "version": version,
-                    "provider": model_spec.get("provider"),
-                    "model": model_spec.get("model"),
-                    "message": "API model is registered. Set health_url to enable live health checks.",
-                }
-            )
-            return
         headers = self.auth_headers(model_spec)
         if headers is None:
             env_error = self.api_key_env_name_error(model_spec.get("api_key_env"))
@@ -1726,6 +1721,18 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "message": env_error or f"Environment variable or stored server API key is not set: {model_spec.get('api_key_env')}",
                 },
                 status=503,
+            )
+            return
+        if not health_url:
+            self.send_json(
+                {
+                    "status": "configured",
+                    "version": version,
+                    "provider": model_spec.get("provider"),
+                    "model": model_spec.get("model"),
+                    "message": "API credentials are configured. Set health_url to enable a live HTTP health check.",
+                    "health_check_mode": "credentials_only",
+                }
             )
             return
         try:
@@ -1741,7 +1748,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     }
                 )
         except urlerror.HTTPError as exc:
-            status = "connected" if exc.code in {401, 403, 405} else ("endpoint_not_found" if exc.code == 404 else "offline")
+            if exc.code == 405:
+                status = "connected"
+            elif exc.code in {401, 403}:
+                status = "auth_failed"
+            elif exc.code == 404:
+                status = "endpoint_not_found"
+            else:
+                status = "offline"
             self.send_json(
                 {
                     "status": status,
@@ -1751,6 +1765,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "message": (
                         "Health endpoint was not found (HTTP 404). Check base_url/chat_url/health_url."
                         if exc.code == 404
+                        else "Health endpoint rejected the configured API key or permission (HTTP %s)." % exc.code
+                        if exc.code in {401, 403}
                         else f"Health endpoint responded HTTP {exc.code}."
                     ),
                 },
