@@ -223,6 +223,7 @@ let evalRunHistory = [];
 let selectedRunId = "";
 let evalCatalog = { profiles: {}, pools: {}, default_seed: 42 };
 let modelHealthCheckInFlight = false;
+let toastSequence = 0;
 let modelHealthCheckProgress = null;
 let judgePickerInitialized = false;
 let lastJudgeProvider = "";
@@ -1340,7 +1341,8 @@ function syncJudgeRegistryApiKeyEnv() {
   const configId = document.getElementById("judgeRegistryConfigId")?.value.trim() || "";
   const nextValue = generatedJudgeApiKeyEnv(provider, configId);
   const previousDefault = input.dataset.providerDefault || "";
-  if (!input.value || input.value === previousDefault) {
+  const currentValue = input.value.trim();
+  if (!currentValue || currentValue === previousDefault || apiKeyEnvNameErrorClient(currentValue)) {
     input.value = nextValue;
   }
   input.dataset.providerDefault = nextValue;
@@ -2413,14 +2415,14 @@ function judgeRegistryPayload(form) {
   ].forEach((key) => {
     payload[key] = String(data.get(key) ?? "").trim();
   });
+  const apiKeyValue = String(data.get("api_key_value") ?? "").trim();
   if (payload.provider === "ollama") {
     payload.api_key_env = "";
-  } else if (!payload.api_key_env) {
+  } else if (!payload.api_key_env || apiKeyEnvNameErrorClient(payload.api_key_env)) {
     payload.api_key_env = generatedJudgeApiKeyEnv(payload.provider, payload.config_id);
   }
   const apiKeyEnvError = apiKeyEnvNameErrorClient(payload.api_key_env);
   if (apiKeyEnvError) throw new Error(apiKeyEnvError);
-  const apiKeyValue = String(data.get("api_key_value") ?? "").trim();
   if (apiKeyValue) payload.api_key_value = apiKeyValue;
   payload.upstream_chat_url = payload.chat_url;
 
@@ -2909,18 +2911,62 @@ async function deleteRegisteredModel(version) {
   }
 }
 
+function toastRegion() {
+  let region = document.getElementById("toastRegion");
+  if (!region) {
+    region = document.createElement("div");
+    region.id = "toastRegion";
+    region.className = "toast-region";
+    region.setAttribute("aria-live", "polite");
+    region.setAttribute("aria-label", "알림");
+    document.body.appendChild(region);
+  }
+  return region;
+}
+
+function removeToast(toast) {
+  if (!toast) return;
+  toast.remove();
+}
+
+function showToast(message, type = "") {
+  if (!message || !["ok", "error"].includes(type)) return;
+  const region = toastRegion();
+  const toast = document.createElement("div");
+  toast.className = `toast-message ${type}`.trim();
+  toast.dataset.toastId = String(++toastSequence);
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
+
+  const text = document.createElement("span");
+  text.textContent = message;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.setAttribute("aria-label", "알림 닫기");
+  close.textContent = "x";
+  close.addEventListener("click", () => removeToast(toast));
+
+  toast.append(text, close);
+  region.prepend(toast);
+  [...region.querySelectorAll(".toast-message")].slice(4).forEach(removeToast);
+  window.setTimeout(() => removeToast(toast), type === "error" ? 8000 : 4500);
+}
+
+function setPanelMessage(target, message, type) {
+  if (!target) return;
+  const normalizedType = type || "";
+  target.className = `form-message ${normalizedType}`.trim();
+  target.textContent = message;
+  showToast(message, normalizedType);
+}
+
 function setRegistryMessage(message, type) {
   const target = document.getElementById("modelRegistryMessage");
-  if (!target) return;
-  target.className = `form-message ${type || ""}`.trim();
-  target.textContent = message;
+  setPanelMessage(target, message, type);
 }
 
 function setJudgeRegistryMessage(message, type) {
   const target = document.getElementById("judgeRegistryMessage");
-  if (!target) return;
-  target.className = `form-message ${type || ""}`.trim();
-  target.textContent = message;
+  setPanelMessage(target, message, type);
 }
 
 function renderJudgeRegistry() {
@@ -4866,16 +4912,12 @@ function renderProgressByModel(label, byModel) {
 
 function setEvalRunMessage(message, className) {
   const target = document.getElementById("evalRunMessage");
-  if (!target) return;
-  target.textContent = message;
-  target.className = `form-message ${className || ""}`.trim();
+  setPanelMessage(target, message, className);
 }
 
 function setEvalReblendMessage(message, className) {
   const target = document.getElementById("evalReblendMessage");
-  if (!target) return;
-  target.textContent = message;
-  target.className = `form-message ${className || ""}`.trim();
+  setPanelMessage(target, message, className);
 }
 
 function detailBlock(label, value) {

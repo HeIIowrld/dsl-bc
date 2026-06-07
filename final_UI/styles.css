@@ -932,6 +932,57 @@ button.run-submit small {
 .form-message.ok { color: var(--green); }
 .form-message.error { color: var(--red); }
 
+.toast-region {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+  display: grid;
+  width: min(420px, calc(100vw - 32px));
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast-message {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-hi);
+  border-left: 4px solid var(--blue);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+  pointer-events: auto;
+}
+
+.toast-message.ok {
+  border-left-color: var(--green);
+}
+
+.toast-message.error {
+  border-left-color: var(--red);
+}
+
+.toast-message span {
+  font-family: var(--font-body);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.toast-message button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-dim);
+  line-height: 1;
+}
+
 .workflow-banner {
   display: flex;
   align-items: center;
