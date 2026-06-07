@@ -836,9 +836,11 @@ function initializeRunFormGuards() {
 function initializeRegistryProviderControls() {
   const modelProvider = document.getElementById("modelProvider");
   const judgeProvider = document.getElementById("judgeRegistryProvider");
+  const judgeConfigId = document.getElementById("judgeRegistryConfigId");
   const judgePromptPreset = document.getElementById("judgeRegistryPromptPreset");
   modelProvider?.addEventListener("change", updateModelRegistryProviderFields);
   judgeProvider?.addEventListener("change", updateJudgeRegistryProviderFields);
+  judgeConfigId?.addEventListener("input", () => syncJudgeRegistryApiKeyEnv());
   judgePromptPreset?.addEventListener("change", updateJudgePromptPresetFields);
   updateModelRegistryProviderFields();
   updateJudgeRegistryProviderFields();
@@ -897,11 +899,12 @@ function updateJudgeRegistryProviderFields() {
   const isOllama = provider === "ollama";
   setRegistryFieldVisible("judgeRegistryBaseUrl", true);
   setRegistryFieldVisible("judgeRegistryChatUrl", !isOllama);
-  setRegistryFieldVisible("judgeRegistryApiKeyEnv", !isOllama);
+  setRegistryFieldVisible("judgeRegistryApiKeyValue", !isOllama);
   setRegistryFieldRequired("judgeRegistryConfigId", true);
   setRegistryFieldRequired("judgeRegistryDisplayName", true);
   setRegistryFieldRequired("judgeRegistryModel", true);
-  setRegistryFieldRequired("judgeRegistryApiKeyEnv", !isOllama);
+  setRegistryFieldRequired("judgeRegistryApiKeyValue", false);
+  setRegistryFieldRequired("judgeRegistryApiKeyEnv", false);
   const endpointInput = document.getElementById("judgeRegistryChatUrl");
   if (endpointInput) {
     endpointInput.placeholder = provider === "openai_native"
@@ -911,6 +914,7 @@ function updateJudgeRegistryProviderFields() {
         : "https://host.example.com/v1/chat/completions";
   }
   applyJudgeRegistryProviderDefaults();
+  syncJudgeRegistryApiKeyEnv();
 }
 
 function updateJudgePromptPresetFields() {
@@ -1305,6 +1309,51 @@ function judgeRegistryProviderDefaults(provider) {
   }[provider] || {};
 }
 
+function generatedJudgeApiKeyEnv(provider, configId) {
+  const defaults = judgeRegistryProviderDefaults(provider);
+  if (defaults.apiKeyEnv) return defaults.apiKeyEnv;
+  const id = safeConfigIdClient(configId || provider || "judge").toUpperCase() || "JUDGE";
+  return `FINAL_UI_${id.slice(0, 90)}_API_KEY`;
+}
+
+function syncJudgeRegistryApiKeyEnv() {
+  const input = document.getElementById("judgeRegistryApiKeyEnv");
+  if (!input) return "";
+  const provider = document.getElementById("judgeRegistryProvider")?.value || "clova_studio";
+  if (provider === "ollama") {
+    input.value = "";
+    input.dataset.providerDefault = "";
+    renderJudgeRegistryApiKeyStatus();
+    return "";
+  }
+  const configId = document.getElementById("judgeRegistryConfigId")?.value.trim() || "";
+  const nextValue = generatedJudgeApiKeyEnv(provider, configId);
+  const previousDefault = input.dataset.providerDefault || "";
+  if (!input.value || input.value === previousDefault) {
+    input.value = nextValue;
+  }
+  input.dataset.providerDefault = nextValue;
+  renderJudgeRegistryApiKeyStatus();
+  return input.value.trim();
+}
+
+function renderJudgeRegistryApiKeyStatus() {
+  const status = document.getElementById("judgeRegistryApiKeyStatus");
+  if (!status) return;
+  const provider = document.getElementById("judgeRegistryProvider")?.value || "clova_studio";
+  if (provider === "ollama") {
+    status.textContent = "";
+    status.className = "registry-field-note";
+    return;
+  }
+  const envName = document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || generatedJudgeApiKeyEnv(provider, "");
+  const stored = serverApiSecrets.find((item) => item.envName === envName && item.hasValue);
+  status.textContent = stored
+    ? "저장된 서버 API 키가 있습니다. 새 키를 입력하면 교체됩니다."
+    : "입력한 키는 서버 로컬 secret 파일에 저장되고 GitHub에는 올라가지 않습니다.";
+  status.className = `registry-field-note ${stored ? "ok" : ""}`.trim();
+}
+
 function normalizeJudgeApiPresetClient(preset) {
   if (!preset || typeof preset !== "object") return null;
   const id = String(preset.id || preset.preset_id || "").trim();
@@ -1383,7 +1432,7 @@ function applyJudgeApiPreset(preset = selectedJudgeApiPreset()) {
   copyModelField("judgeRegistryBaseUrl", preset.baseUrl || "");
   copyModelField("judgeRegistryChatUrl", preset.chatUrl || "");
   copyModelField("judgeRegistryApiKeyEnv", preset.apiKeyEnv || "");
-  copyModelField("serverApiKeyEnvName", preset.apiKeyEnv || "");
+  copyModelField("judgeRegistryApiKeyValue", "");
   copyModelField("judgeRegistryTemperature", preset.temperature ?? 0);
   copyModelField("judgeRegistryTopP", preset.topP ?? 0.1);
   copyModelField("judgeRegistryMaxTokens", preset.maxTokens ?? 1024);
@@ -1397,8 +1446,8 @@ function applyJudgeApiPreset(preset = selectedJudgeApiPreset()) {
   updateJudgeRegistryProviderFields();
   updateJudgePromptPresetFields();
   openJudgeAdvancedFields();
-  const keyLabel = preset.apiKeyEnv ? `${preset.apiKeyEnv} 환경변수` : "API key 없이";
-  setJudgeRegistryMessage(`프리셋 적용: ${preset.label || preset.id}. ${keyLabel}를 준비한 뒤 등록하세요.`, "ok");
+  const keyLabel = preset.provider === "ollama" ? "API key 없이" : "API key를 입력한 뒤";
+  setJudgeRegistryMessage(`프리셋 적용: ${preset.label || preset.id}. ${keyLabel} 등록하세요.`, "ok");
 }
 
 function currentJudgeApiPresetPayload(label) {
@@ -1414,14 +1463,17 @@ function currentJudgeApiPresetPayload(label) {
   const model = document.getElementById("judgeRegistryModel")?.value.trim() || "";
   const displayName = document.getElementById("judgeRegistryDisplayName")?.value.trim() || label;
   const idBase = safeConfigIdClient(label || displayName || model || provider) || "custom_judge_api";
-  const apiKeyEnv = document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || "";
+  const configId = document.getElementById("judgeRegistryConfigId")?.value.trim() || `${idBase}_judge`;
+  const apiKeyEnv = provider === "ollama"
+    ? ""
+    : (document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || generatedJudgeApiKeyEnv(provider, configId));
   const apiKeyEnvError = apiKeyEnvNameErrorClient(apiKeyEnv);
   if (apiKeyEnvError) throw new Error(apiKeyEnvError);
   return {
     id: `custom_${idBase}`,
     label,
     provider,
-    configId: document.getElementById("judgeRegistryConfigId")?.value.trim() || `${idBase}_judge`,
+    configId,
     displayName,
     model,
     baseUrl: document.getElementById("judgeRegistryBaseUrl")?.value.trim() || "",
@@ -1516,108 +1568,13 @@ function replaceServerApiSecrets(keys) {
   serverApiSecrets = normalizeServerApiSecrets(keys);
 }
 
-function setServerApiKeyMessage(message, type = "") {
-  const element = document.getElementById("serverApiKeyMessage");
-  if (!element) return;
-  element.textContent = message || "";
-  element.className = `registry-message ${type}`.trim();
-}
-
 function renderServerApiKeyControls() {
-  const datalist = document.getElementById("serverApiKeyEnvList");
-  if (datalist) {
-    datalist.innerHTML = serverApiSecrets
-      .map((item) => `<option value="${escapeHtml(item.envName)}">${escapeHtml(item.updatedAt || "stored")}</option>`)
-      .join("");
-  }
-  const names = serverApiSecrets.map((item) => item.envName);
-  const message = names.length
-    ? `저장된 서버 키: ${names.join(", ")}`
-    : "저장된 서버 API 키가 없습니다.";
-  setServerApiKeyMessage(message, names.length ? "ok" : "");
-}
-
-function currentServerApiKeyEnvName() {
-  return document.getElementById("serverApiKeyEnvName")?.value.trim()
-    || document.getElementById("judgeRegistryApiKeyEnv")?.value.trim()
-    || "";
-}
-
-async function saveServerApiKey() {
-  const envName = currentServerApiKeyEnvName();
-  const value = document.getElementById("serverApiKeyValue")?.value.trim() || "";
-  if (!envName) {
-    setServerApiKeyMessage("저장할 환경변수 이름을 입력하세요.", "error");
-    document.getElementById("serverApiKeyEnvName")?.focus();
-    return;
-  }
-  const envNameError = apiKeyEnvNameErrorClient(envName);
-  if (envNameError) {
-    setServerApiKeyMessage(envNameError, "error");
-    document.getElementById("serverApiKeyEnvName")?.focus();
-    return;
-  }
-  if (!value) {
-    setServerApiKeyMessage("저장할 API 키 값을 입력하세요.", "error");
-    document.getElementById("serverApiKeyValue")?.focus();
-    return;
-  }
-  try {
-    setServerApiKeyMessage("서버 API 키 저장 중...", "");
-    const response = await apiFetch("api/server-api-secrets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ env_name: envName, value }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    replaceServerApiSecrets(body.keys || []);
-    copyModelField("serverApiKeyEnvName", body.env_name || envName);
-    copyModelField("serverApiKeyValue", "");
-    renderServerApiKeyControls();
-    setServerApiKeyMessage(`서버 API 키 저장 완료: ${body.env_name || envName}`, "ok");
-  } catch (error) {
-    setServerApiKeyMessage(`서버 API 키 저장 실패: ${error.message}`, "error");
-  }
-}
-
-async function deleteServerApiKey() {
-  const envName = currentServerApiKeyEnvName();
-  if (!envName) {
-    setServerApiKeyMessage("삭제할 환경변수 이름을 입력하세요.", "error");
-    document.getElementById("serverApiKeyEnvName")?.focus();
-    return;
-  }
-  try {
-    setServerApiKeyMessage("서버 API 키 삭제 중...", "");
-    const response = await apiFetch(`api/server-api-secrets/${encodeURIComponent(envName)}`, {
-      method: "DELETE",
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    replaceServerApiSecrets(body.keys || []);
-    copyModelField("serverApiKeyValue", "");
-    renderServerApiKeyControls();
-    setServerApiKeyMessage(`서버 API 키 삭제 완료: ${envName}`, "ok");
-  } catch (error) {
-    setServerApiKeyMessage(`서버 API 키 삭제 실패: ${error.message}`, "error");
-  }
+  renderJudgeRegistryApiKeyStatus();
 }
 
 function bindServerApiKeyControls() {
   renderServerApiKeyControls();
-  document.getElementById("serverApiKeySave")?.addEventListener("click", saveServerApiKey);
-  document.getElementById("serverApiKeyDelete")?.addEventListener("click", deleteServerApiKey);
-  document.getElementById("judgeRegistryApiKeyEnv")?.addEventListener("input", (event) => {
-    const envInput = document.getElementById("serverApiKeyEnvName");
-    if (envInput && (!envInput.value || envInput.dataset.syncedFromJudgeEnv === "true")) {
-      envInput.value = event.target.value || "";
-      envInput.dataset.syncedFromJudgeEnv = "true";
-    }
-  });
-  document.getElementById("serverApiKeyEnvName")?.addEventListener("input", (event) => {
-    event.target.dataset.syncedFromJudgeEnv = "false";
-  });
+  document.getElementById("judgeRegistryApiKeyValue")?.addEventListener("input", renderJudgeRegistryApiKeyStatus);
 }
 
 function copyJudgeRegistryDefault(id, value) {
@@ -1640,6 +1597,7 @@ function applyJudgeRegistryProviderDefaults() {
   copyJudgeRegistryDefault("judgeRegistryBaseUrl", defaults.baseUrl || "");
   copyJudgeRegistryDefault("judgeRegistryChatUrl", defaults.chatUrl || "");
   copyJudgeRegistryDefault("judgeRegistryApiKeyEnv", defaults.apiKeyEnv || "");
+  renderJudgeRegistryApiKeyStatus();
 }
 
 function splitJudgeConfigIds(value) {
@@ -2410,9 +2368,14 @@ function bindJudgeRegistryForm() {
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
 
       modelRegistry = body.registry || modelRegistry;
+      if (body.server_api_keys) {
+        replaceServerApiSecrets(body.server_api_keys);
+        renderServerApiKeyControls();
+      }
       renderJudgeRegistry();
       updateJudgePlaceholders();
-      setJudgeRegistryMessage(`Judge 등록/업데이트 완료: ${modelLabelForVersion(body.config.config_id)}`, "ok");
+      const keyNote = body.stored_api_key_env ? " API 키도 서버에 저장했습니다." : "";
+      setJudgeRegistryMessage(`Judge 등록/업데이트 완료: ${modelLabelForVersion(body.config.config_id)}.${keyNote}`, "ok");
       resetJudgeRegistryForm(form);
     } catch (error) {
       setJudgeRegistryMessage(`Judge 등록 실패: ${error.message}`, "error");
@@ -2438,8 +2401,15 @@ function judgeRegistryPayload(form) {
   ].forEach((key) => {
     payload[key] = String(data.get(key) ?? "").trim();
   });
+  if (payload.provider === "ollama") {
+    payload.api_key_env = "";
+  } else if (!payload.api_key_env) {
+    payload.api_key_env = generatedJudgeApiKeyEnv(payload.provider, payload.config_id);
+  }
   const apiKeyEnvError = apiKeyEnvNameErrorClient(payload.api_key_env);
   if (apiKeyEnvError) throw new Error(apiKeyEnvError);
+  const apiKeyValue = String(data.get("api_key_value") ?? "").trim();
+  if (apiKeyValue) payload.api_key_value = apiKeyValue;
   payload.upstream_chat_url = payload.chat_url;
 
   const options = {};
@@ -2507,7 +2477,7 @@ function prefillJudgeFromTarget(targetId) {
   copyModelField("judgeRegistryBaseUrl", spec.base_url || "");
   copyModelField("judgeRegistryChatUrl", externalEndpointValue(spec, "chat_url", "upstream_chat_url"));
   copyModelField("judgeRegistryApiKeyEnv", spec.api_key_env || "");
-  copyModelField("serverApiKeyEnvName", spec.api_key_env || "");
+  copyModelField("judgeRegistryApiKeyValue", "");
   copyModelField("judgeRegistryTemperature", options.temperature ?? 0);
   copyModelField("judgeRegistryTopP", options.top_p ?? options.topP ?? 0.1);
   copyModelField("judgeRegistryMaxTokens", judgeMaxTokensFromOptions(options));
@@ -2594,7 +2564,7 @@ function apiKeyEnvNameErrorClient(value) {
   }
   const commonSecretPrefixes = ["sk-", "sk_", "AIza", "ya29.", "xai-", "gsk_", "nvapi-"];
   if (commonSecretPrefixes.some((prefix) => text.startsWith(prefix)) || (!text.includes("_") && text.length >= 24)) {
-    return "API 키처럼 보입니다. 이 칸에는 GEMINI_API_KEY 같은 이름을 넣고, 실제 키 값은 서버 API 키 저장에 입력하세요.";
+    return "API 키처럼 보입니다. 이 값은 숨겨진 참조 이름이어야 하며 실제 키 값은 API 키 입력칸에 넣어야 합니다.";
   }
   return "";
 }
@@ -2726,7 +2696,7 @@ function editRegisteredJudge(version) {
   copyModelField("judgeRegistryBaseUrl", spec.base_url || "");
   copyModelField("judgeRegistryChatUrl", externalEndpointValue(spec, "chat_url", "upstream_chat_url"));
   copyModelField("judgeRegistryApiKeyEnv", spec.api_key_env || "");
-  copyModelField("serverApiKeyEnvName", spec.api_key_env || "");
+  copyModelField("judgeRegistryApiKeyValue", "");
   copyModelField("judgeRegistryTemperature", options.temperature ?? 0);
   copyModelField("judgeRegistryTopP", options.top_p ?? options.topP ?? 0.1);
   copyModelField("judgeRegistryMaxTokens", judgeMaxTokensFromOptions(options));
@@ -2763,6 +2733,7 @@ function resetJudgeRegistryForm(form = document.getElementById("judgeRegistryFor
   copyModelField("judgeRegistryPromptVersion", judgePromptPresets.judge_default_v1.version);
   copyModelField("judgeRegistrySystemPrompt", "");
   copyModelField("judgeRegistryOptionsJson", "");
+  copyModelField("judgeRegistryApiKeyValue", "");
   updateJudgeRegistryProviderFields();
   updateJudgePromptPresetFields();
 }

@@ -1108,13 +1108,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not value:
             self.send_json({"error": "API key value is required"}, status=400)
             return
-        secrets_store = self.load_server_api_secrets_file()
-        secrets_store[env_name] = {
-            "value": value,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "updated_by": getattr(self, "current_actor", "anonymous"),
-        }
-        self.write_server_api_secrets_file(secrets_store)
+        secrets_store = self.store_server_api_secret_value(env_name, value)
         self.send_json({"status": "ok", "env_name": env_name, "keys": self.server_api_secret_summaries(secrets_store)})
 
     def handle_delete_server_api_secret(self, env_name: str):
@@ -1195,6 +1189,19 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not normalized_name:
             return ""
         return str(self.load_server_api_secrets_file().get(normalized_name, {}).get("value") or "")
+
+    def store_server_api_secret_value(self, env_name: str, value: str):
+        normalized_name = self.safe_env_name(env_name)
+        if not normalized_name:
+            return self.load_server_api_secrets_file()
+        secrets_store = self.load_server_api_secrets_file()
+        secrets_store[normalized_name] = {
+            "value": str(value or ""),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "updated_by": getattr(self, "current_actor", "anonymous"),
+        }
+        self.write_server_api_secrets_file(secrets_store)
+        return secrets_store
 
     def provider_api_key_value(self, config: dict):
         provider = str(config.get("provider") or "")
@@ -1304,8 +1311,23 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return "api_key_env must be an environment variable name such as GEMINI_API_KEY, not a raw API key."
         common_secret_prefixes = ("sk-", "sk_", "AIza", "ya29.", "xai-", "gsk_", "nvapi-")
         if text.startswith(common_secret_prefixes) or ("_" not in text and len(text) >= 24):
-            return "api_key_env looks like a raw API key. Store the key value in Server API key storage and keep api_key_env as GEMINI_API_KEY."
+            return "api_key_env looks like a raw API key. Submit the key value as api_key_value and keep api_key_env as GEMINI_API_KEY."
         return ""
+
+    def default_api_key_env_name(self, provider: str, config_id: str = ""):
+        aliases = PROVIDER_ENV_ALIASES.get(str(provider or ""), {}).get("api_key", [])
+        for name in aliases:
+            if self.safe_env_name(name) and name.upper() == name:
+                return name
+        for name in aliases:
+            if self.safe_env_name(name):
+                return name
+        base = re.sub(r"[^A-Za-z0-9_]+", "_", str(config_id or provider or "judge")).strip("_").upper()
+        if not base:
+            base = "JUDGE"
+        if not re.match(r"^[A-Z_]", base):
+            base = f"JUDGE_{base}"
+        return self.safe_env_name(f"FINAL_UI_{base[:90]}_API_KEY") or "FINAL_UI_JUDGE_API_KEY"
 
     def handle_save_model_registry_entry(self):
         payload = self.read_json_body()
@@ -1317,6 +1339,23 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         existing_config = self.load_registry().get(incoming_config_id, {}) if incoming_config_id else {}
         if existing_config:
             config = {**existing_config, **config}
+        stored_api_key_env = ""
+        stored_api_key_summaries = []
+        api_key_value = str(config.pop("api_key_value", "") or config.pop("server_api_key_value", "") or "").strip()
+        if api_key_value and str(config.get("provider") or "").strip() != "ollama":
+            raw_env_name = str(config.get("api_key_env") or "").strip()
+            if raw_env_name:
+                env_name_error = self.api_key_env_name_error(raw_env_name)
+                if env_name_error:
+                    self.send_json({"error": env_name_error}, status=400)
+                    return
+                env_name = self.safe_env_name(raw_env_name)
+            else:
+                env_name = self.default_api_key_env_name(config.get("provider"), incoming_config_id)
+            secrets_store = self.store_server_api_secret_value(env_name, api_key_value)
+            stored_api_key_env = env_name
+            stored_api_key_summaries = self.server_api_secret_summaries(secrets_store)
+            config["api_key_env"] = env_name
         if any(key in config for key in ("api_key", "token", "secret")):
             self.send_json({"error": "Do not submit raw secrets. Set api_key_env instead."}, status=400)
             return
@@ -1357,7 +1396,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             judge_registry.pop(normalized["config_id"], None)
             target_registry[normalized["config_id"]] = normalized
         self.write_registered_registry_files(target_registry, judge_registry)
-        self.send_json({"status": "ok", "config": normalized, "registry": self.load_registry()})
+        response = {"status": "ok", "config": normalized, "registry": self.load_registry()}
+        if stored_api_key_env:
+            response["stored_api_key_env"] = stored_api_key_env
+            response["server_api_keys"] = stored_api_key_summaries
+        self.send_json(response)
 
     def handle_delete_model_registry_entry(self, config_id: str):
         normalized_id = self.safe_config_id(config_id)
