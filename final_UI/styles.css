@@ -1747,6 +1747,11 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
 
 .judge-registry-item {
   border-left-color: var(--blue);
+  min-height: 92px;
+}
+
+.judge-registry-item .target-registry-title {
+  -webkit-line-clamp: 1;
 }
 
 .target-registry-item {

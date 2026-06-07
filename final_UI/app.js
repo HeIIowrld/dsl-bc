@@ -1414,6 +1414,9 @@ function currentJudgeApiPresetPayload(label) {
   const model = document.getElementById("judgeRegistryModel")?.value.trim() || "";
   const displayName = document.getElementById("judgeRegistryDisplayName")?.value.trim() || label;
   const idBase = safeConfigIdClient(label || displayName || model || provider) || "custom_judge_api";
+  const apiKeyEnv = document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || "";
+  const apiKeyEnvError = apiKeyEnvNameErrorClient(apiKeyEnv);
+  if (apiKeyEnvError) throw new Error(apiKeyEnvError);
   return {
     id: `custom_${idBase}`,
     label,
@@ -1423,7 +1426,7 @@ function currentJudgeApiPresetPayload(label) {
     model,
     baseUrl: document.getElementById("judgeRegistryBaseUrl")?.value.trim() || "",
     chatUrl: document.getElementById("judgeRegistryChatUrl")?.value.trim() || "",
-    apiKeyEnv: document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || "",
+    apiKeyEnv,
     temperature: Number(document.getElementById("judgeRegistryTemperature")?.value || 0),
     topP: Number(document.getElementById("judgeRegistryTopP")?.value || 0.1),
     maxTokens: Number(document.getElementById("judgeRegistryMaxTokens")?.value || 1024),
@@ -1545,6 +1548,12 @@ async function saveServerApiKey() {
   const value = document.getElementById("serverApiKeyValue")?.value.trim() || "";
   if (!envName) {
     setServerApiKeyMessage("저장할 환경변수 이름을 입력하세요.", "error");
+    document.getElementById("serverApiKeyEnvName")?.focus();
+    return;
+  }
+  const envNameError = apiKeyEnvNameErrorClient(envName);
+  if (envNameError) {
+    setServerApiKeyMessage(envNameError, "error");
     document.getElementById("serverApiKeyEnvName")?.focus();
     return;
   }
@@ -2429,6 +2438,8 @@ function judgeRegistryPayload(form) {
   ].forEach((key) => {
     payload[key] = String(data.get(key) ?? "").trim();
   });
+  const apiKeyEnvError = apiKeyEnvNameErrorClient(payload.api_key_env);
+  if (apiKeyEnvError) throw new Error(apiKeyEnvError);
   payload.upstream_chat_url = payload.chat_url;
 
   const options = {};
@@ -2573,6 +2584,19 @@ function safeConfigIdClient(value) {
     .replace(/^_+|_+$/g, "")
     .replace(/_+/g, "_")
     .slice(0, 80);
+}
+
+function apiKeyEnvNameErrorClient(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,119}$/.test(text)) {
+    return "API 키 환경변수에는 실제 키가 아니라 GEMINI_API_KEY 같은 변수명을 입력하세요.";
+  }
+  const commonSecretPrefixes = ["sk-", "sk_", "AIza", "ya29.", "xai-", "gsk_", "nvapi-"];
+  if (commonSecretPrefixes.some((prefix) => text.startsWith(prefix)) || (!text.includes("_") && text.length >= 24)) {
+    return "API 키처럼 보입니다. 이 칸에는 GEMINI_API_KEY 같은 이름을 넣고, 실제 키 값은 서버 API 키 저장에 입력하세요.";
+  }
+  return "";
 }
 
 function promptVariantConfigId(baseId, tag) {
@@ -2996,8 +3020,7 @@ function renderJudgeRegistry() {
             <button type="button" class="connection-health" data-check-judge="${escapeHtml(id)}" ${modelHealthCheckInFlight ? "disabled" : ""}>연결 확인</button>
           </div>
           <span class="target-registry-meta">${escapeHtml(spec.provider || "-")} · ${escapeHtml(spec.model || id)}</span>
-          ${promptMeta ? `<span class="target-registry-meta">${escapeHtml(promptMeta)}</span>` : ""}
-          <code class="target-registry-code">${escapeHtml(endpoint)}</code>
+          <code class="target-registry-code">${escapeHtml(id)}</code>
         </div>
         <div class="connection-actions">
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>

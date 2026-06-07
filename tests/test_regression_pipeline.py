@@ -2574,6 +2574,62 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["keys"][0]["env_name"], "GEMINI_API_KEY")
         self.assertNotIn("value", captured["payload"]["keys"][0])
 
+    def test_model_registry_rejects_raw_key_like_api_key_env(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.read_json_body = lambda: {
+            "config_id": "bad_gemini_judge",
+            "display_name": "Bad Gemini Judge",
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "api_key_env": "AIzaSyLooksLikeRawKeyValue1234567890",
+            "evaluation_role": "llm_judge",
+            "judge_role": "judge",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            target_path = Path(tmp) / "registered_target_models.json"
+            judge_path = Path(tmp) / "registered_judge_models.json"
+            target_path.write_text(json.dumps({"configs": []}) + "\n", encoding="utf-8")
+            judge_path.write_text(json.dumps({"configs": []}) + "\n", encoding="utf-8")
+            with (
+                mock.patch("final_UI.server.REGISTERED_TARGET_MODELS_PATH", target_path),
+                mock.patch("final_UI.server.REGISTERED_JUDGE_MODELS_PATH", judge_path),
+            ):
+                FinalUiHandler.handle_save_model_registry_entry(handler)
+
+        self.assertEqual(captured["status"], 400)
+        self.assertIn("raw API key", captured["payload"]["error"])
+
+    def test_healthcheck_invalid_api_key_env_does_not_echo_secret_like_value(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        FinalUiHandler.handle_external_api_health(
+            handler,
+            "bad_gemini_judge",
+            {
+                "provider": "gemini",
+                "model": "gemini-2.5-pro",
+                "base_url": "https://generativelanguage.googleapis.com",
+                "api_key_env": "AIzaSyLooksLikeRawKeyValue1234567890",
+            },
+        )
+
+        self.assertEqual(captured["status"], 503)
+        self.assertIn("raw API key", captured["payload"]["message"])
+        self.assertNotIn("AIzaSyLooksLikeRawKeyValue1234567890", captured["payload"]["message"])
+
 
 class FinalUiJavascriptContractTests(unittest.TestCase):
     def test_benchmark_and_regression_tabs_are_separated_in_ui_contract(self) -> None:
@@ -2612,6 +2668,8 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn('apiFetch("api/judge-api-presets"', app_js)
         self.assertIn('fetchJsonOptional("api/server-api-secrets"', app_js)
         self.assertIn('apiFetch("api/server-api-secrets"', app_js)
+        self.assertIn("function apiKeyEnvNameErrorClient", app_js)
+        self.assertIn("API 키처럼 보입니다", app_js)
         self.assertIn('id="serverApiKeyEnvName"', index_html)
         self.assertIn(".server-api-key-builder", styles_css)
         self.assertIn("--judge-builder-copy-col", styles_css)
@@ -2639,6 +2697,8 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn('await syncSelectedModelApis([version], { requireSelected: false, scope: "single" });', app_js)
         self.assertIn("Judge 연결 확인 중", app_js)
         self.assertIn("Judge 연결 확인 완료", app_js)
+        self.assertIn('<code class="target-registry-code">${escapeHtml(id)}</code>', app_js)
+        self.assertNotIn('<code class="target-registry-code">${escapeHtml(endpoint)}</code>', app_js)
         self.assertIn('await syncSelectedModelApis(targetVersions, { requireSelected: false, scope: "all" });', app_js)
         self.assertIn("const targetVersions = evalTargetRegistryIds();", app_js)
         self.assertIn('scope: "single"', app_js)

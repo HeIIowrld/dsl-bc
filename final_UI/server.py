@@ -1055,6 +1055,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not normalized:
             self.send_json({"error": "preset id, provider, and model are required"}, status=400)
             return
+        api_key_env_error = self.api_key_env_name_error(normalized.get("apiKeyEnv"))
+        if api_key_env_error:
+            self.send_json({"error": api_key_env_error}, status=400)
+            return
         presets = self.load_judge_api_presets_file()
         existing = next((item for item in presets if item["id"] == normalized["id"]), None)
         if existing and existing.get("builtIn"):
@@ -1096,6 +1100,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         value = str(payload.get("value") or "").strip()
         if not env_name:
             self.send_json({"error": "env_name is required"}, status=400)
+            return
+        env_name_error = self.api_key_env_name_error(env_name)
+        if env_name_error:
+            self.send_json({"error": env_name_error}, status=400)
             return
         if not value:
             self.send_json({"error": "API key value is required"}, status=400)
@@ -1288,6 +1296,17 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return ""
         return text
 
+    def api_key_env_name_error(self, value):
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if not self.safe_env_name(text):
+            return "api_key_env must be an environment variable name such as GEMINI_API_KEY, not a raw API key."
+        common_secret_prefixes = ("sk-", "sk_", "AIza", "ya29.", "xai-", "gsk_", "nvapi-")
+        if text.startswith(common_secret_prefixes) or ("_" not in text and len(text) >= 24):
+            return "api_key_env looks like a raw API key. Store the key value in Server API key storage and keep api_key_env as GEMINI_API_KEY."
+        return ""
+
     def handle_save_model_registry_entry(self):
         payload = self.read_json_body()
         if payload is None:
@@ -1320,6 +1339,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         if normalized["provider"] in {"openai_native", "clova_studio", "anthropic", "gemini"} and not normalized.get("model"):
             self.send_json({"error": f"model is required for {normalized['provider']} models"}, status=400)
+            return
+        api_key_env_error = self.api_key_env_name_error(normalized.get("api_key_env"))
+        if api_key_env_error:
+            self.send_json({"error": api_key_env_error}, status=400)
             return
         if normalized["provider"] == "local_path" and not normalized.get("local_path"):
             self.send_json({"error": "local_path is required for local_path provider"}, status=400)
@@ -1636,13 +1659,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         headers = self.auth_headers(model_spec)
         if headers is None:
+            env_error = self.api_key_env_name_error(model_spec.get("api_key_env"))
             self.send_json(
                 {
                     "status": "missing_secret",
                     "version": version,
                     "provider": model_spec.get("provider"),
                     "model": model_spec.get("model"),
-                    "message": f"Environment variable is not set: {model_spec.get('api_key_env')}",
+                    "message": env_error or f"Environment variable or stored server API key is not set: {model_spec.get('api_key_env')}",
                 },
                 status=503,
             )
