@@ -707,6 +707,15 @@ select {
   min-width: 0;
 }
 
+.server-api-key-builder {
+  grid-template-columns: minmax(240px, 1.1fr) minmax(190px, .8fr) minmax(240px, 1fr) auto auto;
+}
+
+.server-api-key-builder .registry-message {
+  grid-column: 1 / -1;
+  min-height: 16px;
+}
+
 input[type="checkbox"] {
   width: auto;
   accent-color: var(--accent);

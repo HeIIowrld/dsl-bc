@@ -239,6 +239,22 @@
             <button id="judgeApiPresetSave" type="button">현재 설정을 프리셋 추가</button>
             <button id="judgeApiPresetDelete" type="button">커스텀 삭제</button>
           </div>
+          <div class="prompt-variant-builder server-api-key-builder">
+            <div class="prompt-variant-copy">
+              <strong>서버 API 키 저장</strong>
+              <span>키 값은 서버 로컬 JSON에만 저장되고 GitHub에는 업로드되지 않습니다.</span>
+            </div>
+            <label>환경변수 이름
+              <input id="serverApiKeyEnvName" list="serverApiKeyEnvList" placeholder="GEMINI_API_KEY">
+              <datalist id="serverApiKeyEnvList"></datalist>
+            </label>
+            <label>API 키 값
+              <input id="serverApiKeyValue" type="password" autocomplete="off" placeholder="저장할 키를 입력">
+            </label>
+            <button id="serverApiKeySave" type="button">키 저장</button>
+            <button id="serverApiKeyDelete" type="button">저장 키 삭제</button>
+            <span id="serverApiKeyMessage" class="registry-message"></span>
+          </div>
           <form id="judgeRegistryForm" class="model-form">
             <label>제공자
               <select id="judgeRegistryProvider" name="provider">
@@ -449,7 +465,7 @@
               <input id="evalJudgeModel" name="judge_model" placeholder="HCX-007 / Qwen2.5-7B-HAL-LoRA">
             </label>
             <label hidden>채점 모델 API 키
-              <input id="evalJudgeApiKey" name="judge_api_key" type="password" autocomplete="off" placeholder="실행에만 사용하고 저장하지 않음">
+              <input id="evalJudgeApiKey" name="judge_api_key" type="password" autocomplete="off" placeholder="저장 키가 없을 때 일회성으로만 사용">
             </label>
             <label hidden>채점 모델 Base URL
               <input id="evalJudgeBaseUrl" name="judge_base_url" placeholder="선택 입력">
@@ -930,6 +946,6 @@
     </main>
   </div><!-- /.layout -->
 
-  <script src="app.js?v=20260607-server-judge-api-presets"></script>
+  <script src="app.js?v=20260607-server-api-key-store"></script>
 </body>
 </html>

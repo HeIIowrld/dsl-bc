@@ -2157,6 +2157,36 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(config["evaluation_role"], "llm_judge")
         self.assertEqual(config["judge_role"], "judge")
 
+    def test_prepare_judge_config_uses_server_stored_api_key(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        with tempfile.TemporaryDirectory() as tmp:
+            secret_path = Path(tmp) / "server_api_secrets.json"
+            secret_path.write_text(
+                json.dumps({"secrets": {"GEMINI_API_KEY": {"value": "stored-secret"}}}) + "\n",
+                encoding="utf-8",
+            )
+            env = {}
+            with (
+                mock.patch("final_UI.server.SERVER_API_SECRETS_PATH", secret_path),
+                mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=False),
+            ):
+                result = FinalUiHandler.prepare_judge_config(
+                    handler,
+                    registry={},
+                    judge_payload={"provider": "gemini", "model": "gemini-2.5-pro"},
+                    scoring_mode="static_llm",
+                    job_id="abc123",
+                    log_dir=Path(tmp),
+                    dry_run=False,
+                    subprocess_env=env,
+                )
+                runner_config_path = Path(result["runner_config_path"])
+                registry = json.loads(runner_config_path.read_text(encoding="utf-8"))
+
+        config = registry["configs"][0]
+        self.assertEqual(config["api_key_env"], "GEMINI_API_KEY")
+        self.assertEqual(env["GEMINI_API_KEY"], "stored-secret")
+
     def test_prepare_registered_multi_judges_allows_target_configs(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         registry = {
@@ -2521,6 +2551,29 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(captured["status"], 400)
         self.assertIn("raw secrets", captured["payload"]["error"])
 
+    def test_server_api_secret_store_masks_saved_value(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.current_actor = "admin"
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.read_json_body = lambda: {"env_name": "GEMINI_API_KEY", "value": "stored-secret"}
+        with tempfile.TemporaryDirectory() as tmp:
+            secret_path = Path(tmp) / "server_api_secrets.json"
+            with mock.patch("final_UI.server.SERVER_API_SECRETS_PATH", secret_path):
+                FinalUiHandler.handle_save_server_api_secret(handler)
+                saved = json.loads(secret_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(saved["secrets"]["GEMINI_API_KEY"]["value"], "stored-secret")
+        self.assertEqual(captured["payload"]["keys"][0]["env_name"], "GEMINI_API_KEY")
+        self.assertNotIn("value", captured["payload"]["keys"][0])
+
 
 class FinalUiJavascriptContractTests(unittest.TestCase):
     def test_benchmark_and_regression_tabs_are_separated_in_ui_contract(self) -> None:
@@ -2528,6 +2581,7 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         styles_css = Path("final_UI/styles.css").read_text(encoding="utf-8")
         index_html = Path("final_UI/index.html").read_text(encoding="utf-8")
         preset_json = Path("final_UI/data/judge_api_presets.json").read_text(encoding="utf-8")
+        server_py = Path("final_UI/server.py").read_text(encoding="utf-8")
         internal_path = Path("final_UI/bc_internal.html")
         internal_html = internal_path.read_text(encoding="utf-8") if internal_path.exists() else index_html
 
@@ -2556,6 +2610,12 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn("function bindJudgeApiPresetControls", app_js)
         self.assertIn('fetchJsonOptional("api/judge-api-presets"', app_js)
         self.assertIn('apiFetch("api/judge-api-presets"', app_js)
+        self.assertIn('fetchJsonOptional("api/server-api-secrets"', app_js)
+        self.assertIn('apiFetch("api/server-api-secrets"', app_js)
+        self.assertIn('id="serverApiKeyEnvName"', index_html)
+        self.assertIn(".server-api-key-builder", styles_css)
+        self.assertIn("SERVER_API_SECRETS_PATH", server_py)
+        self.assertIn("def provider_api_key_value", server_py)
         self.assertNotIn("localStorage", app_js)
         self.assertIn("gemini_2_5_pro_judge", preset_json)
         self.assertIn("gemini_2_5_flash_judge", preset_json)

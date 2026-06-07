@@ -52,6 +52,7 @@ from scripts.eval.run_multi_model_eval import (  # noqa: E402
 REGISTERED_TARGET_MODELS_PATH = ROOT / "data" / "registered_target_models.json"
 REGISTERED_JUDGE_MODELS_PATH = ROOT / "data" / "registered_judge_models.json"
 JUDGE_API_PRESETS_PATH = ROOT / "data" / "judge_api_presets.json"
+SERVER_API_SECRETS_PATH = ROOT / "data" / "server_api_secrets.json"
 SEEDED_TARGET_MODELS_PATH = PROJECT_ROOT / "config" / "seeded_target_models.yaml"
 EVAL_DATASET_CATALOG_PATH = PROJECT_ROOT / "config" / "eval_dataset_catalog.yaml"
 EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
@@ -465,6 +466,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/judge-api-presets":
             self.handle_judge_api_presets()
             return
+        if parsed.path == "/api/server-api-secrets":
+            self.handle_server_api_secrets()
+            return
         if parsed.path.startswith("/api/models/"):
             self.handle_model_api(parsed.path, parsed.query)
             return
@@ -526,6 +530,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "/api/auth/access-log",
             "/api/model-registry",
             "/api/judge-api-presets",
+            "/api/server-api-secrets",
             "/api/questionlist/summary",
             "/api/questionlist/cases",
             "/api/questionlist/datasets",
@@ -566,6 +571,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/judge-api-presets":
             self.handle_save_judge_api_preset()
             return
+        if parsed.path == "/api/server-api-secrets":
+            self.handle_save_server_api_secret()
+            return
         if parsed.path == "/api/eval/run":
             self.handle_start_eval_run()
             return
@@ -592,6 +600,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/judge-api-presets/"):
             preset_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self.handle_delete_judge_api_preset(preset_id)
+            return
+        if parsed.path.startswith("/api/server-api-secrets/"):
+            env_name = unquote(parsed.path.rsplit("/", 1)[-1])
+            self.handle_delete_server_api_secret(env_name)
             return
         self.send_json({"error": "not found"}, status=404)
 
@@ -1070,6 +1082,127 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.write_judge_api_presets_file(presets)
         self.send_json({"status": "ok", "deleted": existing, "presets": presets})
 
+    def handle_server_api_secrets(self):
+        if not self.require_write_auth():
+            return
+        self.send_json({"status": "ok", "keys": self.server_api_secret_summaries()})
+
+    def handle_save_server_api_secret(self):
+        payload = self.read_json_body()
+        if payload is None:
+            self.send_json({"error": "Invalid JSON body"}, status=400)
+            return
+        env_name = self.safe_env_name(payload.get("env_name") or payload.get("name"))
+        value = str(payload.get("value") or "").strip()
+        if not env_name:
+            self.send_json({"error": "env_name is required"}, status=400)
+            return
+        if not value:
+            self.send_json({"error": "API key value is required"}, status=400)
+            return
+        secrets_store = self.load_server_api_secrets_file()
+        secrets_store[env_name] = {
+            "value": value,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "updated_by": getattr(self, "current_actor", "anonymous"),
+        }
+        self.write_server_api_secrets_file(secrets_store)
+        self.send_json({"status": "ok", "env_name": env_name, "keys": self.server_api_secret_summaries(secrets_store)})
+
+    def handle_delete_server_api_secret(self, env_name: str):
+        normalized_name = self.safe_env_name(env_name)
+        if not normalized_name:
+            self.send_json({"error": "env_name is required"}, status=400)
+            return
+        secrets_store = self.load_server_api_secrets_file()
+        if normalized_name not in secrets_store:
+            self.send_json({"error": f"unknown stored API key: {normalized_name}"}, status=404)
+            return
+        deleted = {key: value for key, value in secrets_store[normalized_name].items() if key != "value"}
+        secrets_store.pop(normalized_name, None)
+        self.write_server_api_secrets_file(secrets_store)
+        self.send_json({"status": "ok", "deleted": {"env_name": normalized_name, **deleted}, "keys": self.server_api_secret_summaries(secrets_store)})
+
+    def load_server_api_secrets_file(self):
+        if not SERVER_API_SECRETS_PATH.exists():
+            return {}
+        try:
+            raw = self.load_structured_file(SERVER_API_SECRETS_PATH)
+        except (OSError, json.JSONDecodeError, RuntimeError):
+            return {}
+        raw_secrets = raw.get("secrets") if isinstance(raw, dict) else {}
+        if not isinstance(raw_secrets, dict):
+            return {}
+        secrets_store = {}
+        for name, spec in raw_secrets.items():
+            env_name = self.safe_env_name(name)
+            if not env_name:
+                continue
+            if isinstance(spec, dict):
+                value = str(spec.get("value") or "")
+                updated_at = str(spec.get("updated_at") or "")
+                updated_by = str(spec.get("updated_by") or "")
+            else:
+                value = str(spec or "")
+                updated_at = ""
+                updated_by = ""
+            if value:
+                secrets_store[env_name] = {
+                    "value": value,
+                    "updated_at": updated_at,
+                    "updated_by": updated_by,
+                }
+        return secrets_store
+
+    def write_server_api_secrets_file(self, secrets_store: dict):
+        SERVER_API_SECRETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {
+            key: {
+                "value": str(value.get("value") or ""),
+                "updated_at": str(value.get("updated_at") or ""),
+                "updated_by": str(value.get("updated_by") or ""),
+            }
+            for key, value in sorted(secrets_store.items())
+            if self.safe_env_name(key) and str(value.get("value") or "")
+        }
+        SERVER_API_SECRETS_PATH.write_text(
+            json.dumps({"secrets": serializable}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def server_api_secret_summaries(self, secrets_store: dict | None = None):
+        source = secrets_store if secrets_store is not None else self.load_server_api_secrets_file()
+        return [
+            {
+                "env_name": env_name,
+                "has_value": bool(spec.get("value")),
+                "updated_at": spec.get("updated_at") or "",
+                "updated_by": spec.get("updated_by") or "",
+            }
+            for env_name, spec in sorted(source.items())
+        ]
+
+    def server_api_secret_value(self, env_name: str):
+        normalized_name = self.safe_env_name(env_name)
+        if not normalized_name:
+            return ""
+        return str(self.load_server_api_secrets_file().get(normalized_name, {}).get("value") or "")
+
+    def provider_api_key_value(self, config: dict):
+        provider = str(config.get("provider") or "")
+        explicit_name = str(config.get("api_key_env") or "").strip()
+        names = [explicit_name] if explicit_name else []
+        names.extend(name for name in PROVIDER_ENV_ALIASES.get(provider, {}).get("api_key", []) if name and name not in names)
+        for name in names:
+            value = os.environ.get(name)
+            if value:
+                return value, name
+        for name in names:
+            stored_token = self.server_api_secret_value(name)
+            if stored_token:
+                return stored_token, name
+        return "", names[0] if names else ""
+
     def load_judge_api_presets_file(self):
         if not JUDGE_API_PRESETS_PATH.exists():
             return []
@@ -1148,6 +1281,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         elif isinstance(payload, list):
             return any(self.payload_contains_raw_secret(item) for item in payload)
         return False
+
+    def safe_env_name(self, value):
+        text = str(value or "").strip()
+        if not text or not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,119}$", text):
+            return ""
+        return text
 
     def handle_save_model_registry_entry(self):
         payload = self.read_json_body()
@@ -1547,7 +1686,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def auth_headers(self, model_spec: dict):
         headers = {"Content-Type": "application/json"}
         provider = str(model_spec.get("provider") or "")
-        token, api_key_env = provider_env_value(model_spec, "api_key")
+        token, api_key_env = self.provider_api_key_value(model_spec)
         if api_key_env:
             if not token:
                 return None
@@ -2901,7 +3040,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     self.send_json({"error": f"unknown arbiter config: {arbiter_config_id}"}, status=400)
                     return
                 arbiter_config = registry[arbiter_config_id]
-                token, api_key_env = provider_env_value(arbiter_config, "api_key")
+                token, api_key_env = self.provider_api_key_value(arbiter_config)
                 if token and api_key_env:
                     subprocess_env[api_key_env] = token
                 if arbiter_config.get("provider") != "ollama" and api_key_env and not subprocess_env.get(api_key_env):
@@ -4295,7 +4434,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         temp_config["api_key_env"] = f"WEB_EVAL_JUDGE_API_KEY_{job_id.upper()}{suffix.upper()}"
                         subprocess_env[temp_config["api_key_env"]] = raw_api_key
                     else:
-                        token, api_key_env = provider_env_value(base_config, "api_key")
+                        token, api_key_env = self.provider_api_key_value(base_config)
                         if api_key_env and api_key_env != str(base_config.get("api_key_env") or "").strip():
                             temp_config["api_key_env"] = api_key_env
                         if token and api_key_env:
@@ -4305,7 +4444,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     temp_configs.append(temp_config)
                     result_config_ids.append(temp_config["config_id"])
                 else:
-                    token, api_key_env = provider_env_value(base_config, "api_key")
+                    token, api_key_env = self.provider_api_key_value(base_config)
                     if token and api_key_env:
                         subprocess_env[api_key_env] = token
                     if base_config.get("provider") != "ollama" and api_key_env and not dry_run and not subprocess_env.get(api_key_env):
@@ -4329,7 +4468,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     api_key_env = f"WEB_EVAL_JUDGE_API_KEY_{job_id.upper()}"
                     subprocess_env[api_key_env] = raw_api_key
                 else:
-                    token, detected_api_key_env = provider_env_value({"provider": provider}, "api_key")
+                    token, detected_api_key_env = self.provider_api_key_value({"provider": provider})
                     api_key_env = detected_api_key_env
                     if token and api_key_env:
                         subprocess_env[api_key_env] = token
