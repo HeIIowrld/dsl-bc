@@ -3132,9 +3132,36 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.search-controls {
+  align-items: end;
+  gap: 10px 12px;
+}
+
 .search-controls label {
-  flex: 1;
-  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.search-controls .search-query-field {
+  flex: 1 1 520px;
+}
+
+.search-controls .search-model-field {
+  flex: 0 0 220px;
+}
+
+.search-controls input[type="search"],
+.search-controls select {
+  width: 100%;
+  min-height: 31px;
+}
+
+.search-controls button {
+  flex: 0 0 auto;
+  align-self: end;
+  min-height: 31px;
 }
 
 .search-result-meta {
