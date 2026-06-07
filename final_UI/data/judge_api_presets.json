@@ -1,0 +1,109 @@
+{
+  "presets": [
+    {
+      "id": "gemini_2_5_pro",
+      "label": "Google Gemini 2.5 Pro",
+      "provider": "gemini",
+      "configId": "gemini_2_5_pro_judge",
+      "displayName": "Gemini 2.5 Pro Judge",
+      "model": "gemini-2.5-pro",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "chatUrl": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "temperature": 0,
+      "topP": 0.1,
+      "maxTokens": 1024,
+      "promptPreset": "judge_default_v1",
+      "promptVersion": "judge_v2_acc_com_utl_nac_hal",
+      "systemPrompt": "",
+      "options": {
+        "max_output_tokens": 1024
+      },
+      "builtIn": true
+    },
+    {
+      "id": "gemini_2_5_flash",
+      "label": "Google Gemini 2.5 Flash",
+      "provider": "gemini",
+      "configId": "gemini_2_5_flash_judge",
+      "displayName": "Gemini 2.5 Flash Judge",
+      "model": "gemini-2.5-flash",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "chatUrl": "",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "temperature": 0,
+      "topP": 0.1,
+      "maxTokens": 1024,
+      "promptPreset": "judge_default_v1",
+      "promptVersion": "judge_v2_acc_com_utl_nac_hal",
+      "systemPrompt": "",
+      "options": {
+        "max_output_tokens": 1024
+      },
+      "builtIn": true
+    },
+    {
+      "id": "openai_gpt_5_5",
+      "label": "OpenAI GPT-5.5",
+      "provider": "openai_native",
+      "configId": "openai_gpt_5_5_judge",
+      "displayName": "OpenAI GPT-5.5 Judge",
+      "model": "gpt-5.5",
+      "baseUrl": "https://api.openai.com",
+      "chatUrl": "https://api.openai.com/v1/responses",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "temperature": 0,
+      "topP": 0.1,
+      "maxTokens": 1024,
+      "promptPreset": "judge_default_v1",
+      "promptVersion": "judge_v2_acc_com_utl_nac_hal",
+      "systemPrompt": "",
+      "options": {
+        "max_output_tokens": 1024,
+        "reasoning_effort": "low",
+        "store": false
+      },
+      "builtIn": true
+    },
+    {
+      "id": "anthropic_claude_sonnet_4",
+      "label": "Anthropic Claude Sonnet 4",
+      "provider": "anthropic",
+      "configId": "anthropic_claude_sonnet_4_judge",
+      "displayName": "Claude Sonnet 4 Judge",
+      "model": "claude-sonnet-4-20250514",
+      "baseUrl": "https://api.anthropic.com",
+      "chatUrl": "https://api.anthropic.com/v1/messages",
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "temperature": 0,
+      "topP": 0.1,
+      "maxTokens": 1024,
+      "promptPreset": "judge_default_v1",
+      "promptVersion": "judge_v2_acc_com_utl_nac_hal",
+      "systemPrompt": "",
+      "options": {},
+      "builtIn": true
+    },
+    {
+      "id": "clova_hcx_007",
+      "label": "CLOVA HCX-007",
+      "provider": "clova_studio",
+      "configId": "clova_hcx_007_judge",
+      "displayName": "CLOVA HCX-007 Judge",
+      "model": "HCX-007",
+      "baseUrl": "https://clovastudio.stream.ntruss.com",
+      "chatUrl": "",
+      "apiKeyEnv": "CLOVA_STUDIO_API_KEY",
+      "temperature": 0,
+      "topP": 0.1,
+      "maxTokens": 1024,
+      "promptPreset": "judge_default_v1",
+      "promptVersion": "judge_v2_acc_com_utl_nac_hal",
+      "systemPrompt": "",
+      "options": {
+        "include_ai_filters": false
+      },
+      "builtIn": true
+    }
+  ]
+}

@@ -51,6 +51,7 @@ from scripts.eval.run_multi_model_eval import (  # noqa: E402
 
 REGISTERED_TARGET_MODELS_PATH = ROOT / "data" / "registered_target_models.json"
 REGISTERED_JUDGE_MODELS_PATH = ROOT / "data" / "registered_judge_models.json"
+JUDGE_API_PRESETS_PATH = ROOT / "data" / "judge_api_presets.json"
 SEEDED_TARGET_MODELS_PATH = PROJECT_ROOT / "config" / "seeded_target_models.yaml"
 EVAL_DATASET_CATALOG_PATH = PROJECT_ROOT / "config" / "eval_dataset_catalog.yaml"
 EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
@@ -461,6 +462,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/model-registry":
             self.handle_dynamic_model_registry()
             return
+        if parsed.path == "/api/judge-api-presets":
+            self.handle_judge_api_presets()
+            return
         if parsed.path.startswith("/api/models/"):
             self.handle_model_api(parsed.path, parsed.query)
             return
@@ -521,6 +525,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "/api/auth/session",
             "/api/auth/access-log",
             "/api/model-registry",
+            "/api/judge-api-presets",
             "/api/questionlist/summary",
             "/api/questionlist/cases",
             "/api/questionlist/datasets",
@@ -558,6 +563,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/model-registry":
             self.handle_save_model_registry_entry()
             return
+        if parsed.path == "/api/judge-api-presets":
+            self.handle_save_judge_api_preset()
+            return
         if parsed.path == "/api/eval/run":
             self.handle_start_eval_run()
             return
@@ -580,6 +588,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/model-registry/"):
             config_id = unquote(parsed.path.rsplit("/", 1)[-1])
             self.handle_delete_model_registry_entry(config_id)
+            return
+        if parsed.path.startswith("/api/judge-api-presets/"):
+            preset_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self.handle_delete_judge_api_preset(preset_id)
             return
         self.send_json({"error": "not found"}, status=404)
 
@@ -1011,6 +1023,131 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         method = str(judge_payload.get("aggregation_method") or "weighted_mean").strip()
         allowed = {"weighted_mean", "mean", "trimmed_mean", "max", "min", "auto"}
         return method if method in allowed else "weighted_mean"
+
+    def handle_judge_api_presets(self):
+        self.send_json({"status": "ok", "presets": self.load_judge_api_presets_file()})
+
+    def handle_save_judge_api_preset(self):
+        payload = self.read_json_body()
+        if payload is None:
+            self.send_json({"error": "Invalid JSON body"}, status=400)
+            return
+        preset = payload.get("preset") if isinstance(payload.get("preset"), dict) else payload
+        if not isinstance(preset, dict):
+            self.send_json({"error": "preset object is required"}, status=400)
+            return
+        if self.payload_contains_raw_secret(preset):
+            self.send_json({"error": "Do not submit raw secrets. Set apiKeyEnv instead."}, status=400)
+            return
+        normalized = self.normalize_judge_api_preset(preset)
+        if not normalized:
+            self.send_json({"error": "preset id, provider, and model are required"}, status=400)
+            return
+        presets = self.load_judge_api_presets_file()
+        existing = next((item for item in presets if item["id"] == normalized["id"]), None)
+        if existing and existing.get("builtIn"):
+            self.send_json({"error": "built-in presets cannot be overwritten"}, status=409)
+            return
+        presets = [item for item in presets if item["id"] != normalized["id"]]
+        presets.append(normalized)
+        self.write_judge_api_presets_file(presets)
+        self.send_json({"status": "ok", "preset": normalized, "presets": presets})
+
+    def handle_delete_judge_api_preset(self, preset_id: str):
+        normalized_id = self.safe_config_id(preset_id)
+        if not normalized_id:
+            self.send_json({"error": "preset id is required"}, status=400)
+            return
+        presets = self.load_judge_api_presets_file()
+        existing = next((item for item in presets if item["id"] == normalized_id), None)
+        if not existing:
+            self.send_json({"error": f"unknown judge API preset: {normalized_id}"}, status=404)
+            return
+        if existing.get("builtIn"):
+            self.send_json({"error": "built-in presets cannot be deleted"}, status=400)
+            return
+        presets = [item for item in presets if item["id"] != normalized_id]
+        self.write_judge_api_presets_file(presets)
+        self.send_json({"status": "ok", "deleted": existing, "presets": presets})
+
+    def load_judge_api_presets_file(self):
+        if not JUDGE_API_PRESETS_PATH.exists():
+            return []
+        try:
+            raw = self.load_structured_file(JUDGE_API_PRESETS_PATH)
+        except (OSError, json.JSONDecodeError, RuntimeError):
+            return []
+        presets = raw.get("presets") if isinstance(raw, dict) else raw
+        if not isinstance(presets, list):
+            return []
+        normalized = []
+        seen = set()
+        for preset in presets:
+            if self.payload_contains_raw_secret(preset):
+                continue
+            item = self.normalize_judge_api_preset(preset)
+            if not item or item["id"] in seen:
+                continue
+            normalized.append(item)
+            seen.add(item["id"])
+        return normalized
+
+    def write_judge_api_presets_file(self, presets: list[dict]):
+        JUDGE_API_PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        JUDGE_API_PRESETS_PATH.write_text(
+            json.dumps({"presets": presets}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def normalize_judge_api_preset(self, preset: dict):
+        if not isinstance(preset, dict):
+            return None
+        provider = str(preset.get("provider") or "generic_api").strip()
+        if provider == "api":
+            provider = "generic_api"
+        if provider not in ALLOWED_PROVIDERS or provider == "local_path":
+            provider = "generic_api"
+        model = str(preset.get("model") or "").strip()
+        preset_id = self.safe_config_id(preset.get("id") or preset.get("preset_id") or preset.get("label") or model)
+        if not preset_id or not model:
+            return None
+        config_id = self.safe_config_id(preset.get("configId") or preset.get("config_id") or f"{preset_id}_judge")
+        prompt_preset = str(preset.get("promptPreset") or preset.get("prompt_preset") or "judge_default_v1").strip()
+        options = preset.get("options", {}) if isinstance(preset.get("options"), dict) else {}
+        return {
+            "id": preset_id,
+            "label": str(preset.get("label") or preset_id).strip(),
+            "provider": provider,
+            "configId": config_id or f"{preset_id}_judge",
+            "displayName": str(preset.get("displayName") or preset.get("display_name") or preset.get("label") or model).strip(),
+            "model": model,
+            "baseUrl": str(preset.get("baseUrl") or preset.get("base_url") or "").strip(),
+            "chatUrl": str(preset.get("chatUrl") or preset.get("chat_url") or "").strip(),
+            "apiKeyEnv": str(preset.get("apiKeyEnv") or preset.get("api_key_env") or "").strip(),
+            "temperature": self.safe_float(preset.get("temperature"), default=0.0, minimum=0.0, maximum=2.0),
+            "topP": self.safe_float(preset.get("topP") if "topP" in preset else preset.get("top_p"), default=0.1, minimum=0.0, maximum=1.0),
+            "maxTokens": self.safe_int(preset.get("maxTokens") or preset.get("max_tokens"), default=1024, minimum=1, maximum=100000),
+            "promptPreset": prompt_preset or "judge_default_v1",
+            "promptVersion": str(preset.get("promptVersion") or preset.get("prompt_version") or "").strip(),
+            "systemPrompt": preset.get("systemPrompt") or preset.get("system_prompt") or "",
+            "options": options,
+            "builtIn": self.config_bool(preset.get("builtIn") if "builtIn" in preset else preset.get("built_in"), default=False),
+        }
+
+    def payload_contains_raw_secret(self, payload) -> bool:
+        secret_keys = {"api_key", "apikey", "apiKey", "token", "secret", "password", "authorization", "bearer"}
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                key_text = str(key)
+                if key_text in {"apiKeyEnv", "api_key_env"}:
+                    continue
+                if key_text in secret_keys or key_text.lower() in {item.lower() for item in secret_keys}:
+                    return True
+                if self.payload_contains_raw_secret(value):
+                    return True
+        elif isinstance(payload, list):
+            return any(self.payload_contains_raw_secret(item) for item in payload)
+        return False
 
     def handle_save_model_registry_entry(self):
         payload = self.read_json_body()

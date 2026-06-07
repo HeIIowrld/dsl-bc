@@ -199,7 +199,6 @@ const errorTypeAliases = {
 };
 
 const rawHtml = Symbol("rawHtml");
-const judgeApiPresetStorageKey = "finalUi.customJudgeApiPresets.v1";
 
 const colors = {
   red: "rgb(250, 50, 70)",
@@ -210,6 +209,7 @@ let runs = [];
 let cases = [];
 let runReleaseGates = [];
 let modelRegistry = {};
+let judgeApiPresetCatalog = [];
 let questionlistSummary = null;
 let questionlistCases = [];
 let questionlistDatasets = [];
@@ -270,11 +270,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   try {
     const runQuery = selectedRunId ? `?run_id=${encodeURIComponent(selectedRunId)}` : "";
-    let [runText, caseText, gateText, registry, qSummary, qCases, qDatasets, runInfo, runHistory, catalog, session, accessLog] = await Promise.all([
+    let [runText, caseText, gateText, registry, presetCatalog, qSummary, qCases, qDatasets, runInfo, runHistory, catalog, session, accessLog] = await Promise.all([
       fetchCsv(`data/eval_runs.csv${runQuery}`),
       fetchCsv(`data/question_cases.csv${runQuery}`),
       fetchCsvOptional(`data/run_release_gates.csv${runQuery}`, ""),
       fetchJsonOptional("api/model-registry", {}),
+      fetchJsonOptional("api/judge-api-presets", { presets: [] }),
       fetchJsonOptional("api/questionlist/summary", null),
       fetchJsonOptional("api/questionlist/cases?limit=400", { cases: [] }),
       fetchJsonOptional("api/questionlist/datasets", { datasets: [] }),
@@ -299,6 +300,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     cases = parseCsv(caseText).map(normalizeCase);
     runReleaseGates = parseCsv(gateText).map(normalizeRunGate);
     modelRegistry = registry;
+    judgeApiPresetCatalog = (presetCatalog?.presets ?? []).map(normalizeJudgeApiPresetClient).filter(Boolean);
     questionlistSummary = qSummary;
     questionlistCases = (qCases?.cases ?? []).map(normalizeQuestionlistCase);
     latestRun = runInfo;
@@ -311,6 +313,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     authAccessLog = accessLog?.entries ?? [];
 
     initializeState();
+    renderJudgeApiPresetSelect();
     renderFilters();
     renderJudgeRegistry();
     updateHealthCheckButtonState();
@@ -1298,114 +1301,40 @@ function judgeRegistryProviderDefaults(provider) {
   }[provider] || {};
 }
 
-function builtInJudgeApiPresets() {
-  return [
-    {
-      id: "gemini_2_5_pro",
-      label: "Google Gemini 2.5 Pro",
-      provider: "gemini",
-      configId: "gemini_2_5_pro_judge",
-      displayName: "Gemini 2.5 Pro Judge",
-      model: "gemini-2.5-pro",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      chatUrl: "",
-      apiKeyEnv: "GEMINI_API_KEY",
-      temperature: 0,
-      topP: 0.1,
-      maxTokens: 1024,
-      options: { max_output_tokens: 1024 },
-      builtIn: true,
-    },
-    {
-      id: "gemini_2_5_flash",
-      label: "Google Gemini 2.5 Flash",
-      provider: "gemini",
-      configId: "gemini_2_5_flash_judge",
-      displayName: "Gemini 2.5 Flash Judge",
-      model: "gemini-2.5-flash",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      chatUrl: "",
-      apiKeyEnv: "GEMINI_API_KEY",
-      temperature: 0,
-      topP: 0.1,
-      maxTokens: 1024,
-      options: { max_output_tokens: 1024 },
-      builtIn: true,
-    },
-    {
-      id: "openai_gpt_5_5",
-      label: "OpenAI GPT-5.5",
-      provider: "openai_native",
-      configId: "openai_gpt_5_5_judge",
-      displayName: "OpenAI GPT-5.5 Judge",
-      model: "gpt-5.5",
-      baseUrl: "https://api.openai.com",
-      chatUrl: "https://api.openai.com/v1/responses",
-      apiKeyEnv: "OPENAI_API_KEY",
-      temperature: 0,
-      topP: 0.1,
-      maxTokens: 1024,
-      options: { max_output_tokens: 1024, reasoning_effort: "low", store: false },
-      builtIn: true,
-    },
-    {
-      id: "anthropic_claude_sonnet_4",
-      label: "Anthropic Claude Sonnet 4",
-      provider: "anthropic",
-      configId: "anthropic_claude_sonnet_4_judge",
-      displayName: "Claude Sonnet 4 Judge",
-      model: "claude-sonnet-4-20250514",
-      baseUrl: "https://api.anthropic.com",
-      chatUrl: "https://api.anthropic.com/v1/messages",
-      apiKeyEnv: "ANTHROPIC_API_KEY",
-      temperature: 0,
-      topP: 0.1,
-      maxTokens: 1024,
-      builtIn: true,
-    },
-    {
-      id: "clova_hcx_007",
-      label: "CLOVA HCX-007",
-      provider: "clova_studio",
-      configId: "clova_hcx_007_judge",
-      displayName: "CLOVA HCX-007 Judge",
-      model: "HCX-007",
-      baseUrl: "https://clovastudio.stream.ntruss.com",
-      chatUrl: "",
-      apiKeyEnv: "CLOVA_STUDIO_API_KEY",
-      temperature: 0,
-      topP: 0.1,
-      maxTokens: 1024,
-      options: { include_ai_filters: false },
-      builtIn: true,
-    },
-  ];
+function normalizeJudgeApiPresetClient(preset) {
+  if (!preset || typeof preset !== "object") return null;
+  const id = String(preset.id || preset.preset_id || "").trim();
+  const model = String(preset.model || "").trim();
+  if (!id || !model) return null;
+  return {
+    id,
+    label: String(preset.label || id).trim(),
+    provider: String(preset.provider || "generic_api").trim(),
+    configId: String(preset.configId || preset.config_id || "").trim(),
+    displayName: String(preset.displayName || preset.display_name || preset.label || model).trim(),
+    model,
+    baseUrl: String(preset.baseUrl || preset.base_url || "").trim(),
+    chatUrl: String(preset.chatUrl || preset.chat_url || "").trim(),
+    apiKeyEnv: String(preset.apiKeyEnv || preset.api_key_env || "").trim(),
+    temperature: Number(preset.temperature ?? 0),
+    topP: Number(preset.topP ?? preset.top_p ?? 0.1),
+    maxTokens: Number(preset.maxTokens ?? preset.max_tokens ?? 1024),
+    promptPreset: String(preset.promptPreset || preset.prompt_preset || "judge_default_v1").trim(),
+    promptVersion: String(preset.promptVersion || preset.prompt_version || "").trim(),
+    systemPrompt: preset.systemPrompt || preset.system_prompt || "",
+    options: preset.options && typeof preset.options === "object" && !Array.isArray(preset.options) ? preset.options : {},
+    builtIn: Boolean(preset.builtIn ?? preset.built_in),
+  };
 }
 
-function loadCustomJudgeApiPresets() {
-  try {
-    const raw = window.localStorage?.getItem(judgeApiPresetStorageKey);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((preset) => preset && typeof preset === "object") : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveCustomJudgeApiPresets(presets) {
-  try {
-    window.localStorage?.setItem(judgeApiPresetStorageKey, JSON.stringify(presets, null, 2));
-    return true;
-  } catch {
-    return false;
-  }
+function replaceJudgeApiPresetCatalog(presets) {
+  judgeApiPresetCatalog = Array.isArray(presets)
+    ? presets.map(normalizeJudgeApiPresetClient).filter(Boolean)
+    : [];
 }
 
 function judgeApiPresets() {
-  return [
-    ...builtInJudgeApiPresets(),
-    ...loadCustomJudgeApiPresets().map((preset) => ({ ...preset, builtIn: false })),
-  ];
+  return judgeApiPresetCatalog;
 }
 
 function selectedJudgeApiPreset() {
@@ -1497,10 +1426,11 @@ function currentJudgeApiPresetPayload(label) {
     promptVersion: document.getElementById("judgeRegistryPromptVersion")?.value.trim() || "",
     systemPrompt: document.getElementById("judgeRegistrySystemPrompt")?.value || "",
     options,
+    builtIn: false,
   };
 }
 
-function saveCurrentJudgeApiPreset() {
+async function saveCurrentJudgeApiPreset() {
   const suggested = document.getElementById("judgeRegistryDisplayName")?.value.trim()
     || document.getElementById("judgeRegistryModel")?.value.trim()
     || "Custom Judge API";
@@ -1508,12 +1438,15 @@ function saveCurrentJudgeApiPreset() {
   if (!label) return;
   try {
     const preset = currentJudgeApiPresetPayload(label.trim());
-    const customPresets = loadCustomJudgeApiPresets().filter((item) => item.id !== preset.id);
-    customPresets.push(preset);
-    if (!saveCustomJudgeApiPresets(customPresets)) {
-      setJudgeRegistryMessage("프리셋 저장 실패: 브라우저 저장소에 쓸 수 없습니다.", "error");
-      return;
-    }
+    setJudgeRegistryMessage("프리셋 저장 중...", "");
+    const response = await apiFetch("api/judge-api-presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ preset }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    replaceJudgeApiPresetCatalog(body.presets || []);
     renderJudgeApiPresetSelect();
     const select = document.getElementById("judgeApiPresetSelect");
     if (select) select.value = preset.id;
@@ -1524,7 +1457,7 @@ function saveCurrentJudgeApiPreset() {
   }
 }
 
-function deleteSelectedJudgeApiPreset() {
+async function deleteSelectedJudgeApiPreset() {
   const preset = selectedJudgeApiPreset();
   if (!preset) {
     setJudgeRegistryMessage("삭제할 커스텀 프리셋을 선택하세요.", "error");
@@ -1534,13 +1467,19 @@ function deleteSelectedJudgeApiPreset() {
     setJudgeRegistryMessage("기본 프리셋은 삭제할 수 없습니다.", "error");
     return;
   }
-  const customPresets = loadCustomJudgeApiPresets().filter((item) => item.id !== preset.id);
-  if (!saveCustomJudgeApiPresets(customPresets)) {
-    setJudgeRegistryMessage("프리셋 삭제 실패: 브라우저 저장소에 쓸 수 없습니다.", "error");
-    return;
+  try {
+    setJudgeRegistryMessage("프리셋 삭제 중...", "");
+    const response = await apiFetch(`api/judge-api-presets/${encodeURIComponent(preset.id)}`, {
+      method: "DELETE",
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    replaceJudgeApiPresetCatalog(body.presets || []);
+    renderJudgeApiPresetSelect();
+    setJudgeRegistryMessage(`커스텀 프리셋 삭제 완료: ${preset.label || preset.id}`, "ok");
+  } catch (error) {
+    setJudgeRegistryMessage(`프리셋 삭제 실패: ${error.message}`, "error");
   }
-  renderJudgeApiPresetSelect();
-  setJudgeRegistryMessage(`커스텀 프리셋 삭제 완료: ${preset.label || preset.id}`, "ok");
 }
 
 function bindJudgeApiPresetControls() {

@@ -20,3 +20,4 @@ test-results/
 
 final_UI/data/*
 !final_UI/data/.gitkeep
+!final_UI/data/judge_api_presets.json

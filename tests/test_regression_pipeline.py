@@ -2459,12 +2459,75 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(hidden["visibility_status"], "hidden_by_user")
         self.assertFalse(captured["payload"]["registry"]["seeded_model"]["ui_visible"])
 
+    def test_judge_api_presets_are_saved_to_server_json(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.read_json_body = lambda: {
+            "preset": {
+                "id": "custom_vendor_judge",
+                "label": "Custom Vendor Judge",
+                "provider": "generic_api",
+                "configId": "custom_vendor_judge",
+                "displayName": "Custom Vendor Judge",
+                "model": "vendor-judge",
+                "baseUrl": "https://vendor.example.com",
+                "chatUrl": "https://vendor.example.com/v1/chat/completions",
+                "apiKeyEnv": "VENDOR_API_KEY",
+                "options": {"max_tokens": 256},
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            preset_path = Path(tmp) / "judge_api_presets.json"
+            preset_path.write_text(json.dumps({"presets": []}) + "\n", encoding="utf-8")
+            with mock.patch("final_UI.server.JUDGE_API_PRESETS_PATH", preset_path):
+                FinalUiHandler.handle_save_judge_api_preset(handler)
+                saved = json.loads(preset_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(captured["status"], 200)
+        self.assertEqual(captured["payload"]["status"], "ok")
+        self.assertEqual(saved["presets"][0]["id"], "custom_vendor_judge")
+        self.assertEqual(saved["presets"][0]["apiKeyEnv"], "VENDOR_API_KEY")
+        self.assertNotIn("api_key", saved["presets"][0])
+
+    def test_judge_api_preset_rejects_raw_secret(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        captured = {}
+
+        def fake_send_json(payload, status=200):
+            captured["payload"] = payload
+            captured["status"] = status
+
+        handler.send_json = fake_send_json
+        handler.read_json_body = lambda: {
+            "preset": {
+                "id": "unsafe",
+                "provider": "generic_api",
+                "model": "unsafe",
+                "api_key": "do-not-store",
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            preset_path = Path(tmp) / "judge_api_presets.json"
+            preset_path.write_text(json.dumps({"presets": []}) + "\n", encoding="utf-8")
+            with mock.patch("final_UI.server.JUDGE_API_PRESETS_PATH", preset_path):
+                FinalUiHandler.handle_save_judge_api_preset(handler)
+
+        self.assertEqual(captured["status"], 400)
+        self.assertIn("raw secrets", captured["payload"]["error"])
+
 
 class FinalUiJavascriptContractTests(unittest.TestCase):
     def test_benchmark_and_regression_tabs_are_separated_in_ui_contract(self) -> None:
         app_js = Path("final_UI/app.js").read_text(encoding="utf-8")
         styles_css = Path("final_UI/styles.css").read_text(encoding="utf-8")
         index_html = Path("final_UI/index.html").read_text(encoding="utf-8")
+        preset_json = Path("final_UI/data/judge_api_presets.json").read_text(encoding="utf-8")
         internal_path = Path("final_UI/bc_internal.html")
         internal_html = internal_path.read_text(encoding="utf-8") if internal_path.exists() else index_html
 
@@ -2488,12 +2551,15 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn("function resetJudgeProviderFields", app_js)
         self.assertIn("function judgeProviderDefaults", app_js)
         self.assertIn("function judgeRegistryProviderDefaults", app_js)
-        self.assertIn("function builtInJudgeApiPresets", app_js)
+        self.assertIn("function normalizeJudgeApiPresetClient", app_js)
+        self.assertIn("function replaceJudgeApiPresetCatalog", app_js)
         self.assertIn("function bindJudgeApiPresetControls", app_js)
-        self.assertIn("judgeApiPresetStorageKey", app_js)
-        self.assertIn("gemini_2_5_pro_judge", app_js)
-        self.assertIn("gemini_2_5_flash_judge", app_js)
-        self.assertIn("GEMINI_API_KEY", app_js)
+        self.assertIn('fetchJsonOptional("api/judge-api-presets"', app_js)
+        self.assertIn('apiFetch("api/judge-api-presets"', app_js)
+        self.assertNotIn("localStorage", app_js)
+        self.assertIn("gemini_2_5_pro_judge", preset_json)
+        self.assertIn("gemini_2_5_flash_judge", preset_json)
+        self.assertIn("GEMINI_API_KEY", preset_json)
         self.assertIn("generateContent 자동 사용", app_js)
         self.assertIn('id="judgeApiPresetSelect"', index_html)
         self.assertIn("상용 API Judge 프리셋", index_html)
