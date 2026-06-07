@@ -379,12 +379,12 @@ def canonical_qa_category(*values):
     text = " ".join(str(value or "") for value in values).lower()
     if any(token in text for token in ("card_product", "card_qa", "카드상품", "카드 상품")):
         return "카드상품"
-    if any(token in text for token in ("internal", "inhouse", "company_faq", "사내faq", "사내 faq", "bc_faq", "html_seed")):
-        return "사내FAQ"
+    if any(token in text for token in ("internal", "inhouse", "company_faq", "\uc0ac\ub0b4faq", "\uc0ac\ub0b4 faq", "bc_faq", "html_seed")):
+        return "BC FAQ"
     if any(token in text for token in ("financial", "finance", "regression", "금융정보", "금융 정보", "financial_qa", "financial_faq")):
         return "금융정보"
     if "faq" in text:
-        return "사내FAQ"
+        return "BC FAQ"
     return text_value(*values) or "금융정보"
 
 

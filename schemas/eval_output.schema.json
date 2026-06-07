@@ -31,7 +31,7 @@
     "config_id": {"type": "string"},
     "provider": {"type": "string"},
     "model": {"type": "string"},
-    "qa_category": {"enum": ["사내FAQ", "금융정보", "카드상품"]},
+    "qa_category": {"enum": ["BC FAQ", "금융정보", "카드상품"]},
     "question_type": {"enum": ["단일추론(사실추출)", "비교대조", "복합추론", "수치추론/계산", "민감"]},
     "qa_topic": {"enum": ["카드/결제", "대출/여신", "예적금", "투자/펀드", "일반 금융"]},
     "instruction": {"type": "string"},
