@@ -699,6 +699,14 @@ select {
   white-space: nowrap;
 }
 
+.judge-api-preset-builder {
+  grid-template-columns: minmax(240px, 1.1fr) minmax(220px, 1fr) auto auto auto;
+}
+
+.judge-api-preset-builder button {
+  min-width: 0;
+}
+
 input[type="checkbox"] {
   width: auto;
   accent-color: var(--accent);

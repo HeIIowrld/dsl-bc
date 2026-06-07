@@ -199,6 +199,7 @@ const errorTypeAliases = {
 };
 
 const rawHtml = Symbol("rawHtml");
+const judgeApiPresetStorageKey = "finalUi.customJudgeApiPresets.v1";
 
 const colors = {
   red: "rgb(250, 50, 70)",
@@ -1229,7 +1230,7 @@ function judgeProviderDefaults(provider) {
     openai_native: { model: "gpt-5.5", key: "OpenAI API key", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
     openai_compatible: { model: "gpt-5.5", key: "OpenAI API key", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
     anthropic: { model: "claude-sonnet-4-20250514", key: "Anthropic API key", baseUrl: "https://api.anthropic.com", temperature: 0, topP: 0.1 },
-    gemini: { model: "gemini-3-flash-preview", key: "Gemini API key", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
+    gemini: { model: "gemini-2.5-pro", key: "Gemini API key", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
     ollama: { model: "qwen3:14b", key: "not needed", baseUrl: "local Ollama base URL from runner", temperature: 0, topP: 0.1 },
     generic_api: { model: "judge-model", key: "Bearer token", baseUrl: "https://host.example.com", temperature: 0, topP: 0.1 },
   }[provider] || {};
@@ -1271,8 +1272,8 @@ function judgeRegistryProviderDefaults(provider) {
       apiKeyEnv: "ANTHROPIC_API_KEY",
     },
     gemini: {
-      configId: "gemini_3_flash_preview_judge",
-      displayName: "Gemini 3 Flash Preview Judge",
+      configId: "gemini_2_5_pro_judge",
+      displayName: "Gemini 2.5 Pro Judge",
       model: defaults.model,
       baseUrl: defaults.baseUrl,
       chatUrl: "",
@@ -1295,6 +1296,260 @@ function judgeRegistryProviderDefaults(provider) {
       apiKeyEnv: "JUDGE_API_KEY",
     },
   }[provider] || {};
+}
+
+function builtInJudgeApiPresets() {
+  return [
+    {
+      id: "gemini_2_5_pro",
+      label: "Google Gemini 2.5 Pro",
+      provider: "gemini",
+      configId: "gemini_2_5_pro_judge",
+      displayName: "Gemini 2.5 Pro Judge",
+      model: "gemini-2.5-pro",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      chatUrl: "",
+      apiKeyEnv: "GEMINI_API_KEY",
+      temperature: 0,
+      topP: 0.1,
+      maxTokens: 1024,
+      options: { max_output_tokens: 1024 },
+      builtIn: true,
+    },
+    {
+      id: "gemini_2_5_flash",
+      label: "Google Gemini 2.5 Flash",
+      provider: "gemini",
+      configId: "gemini_2_5_flash_judge",
+      displayName: "Gemini 2.5 Flash Judge",
+      model: "gemini-2.5-flash",
+      baseUrl: "https://generativelanguage.googleapis.com",
+      chatUrl: "",
+      apiKeyEnv: "GEMINI_API_KEY",
+      temperature: 0,
+      topP: 0.1,
+      maxTokens: 1024,
+      options: { max_output_tokens: 1024 },
+      builtIn: true,
+    },
+    {
+      id: "openai_gpt_5_5",
+      label: "OpenAI GPT-5.5",
+      provider: "openai_native",
+      configId: "openai_gpt_5_5_judge",
+      displayName: "OpenAI GPT-5.5 Judge",
+      model: "gpt-5.5",
+      baseUrl: "https://api.openai.com",
+      chatUrl: "https://api.openai.com/v1/responses",
+      apiKeyEnv: "OPENAI_API_KEY",
+      temperature: 0,
+      topP: 0.1,
+      maxTokens: 1024,
+      options: { max_output_tokens: 1024, reasoning_effort: "low", store: false },
+      builtIn: true,
+    },
+    {
+      id: "anthropic_claude_sonnet_4",
+      label: "Anthropic Claude Sonnet 4",
+      provider: "anthropic",
+      configId: "anthropic_claude_sonnet_4_judge",
+      displayName: "Claude Sonnet 4 Judge",
+      model: "claude-sonnet-4-20250514",
+      baseUrl: "https://api.anthropic.com",
+      chatUrl: "https://api.anthropic.com/v1/messages",
+      apiKeyEnv: "ANTHROPIC_API_KEY",
+      temperature: 0,
+      topP: 0.1,
+      maxTokens: 1024,
+      builtIn: true,
+    },
+    {
+      id: "clova_hcx_007",
+      label: "CLOVA HCX-007",
+      provider: "clova_studio",
+      configId: "clova_hcx_007_judge",
+      displayName: "CLOVA HCX-007 Judge",
+      model: "HCX-007",
+      baseUrl: "https://clovastudio.stream.ntruss.com",
+      chatUrl: "",
+      apiKeyEnv: "CLOVA_STUDIO_API_KEY",
+      temperature: 0,
+      topP: 0.1,
+      maxTokens: 1024,
+      options: { include_ai_filters: false },
+      builtIn: true,
+    },
+  ];
+}
+
+function loadCustomJudgeApiPresets() {
+  try {
+    const raw = window.localStorage?.getItem(judgeApiPresetStorageKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((preset) => preset && typeof preset === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomJudgeApiPresets(presets) {
+  try {
+    window.localStorage?.setItem(judgeApiPresetStorageKey, JSON.stringify(presets, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function judgeApiPresets() {
+  return [
+    ...builtInJudgeApiPresets(),
+    ...loadCustomJudgeApiPresets().map((preset) => ({ ...preset, builtIn: false })),
+  ];
+}
+
+function selectedJudgeApiPreset() {
+  const select = document.getElementById("judgeApiPresetSelect");
+  const id = select?.value || "";
+  return judgeApiPresets().find((preset) => preset.id === id) || null;
+}
+
+function renderJudgeApiPresetSelect() {
+  const select = document.getElementById("judgeApiPresetSelect");
+  if (!select) return;
+  const current = select.value;
+  const presets = judgeApiPresets();
+  select.innerHTML = [
+    `<option value="">프리셋 선택</option>`,
+    ...presets.map((preset) => {
+      const suffix = preset.builtIn ? "기본" : "커스텀";
+      return `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.label || preset.id)} · ${suffix}</option>`;
+    }),
+  ].join("");
+  if (current && presets.some((preset) => preset.id === current)) select.value = current;
+  updateJudgeApiPresetDeleteState();
+}
+
+function updateJudgeApiPresetDeleteState() {
+  const deleteButton = document.getElementById("judgeApiPresetDelete");
+  if (!deleteButton) return;
+  const preset = selectedJudgeApiPreset();
+  deleteButton.disabled = !preset || Boolean(preset.builtIn);
+}
+
+function applyJudgeApiPreset(preset = selectedJudgeApiPreset()) {
+  if (!preset) {
+    setJudgeRegistryMessage("적용할 Judge API 프리셋을 선택하세요.", "error");
+    return;
+  }
+  copySelectField("judgeRegistryProvider", preset.provider || "clova_studio", "clova_studio");
+  updateJudgeRegistryProviderFields();
+  copyModelField("judgeRegistryConfigId", preset.configId || "");
+  copyModelField("judgeRegistryDisplayName", preset.displayName || preset.label || "");
+  copyModelField("judgeRegistryModel", preset.model || "");
+  copyModelField("judgeRegistryBaseUrl", preset.baseUrl || "");
+  copyModelField("judgeRegistryChatUrl", preset.chatUrl || "");
+  copyModelField("judgeRegistryApiKeyEnv", preset.apiKeyEnv || "");
+  copyModelField("judgeRegistryTemperature", preset.temperature ?? 0);
+  copyModelField("judgeRegistryTopP", preset.topP ?? 0.1);
+  copyModelField("judgeRegistryMaxTokens", preset.maxTokens ?? 1024);
+  copySelectField("judgeRegistryPromptPreset", preset.promptPreset || "judge_default_v1", "judge_default_v1");
+  copyModelField(
+    "judgeRegistryPromptVersion",
+    preset.promptVersion || judgePromptPresets[preset.promptPreset]?.version || judgePromptPresets.judge_default_v1.version,
+  );
+  copyModelField("judgeRegistrySystemPrompt", preset.systemPrompt || "");
+  copyModelField("judgeRegistryOptionsJson", preset.options ? JSON.stringify(preset.options, null, 2) : "");
+  updateJudgeRegistryProviderFields();
+  updateJudgePromptPresetFields();
+  openJudgeAdvancedFields();
+  const keyLabel = preset.apiKeyEnv ? `${preset.apiKeyEnv} 환경변수` : "API key 없이";
+  setJudgeRegistryMessage(`프리셋 적용: ${preset.label || preset.id}. ${keyLabel}를 준비한 뒤 등록하세요.`, "ok");
+}
+
+function currentJudgeApiPresetPayload(label) {
+  const optionsText = document.getElementById("judgeRegistryOptionsJson")?.value.trim() || "";
+  let options = {};
+  if (optionsText) {
+    options = JSON.parse(optionsText);
+    if (!options || Array.isArray(options) || typeof options !== "object") {
+      throw new Error("Options JSON은 객체 형식이어야 합니다.");
+    }
+  }
+  const provider = document.getElementById("judgeRegistryProvider")?.value || "clova_studio";
+  const model = document.getElementById("judgeRegistryModel")?.value.trim() || "";
+  const displayName = document.getElementById("judgeRegistryDisplayName")?.value.trim() || label;
+  const idBase = safeConfigIdClient(label || displayName || model || provider) || "custom_judge_api";
+  return {
+    id: `custom_${idBase}`,
+    label,
+    provider,
+    configId: document.getElementById("judgeRegistryConfigId")?.value.trim() || `${idBase}_judge`,
+    displayName,
+    model,
+    baseUrl: document.getElementById("judgeRegistryBaseUrl")?.value.trim() || "",
+    chatUrl: document.getElementById("judgeRegistryChatUrl")?.value.trim() || "",
+    apiKeyEnv: document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || "",
+    temperature: Number(document.getElementById("judgeRegistryTemperature")?.value || 0),
+    topP: Number(document.getElementById("judgeRegistryTopP")?.value || 0.1),
+    maxTokens: Number(document.getElementById("judgeRegistryMaxTokens")?.value || 1024),
+    promptPreset: document.getElementById("judgeRegistryPromptPreset")?.value || "judge_default_v1",
+    promptVersion: document.getElementById("judgeRegistryPromptVersion")?.value.trim() || "",
+    systemPrompt: document.getElementById("judgeRegistrySystemPrompt")?.value || "",
+    options,
+  };
+}
+
+function saveCurrentJudgeApiPreset() {
+  const suggested = document.getElementById("judgeRegistryDisplayName")?.value.trim()
+    || document.getElementById("judgeRegistryModel")?.value.trim()
+    || "Custom Judge API";
+  const label = window.prompt("저장할 프리셋 이름을 입력하세요.", suggested);
+  if (!label) return;
+  try {
+    const preset = currentJudgeApiPresetPayload(label.trim());
+    const customPresets = loadCustomJudgeApiPresets().filter((item) => item.id !== preset.id);
+    customPresets.push(preset);
+    if (!saveCustomJudgeApiPresets(customPresets)) {
+      setJudgeRegistryMessage("프리셋 저장 실패: 브라우저 저장소에 쓸 수 없습니다.", "error");
+      return;
+    }
+    renderJudgeApiPresetSelect();
+    const select = document.getElementById("judgeApiPresetSelect");
+    if (select) select.value = preset.id;
+    updateJudgeApiPresetDeleteState();
+    setJudgeRegistryMessage(`커스텀 프리셋 저장 완료: ${preset.label}`, "ok");
+  } catch (error) {
+    setJudgeRegistryMessage(`프리셋 저장 실패: ${error.message}`, "error");
+  }
+}
+
+function deleteSelectedJudgeApiPreset() {
+  const preset = selectedJudgeApiPreset();
+  if (!preset) {
+    setJudgeRegistryMessage("삭제할 커스텀 프리셋을 선택하세요.", "error");
+    return;
+  }
+  if (preset.builtIn) {
+    setJudgeRegistryMessage("기본 프리셋은 삭제할 수 없습니다.", "error");
+    return;
+  }
+  const customPresets = loadCustomJudgeApiPresets().filter((item) => item.id !== preset.id);
+  if (!saveCustomJudgeApiPresets(customPresets)) {
+    setJudgeRegistryMessage("프리셋 삭제 실패: 브라우저 저장소에 쓸 수 없습니다.", "error");
+    return;
+  }
+  renderJudgeApiPresetSelect();
+  setJudgeRegistryMessage(`커스텀 프리셋 삭제 완료: ${preset.label || preset.id}`, "ok");
+}
+
+function bindJudgeApiPresetControls() {
+  renderJudgeApiPresetSelect();
+  const select = document.getElementById("judgeApiPresetSelect");
+  select?.addEventListener("change", updateJudgeApiPresetDeleteState);
+  document.getElementById("judgeApiPresetApply")?.addEventListener("click", () => applyJudgeApiPreset());
+  document.getElementById("judgeApiPresetSave")?.addEventListener("click", saveCurrentJudgeApiPreset);
+  document.getElementById("judgeApiPresetDelete")?.addEventListener("click", deleteSelectedJudgeApiPreset);
 }
 
 function copyJudgeRegistryDefault(id, value) {
@@ -2050,6 +2305,7 @@ function bindModelRegistryForm() {
 function bindJudgeRegistryForm() {
   const form = document.getElementById("judgeRegistryForm");
   if (!form) return;
+  bindJudgeApiPresetControls();
   const copySelect = document.getElementById("judgeCopyTargetBase");
   const copyStart = document.getElementById("judgeCopyTargetStart");
   copyStart?.addEventListener("click", () => {

@@ -227,6 +227,18 @@
             </label>
             <button id="judgeCopyTargetStart" type="button">Judge 초안 만들기</button>
           </div>
+          <div class="prompt-variant-builder judge-api-preset-builder">
+            <div class="prompt-variant-copy">
+              <strong>상용 API Judge 프리셋</strong>
+              <span>상용 모델은 프리셋을 적용한 뒤 API key 환경변수만 준비하면 됩니다.</span>
+            </div>
+            <label>프리셋
+              <select id="judgeApiPresetSelect"></select>
+            </label>
+            <button id="judgeApiPresetApply" type="button">프리셋 적용</button>
+            <button id="judgeApiPresetSave" type="button">현재 설정을 프리셋 추가</button>
+            <button id="judgeApiPresetDelete" type="button">커스텀 삭제</button>
+          </div>
           <form id="judgeRegistryForm" class="model-form">
             <label>제공자
               <select id="judgeRegistryProvider" name="provider">
@@ -918,6 +930,6 @@
     </main>
   </div><!-- /.layout -->
 
-  <script src="app.js?v=20260607-gemini-judge"></script>
+  <script src="app.js?v=20260607-judge-api-presets"></script>
 </body>
 </html>

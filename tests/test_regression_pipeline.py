@@ -550,8 +550,8 @@ class EvalScoringTests(unittest.TestCase):
 
     def test_gemini_payload_uses_generate_content_and_response_format(self) -> None:
         self.assertEqual(
-            gemini_chat_url({"model": "gemini-3-flash-preview"}),
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
+            gemini_chat_url({"model": "gemini-2.5-pro"}),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
         )
         payload = gemini_payload(
             messages=[
@@ -2488,9 +2488,16 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn("function resetJudgeProviderFields", app_js)
         self.assertIn("function judgeProviderDefaults", app_js)
         self.assertIn("function judgeRegistryProviderDefaults", app_js)
-        self.assertIn("gemini_3_flash_preview_judge", app_js)
+        self.assertIn("function builtInJudgeApiPresets", app_js)
+        self.assertIn("function bindJudgeApiPresetControls", app_js)
+        self.assertIn("judgeApiPresetStorageKey", app_js)
+        self.assertIn("gemini_2_5_pro_judge", app_js)
+        self.assertIn("gemini_2_5_flash_judge", app_js)
         self.assertIn("GEMINI_API_KEY", app_js)
         self.assertIn("generateContent 자동 사용", app_js)
+        self.assertIn('id="judgeApiPresetSelect"', index_html)
+        self.assertIn("상용 API Judge 프리셋", index_html)
+        self.assertIn(".judge-api-preset-builder", styles_css)
         self.assertIn("judgePickerInitialized", app_js)
         self.assertIn("job.static_embedding_model", app_js)
         self.assertIn("const searchRows = cases.length ? cases : caseData;", app_js)
