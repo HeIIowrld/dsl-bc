@@ -226,7 +226,6 @@ let modelHealthCheckInFlight = false;
 let toastSequence = 0;
 let modelHealthCheckProgress = null;
 let judgePickerInitialized = false;
-let lastJudgeProvider = "";
 let appReady = false;
 let authSession = null;
 let authAccessLog = [];
@@ -1090,8 +1089,7 @@ function syncJudgeAggregationControls() {
   const help = document.getElementById("evalJudgeAggregationHelp");
   if (!block || !select) return;
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
-  const provider = document.getElementById("evalJudgeProvider")?.value || "registered";
-  const visible = scoringMode !== "static" && provider === "registered" && selectedJudgeConfigIds().length > 1;
+  const visible = scoringMode !== "static" && selectedJudgeConfigIds().length > 1;
   block.hidden = !visible;
   block.classList.toggle("field-hidden", !visible);
   if (help) {
@@ -1176,10 +1174,9 @@ function renderJudgeWeightInputs(options = {}) {
   const help = document.getElementById("evalJudgeWeightsHelp");
   if (!block || !target) return;
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
-  const provider = document.getElementById("evalJudgeProvider")?.value || "registered";
   const ids = selectedJudgeConfigIds();
   const aggregationMethod = selectedJudgeAggregationMethod();
-  const visible = scoringMode !== "static" && provider === "registered" && ids.length > 1 && aggregationMethod === "weighted_mean";
+  const visible = scoringMode !== "static" && ids.length > 1 && aggregationMethod === "weighted_mean";
   block.hidden = !visible;
   block.classList.toggle("field-hidden", !visible);
   if (!visible) {
@@ -2113,13 +2110,8 @@ function latestJudgeMethodLabel() {
 function currentJudgeMethodLabel() {
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
   if (scoringMode === "static") return scoringModeLabel("static");
-  const provider = document.getElementById("evalJudgeProvider")?.value || "registered";
   const label = scoringModeLabel(scoringMode);
-  if (provider === "registered") {
-    return `${label} · ${summarizeJudgeIds(selectedJudgeConfigIds()) || "Judge 미선택"}`;
-  }
-  const model = document.getElementById("evalJudgeModel")?.value || "";
-  return `${label} · ${provider}${model ? ` · ${model}` : ""}`;
+  return `${label} · ${summarizeJudgeIds(selectedJudgeConfigIds()) || "Judge 미선택"}`;
 }
 
 function updateHeaderJudgeStatus(job = null) {
@@ -4034,7 +4026,6 @@ function updateEvalRunMode() {
   const limit = document.getElementById("evalLimit");
   const selectedCaseFile = datasetSelect?.value || selectedDataset;
   const predictionFile = document.getElementById("evalPredictionFile");
-  const suitePanel = document.getElementById("evalSuiteFilters")?.parentElement;
   const configCard = document.querySelector(".benchmark-config-card");
   if (datasetSelect) {
     datasetSelect.disabled = isProfileRun;
@@ -4045,14 +4036,10 @@ function updateEvalRunMode() {
     const label = predictionFile.closest("label");
     if (label) label.hidden = isProfileRun || !String(selectedCaseFile).startsWith("tool_agent");
   }
-  if (suitePanel) suitePanel.hidden = isProfileRun;
   configCard?.classList.toggle("profile-run", isProfileRun);
   if (limit) {
     limit.placeholder = isProfileRun ? "profile 기본값 사용" : "예: 10";
   }
-  document.querySelectorAll("[data-eval-suite]").forEach((input) => {
-    input.disabled = isProfileRun;
-  });
   renderEvalRunSummary();
 }
 
@@ -4078,7 +4065,6 @@ async function loadDatasetCases(datasetId) {
 function renderCaseSets() {
   renderDatasetCaseTable();
   renderDatasetDetails();
-  renderEvalSuiteFilters();
 }
 
 function renderDatasetCaseTable() {
@@ -4182,7 +4168,6 @@ function initializeEvalRunControls() {
   renderEvalProfileCards();
   renderCustomPoolInputs();
   renderEvalConfigFilters();
-  renderEvalSuiteFilters();
   updateEvalRunMode();
   const runProfile = document.getElementById("evalRunProfile");
   if (runProfile) {
@@ -4231,7 +4216,7 @@ function initializeEvalRunControls() {
     syncScoringModeHelp();
     renderEvalRunSummary();
   });
-  ["evalStaticEmbeddingModel", "evalJudgeModel"].forEach((id) => {
+  ["evalStaticEmbeddingModel"].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", updateRunSubmitState);
   });
   document.getElementById("evalConfigFilters")?.addEventListener("change", (event) => {
@@ -4360,7 +4345,6 @@ function initializeStaticEmbeddingControls() {
 }
 
 function initializeJudgeControls() {
-  const provider = document.getElementById("evalJudgeProvider");
   const registeredJudge = document.getElementById("evalJudgeConfigId");
   const scoringMode = document.getElementById("evalScoringMode");
   const refresh = () => {
@@ -4370,21 +4354,13 @@ function initializeJudgeControls() {
     renderEvalRunSummary();
     updateHeaderJudgeStatus();
   };
-  if (provider) {
-    lastJudgeProvider = provider.value || "registered";
-    provider.addEventListener("change", () => {
-      resetJudgeProviderFields(lastJudgeProvider, provider.value || "registered");
-      lastJudgeProvider = provider.value || "registered";
-      refresh();
-    });
-  }
   if (registeredJudge) {
     registeredJudge.addEventListener("change", refresh);
   }
   if (scoringMode) {
     scoringMode.addEventListener("change", refresh);
   }
-  ["evalJudgeModel", "evalJudgeTemperature", "evalJudgeTopP", "evalJudgeBlendWeight"].forEach((id) => {
+  ["evalJudgeBlendWeight"].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", () => {
       renderEvalRunSummary();
       updateHeaderJudgeStatus();
@@ -4400,30 +4376,11 @@ function initializeJudgeControls() {
   renderJudgeWeightInputs();
 }
 
-function resetJudgeProviderFields(previousProvider, nextProvider) {
-  if (!previousProvider || previousProvider === nextProvider) return;
-  const model = document.getElementById("evalJudgeModel");
-  const key = document.getElementById("evalJudgeApiKey");
-  const baseUrl = document.getElementById("evalJudgeBaseUrl");
-  const temperature = document.getElementById("evalJudgeTemperature");
-  const topP = document.getElementById("evalJudgeTopP");
-  [model, key, baseUrl, temperature, topP].filter(Boolean).forEach((element) => {
-    element.value = "";
-  });
-}
-
 function updateJudgePlaceholders() {
-  const provider = document.getElementById("evalJudgeProvider")?.value || "clova_studio";
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
   const registeredJudge = document.getElementById("evalJudgeConfigId");
-  const model = document.getElementById("evalJudgeModel");
-  const key = document.getElementById("evalJudgeApiKey");
-  const baseUrl = document.getElementById("evalJudgeBaseUrl");
-  const temperature = document.getElementById("evalJudgeTemperature");
-  const topP = document.getElementById("evalJudgeTopP");
   const blend = document.getElementById("evalJudgeBlendWeight");
   const showJudgeControls = scoringMode !== "static";
-  const registeredMode = provider === "registered";
   const fieldShell = (element) => element?.closest("label, .field-block");
   const setShellHidden = (element, hidden) => {
     const shell = fieldShell(element);
@@ -4431,45 +4388,13 @@ function updateJudgePlaceholders() {
     shell.hidden = hidden;
     shell.classList.toggle("field-hidden", hidden);
   };
-  [provider && document.getElementById("evalJudgeProvider"), registeredJudge, model, key, baseUrl, temperature, topP]
-    .filter(Boolean)
-    .forEach((element) => setShellHidden(element, !showJudgeControls));
   if (fieldShell(blend)) {
     fieldShell(blend).hidden = !showJudgeControls || scoringMode !== "blend";
     fieldShell(blend).classList.toggle("field-hidden", fieldShell(blend).hidden);
   }
-  setShellHidden(registeredJudge, !showJudgeControls || !registeredMode);
-  [model, key, baseUrl, temperature, topP].filter(Boolean).forEach((element) => {
-    if (registeredMode) setShellHidden(element, true);
-  });
-  const defaults = judgeProviderDefaults(provider);
-  if (registeredMode && registeredJudge) {
+  setShellHidden(registeredJudge, !showJudgeControls);
+  if (registeredJudge) {
     renderJudgeRegistry();
-  }
-  if (model) {
-    model.placeholder = provider === "clova_studio"
-      ? "HCX-007 for answer/judge, HCX-DASH-002 for routing, HCX-005 for vision"
-      : defaults.model || "judge model";
-    if (!model.value && scoringMode !== "static") model.value = defaults.model || "";
-  }
-  if (key) {
-    key.placeholder = provider === "ollama" ? "not needed for Ollama" : `${defaults.key || "API key"} · optional one-time override`;
-    key.disabled = provider === "ollama" || scoringMode === "static";
-    if (key.disabled) key.value = "";
-  }
-  if (baseUrl) {
-    baseUrl.placeholder = defaults.baseUrl || "optional";
-    baseUrl.disabled = scoringMode === "static";
-  }
-  if (temperature) {
-    temperature.placeholder = String(defaults.temperature ?? 0);
-    temperature.disabled = scoringMode === "static";
-    if (temperature.value === "" && scoringMode !== "static") temperature.value = String(defaults.temperature ?? 0);
-  }
-  if (topP) {
-    topP.placeholder = String(defaults.topP ?? 0.1);
-    topP.disabled = scoringMode === "static";
-    if (topP.value === "" && scoringMode !== "static") topP.value = String(defaults.topP ?? 0.1);
   }
   if (blend) {
     blend.disabled = scoringMode !== "blend";
@@ -4559,21 +4484,6 @@ function formatSampling(temp, topP) {
   return parts.join(" / ") || "-";
 }
 
-function renderEvalSuiteFilters() {
-  const target = document.getElementById("evalSuiteFilters");
-  if (!target) return;
-  const selectedSummary = questionlistDatasets.find((dataset) => dataset.id === selectedDataset) ?? {};
-  const suiteEntries = Object.entries(selectedSummary.suite || {});
-  const suites = suiteEntries.length ? suiteEntries.map(([suite]) => suite) : unique(datasetCases.map((row) => row.suite));
-  target.innerHTML = suites.map((suite) => `
-    <label class="check-item">
-      <input type="checkbox" data-eval-suite value="${escapeHtml(suite)}" checked>
-      ${escapeHtml(suite)}
-    </label>
-  `).join("") || emptyState("이 데이터셋에서는 세부 묶음 필터가 선택 사항입니다.");
-  updateEvalRunMode();
-}
-
 function renderEvalRunSummary() {
   const target = document.getElementById("evalRunSummary");
   if (!target) return;
@@ -4590,12 +4500,11 @@ function renderEvalRunSummary() {
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
   const staticEmbeddingEnabled = Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value || "";
-  const judgeProvider = document.getElementById("evalJudgeProvider")?.value || "registered";
   const aggregationMethod = selectedJudgeAggregationMethod();
   const judgeCount = scoringMode === "static"
     ? 0
-    : (judgeProvider === "registered" ? selectedJudgeConfigIds().length : 1);
-  const judgeWeightStatus = judgeProvider === "registered" && judgeCount > 1 && aggregationMethod === "weighted_mean"
+    : selectedJudgeConfigIds().length;
+  const judgeWeightStatus = judgeCount > 1 && aggregationMethod === "weighted_mean"
     ? judgeScoreWeightStatus(selectedJudgeConfigIds())
     : null;
   const caseLabel = isProfileRun
@@ -4609,7 +4518,7 @@ function renderEvalRunSummary() {
       scoringModeLabel(scoringMode),
       staticEmbeddingEnabled ? `embedding ${staticEmbeddingModel || "on"}` : "",
       judgeCount ? `Judge ${judgeCount}개` : "",
-      judgeProvider === "registered" && judgeCount > 1 ? judgeAggregationLabels[aggregationMethod] : "",
+      judgeCount > 1 ? judgeAggregationLabels[aggregationMethod] : "",
       judgeWeightStatus ? `Judge 비중 ${judgeWeightStatus.total.toFixed(2)}` : "",
       answerCacheEnabled ? "답변 캐시 사용" : "새 답변 생성",
       dryRun ? "모의 실행" : "실제 실행",
@@ -4624,11 +4533,9 @@ function updateRunSubmitState() {
   const targetCount = evalTargetRegistryIds().length;
   const selectedCount = [...document.querySelectorAll("[data-eval-config]:checked")].length;
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
-  const judgeProvider = document.getElementById("evalJudgeProvider")?.value || "registered";
   const aggregationMethod = selectedJudgeAggregationMethod();
   const staticEmbeddingEnabled = Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value?.trim() || "";
-  const judgeModel = document.getElementById("evalJudgeModel")?.value?.trim() || "";
   let disabled = false;
   let reason = "선택한 모델과 실행 범위로 평가를 시작합니다.";
   if (targetCount === 0) {
@@ -4640,21 +4547,15 @@ function updateRunSubmitState() {
   } else if (staticEmbeddingEnabled && !staticEmbeddingModel) {
     disabled = true;
     reason = "정적 임베딩 유사도를 사용하려면 embedding model을 입력하세요.";
-  } else if (scoringMode !== "static" && judgeProvider === "registered" && !selectedJudgeConfigIds().length) {
+  } else if (scoringMode !== "static" && !selectedJudgeConfigIds().length) {
     disabled = true;
     reason = "등록된 Judge 또는 대상 모델 Judge를 하나 이상 선택하세요.";
-  } else if (scoringMode === "llm_blended" && judgeProvider !== "registered") {
-    disabled = true;
-    reason = "LLM blended는 등록된 Judge를 2개 이상 선택해 사용합니다. 선택한 Judge별 비율로 점수를 합산합니다.";
-  } else if (scoringMode === "llm_blended" && judgeProvider === "registered" && selectedJudgeConfigIds().length < 2) {
+  } else if (scoringMode === "llm_blended" && selectedJudgeConfigIds().length < 2) {
     disabled = true;
     reason = "LLM blended는 Judge를 2개 이상 선택하세요. 3개 이상도 사용할 수 있습니다.";
-  } else if (scoringMode !== "static" && judgeProvider === "registered" && selectedJudgeConfigIds().length > 1 && aggregationMethod === "weighted_mean" && !judgeScoreWeightStatus(selectedJudgeConfigIds()).valid) {
+  } else if (scoringMode !== "static" && selectedJudgeConfigIds().length > 1 && aggregationMethod === "weighted_mean" && !judgeScoreWeightStatus(selectedJudgeConfigIds()).valid) {
     disabled = true;
     reason = "Judge별 점수 비중 합계가 1이어야 합니다.";
-  } else if (scoringMode !== "static" && judgeProvider !== "registered" && !judgeModel) {
-    disabled = true;
-    reason = "Judge provider를 직접 사용할 때는 judge model을 입력하세요.";
   }
 
   const disabledHint = (() => {
@@ -4664,7 +4565,6 @@ function updateRunSubmitState() {
     if (reason.includes("대상 모델")) return "대상 모델 등록 필요";
     if (reason.includes("실행할 모델")) return "실행할 모델 선택 필요";
     if (reason.includes("embedding model")) return "임베딩 모델명 입력 필요";
-    if (reason.includes("judge model")) return "Judge 모델명 입력 필요";
     return reason;
   })();
 
@@ -4697,7 +4597,7 @@ async function startEvalRun(options = {}) {
   const runProfile = document.getElementById("evalRunProfile")?.value || "single_dataset";
   const dataset = document.getElementById("evalDatasetSelect")?.value || selectedDataset;
   const configs = [...document.querySelectorAll("[data-eval-config]:checked")].map((input) => input.value);
-  const suites = runProfile === "single_dataset" ? [...document.querySelectorAll("[data-eval-suite]:checked")].map((input) => input.value) : [];
+  const suites = [];
   const limitRaw = document.getElementById("evalLimit")?.value ?? "";
   const limit = limitRaw === "" ? null : Number(limitRaw);
   const runId = document.getElementById("evalRunId")?.value || "";
@@ -4711,14 +4611,14 @@ async function startEvalRun(options = {}) {
   const staticEmbeddingEnabled = answerOnly ? false : Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value || "";
   const staticEmbeddingBaseUrl = document.getElementById("evalStaticEmbeddingBaseUrl")?.value || "";
-  const judgeProvider = document.getElementById("evalJudgeProvider")?.value || "clova_studio";
+  const judgeProvider = "registered";
   const judgeConfigIds = selectedJudgeConfigIds();
   const judgeAggregationMethod = selectedJudgeAggregationMethod();
-  const judgeModel = document.getElementById("evalJudgeModel")?.value || "";
-  const judgeApiKey = document.getElementById("evalJudgeApiKey")?.value || "";
-  const judgeBaseUrl = document.getElementById("evalJudgeBaseUrl")?.value || "";
-  const judgeTemperatureRaw = document.getElementById("evalJudgeTemperature")?.value ?? "";
-  const judgeTopPRaw = document.getElementById("evalJudgeTopP")?.value ?? "";
+  const judgeModel = "";
+  const judgeApiKey = "";
+  const judgeBaseUrl = "";
+  const judgeTemperatureRaw = "";
+  const judgeTopPRaw = "";
   const judgeTemperature = judgeTemperatureRaw === "" ? null : Number(judgeTemperatureRaw);
   const judgeTopP = judgeTopPRaw === "" ? null : Number(judgeTopPRaw);
   const judgeBlendWeight = Number(document.getElementById("evalJudgeBlendWeight")?.value || 0.5);
@@ -4734,24 +4634,16 @@ async function startEvalRun(options = {}) {
     setEvalRunMessage("테스트를 실행할 모델을 하나 이상 선택해야 합니다.", "error");
     return;
   }
-  if (selectedScoringMode !== "static" && judgeProvider === "registered" && !judgeConfigIds.length) {
+  if (selectedScoringMode !== "static" && !judgeConfigIds.length) {
     setEvalRunMessage("등록된 Judge 또는 대상 모델 Judge를 하나 이상 선택하세요.", "error");
     return;
   }
-  if (selectedScoringMode === "llm_blended" && judgeProvider !== "registered") {
-    setEvalRunMessage("LLM blended는 등록된 Judge를 2개 이상 선택해 사용합니다. 선택한 Judge별 비율로 점수를 합산합니다.", "error");
-    return;
-  }
-  if (selectedScoringMode === "llm_blended" && judgeProvider === "registered" && judgeConfigIds.length < 2) {
+  if (selectedScoringMode === "llm_blended" && judgeConfigIds.length < 2) {
     setEvalRunMessage("LLM blended는 Judge를 2개 이상 선택하세요. 3개 이상도 사용할 수 있습니다.", "error");
     return;
   }
-  if (selectedScoringMode !== "static" && judgeProvider === "registered" && judgeConfigIds.length > 1 && judgeAggregationMethod === "weighted_mean" && !judgeScoreWeightStatus(judgeConfigIds).valid) {
+  if (selectedScoringMode !== "static" && judgeConfigIds.length > 1 && judgeAggregationMethod === "weighted_mean" && !judgeScoreWeightStatus(judgeConfigIds).valid) {
     setEvalRunMessage("Judge별 점수 비중 합계가 1이어야 합니다.", "error");
-    return;
-  }
-  if (selectedScoringMode !== "static" && judgeProvider !== "registered" && !judgeModel.trim()) {
-    setEvalRunMessage("Judge provider를 직접 사용할 때는 judge model을 입력하세요.", "error");
     return;
   }
   if (staticEmbeddingEnabled && !staticEmbeddingModel.trim()) {
@@ -4783,8 +4675,8 @@ async function startEvalRun(options = {}) {
         keep_alive: "0",
       },
       judge: {
-        config_id: judgeProvider === "registered" ? judgeConfigIds[0] || "" : "",
-        config_ids: judgeProvider === "registered" ? judgeConfigIds : [],
+        config_id: judgeConfigIds[0] || "",
+        config_ids: judgeConfigIds,
         provider: judgeProvider,
         model: judgeModel,
         api_key: judgeApiKey,
@@ -4792,8 +4684,8 @@ async function startEvalRun(options = {}) {
         temperature: judgeTemperature,
         top_p: judgeTopP,
         blend_weight: judgeBlendWeight,
-        aggregation_method: judgeProvider === "registered" ? judgeAggregationMethod : "weighted_mean",
-        score_weights: judgeProvider === "registered" && judgeAggregationMethod === "weighted_mean" ? collectJudgeScoreWeights(judgeConfigIds) : {},
+        aggregation_method: judgeAggregationMethod,
+        score_weights: judgeAggregationMethod === "weighted_mean" ? collectJudgeScoreWeights(judgeConfigIds) : {},
       },
       dry_run: dryRun,
       export_final_ui: exportFinalUi,
