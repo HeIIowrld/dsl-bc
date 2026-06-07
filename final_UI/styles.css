@@ -522,13 +522,21 @@ details[open] > summary.card-head::after {
 .model-form label.required-field::before,
 .model-form label:has([required])::before {
   content: "필수";
+  display: inline-flex;
+  position: absolute;
+  top: 0;
+  left: 0;
+  align-items: center;
   width: fit-content;
+  min-height: 16px;
   padding: 2px 5px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   color: var(--accent);
   font-size: 11px;
+  line-height: 1;
   letter-spacing: 0;
+  text-transform: none;
 }
 
 .prompt-settings-panel button[type="submit"] {
@@ -549,6 +557,16 @@ details[open] > summary.card-head::after {
   color: var(--text);
   text-transform: uppercase;
   letter-spacing: .07em;
+}
+
+.model-form > label {
+  position: relative;
+  min-height: 67px;
+  padding-top: 19px;
+}
+
+.model-form > label:has(.registry-field-note) {
+  min-height: 82px;
 }
 
 .field-label {
