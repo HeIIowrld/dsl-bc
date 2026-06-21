@@ -54,6 +54,7 @@ from scripts.eval.run_multi_model_eval import (
     write_csv,
     write_html_report,
     write_jsonl,
+    write_partitioned_eval_artifacts,
     write_xlsx,
 )
 
@@ -487,6 +488,7 @@ def write_run_outputs(
             score = score_by_key.get((output.get("case_id"), config_id), {})
             rows.append({**output, **{f"score_{key}": value for key, value in score.items() if key not in output}})
         write_jsonl(by_model_dir / f"{safe_filename(config_id)}.jsonl", rows)
+    write_partitioned_eval_artifacts(run_dir, outputs, scores)
     write_html_report(run_dir / "regression_report.html", summary, regression_diff, run_release_gates, run_metadata)
     write_xlsx(
         run_dir / "regression_report.xlsx",

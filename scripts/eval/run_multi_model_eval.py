@@ -502,6 +502,238 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def json_list_value(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def normalized_answer_row(output: dict[str, Any]) -> dict[str, Any]:
+    answer = str(output.get("model_answer") or "")
+    return {
+        "run_id": output.get("run_id", ""),
+        "case_id": output.get("case_id", ""),
+        "config_id": output.get("config_id", ""),
+        "provider": output.get("provider", ""),
+        "model": output.get("model", ""),
+        "display_name": output.get("display_name", ""),
+        "status": output.get("status", ""),
+        "latency_ms": output.get("latency_ms", ""),
+        "output_fingerprint": output.get("output_fingerprint", ""),
+        "answer_cache_key": output.get("answer_cache_key", ""),
+        "answer_cache_hit": output.get("answer_cache_hit", ""),
+        "model_answer": answer,
+        "answer_excerpt": normalize_text(answer)[:500],
+    }
+
+
+def raw_response_row(output: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_id": output.get("run_id", ""),
+        "case_id": output.get("case_id", ""),
+        "config_id": output.get("config_id", ""),
+        "provider": output.get("provider", ""),
+        "model": output.get("model", ""),
+        "status": output.get("status", ""),
+        "output_fingerprint": output.get("output_fingerprint", ""),
+        "raw_response": output.get("raw_response", ""),
+    }
+
+
+def write_target_model_artifacts(run_dir: Path, outputs: list[dict[str, Any]]) -> None:
+    target_root = run_dir / "by_target_model"
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for output in outputs:
+        config_id = str(output.get("config_id") or "")
+        if not config_id:
+            continue
+        grouped.setdefault(config_id, []).append(output)
+    for config_id, rows in grouped.items():
+        target_dir = target_root / safe_filename(config_id)
+        write_jsonl(target_dir / "model_outputs.jsonl", rows)
+        write_csv(target_dir / "model_outputs.csv", rows)
+        write_jsonl(target_dir / "normalized_answers.jsonl", [normalized_answer_row(row) for row in rows])
+        raw_rows = [
+            raw_response_row(row)
+            for row in rows
+            if row.get("raw_response") not in ("", None, {}, [])
+        ]
+        write_jsonl(target_dir / "raw_responses.jsonl", raw_rows)
+
+
+def fallback_individual_judge_score(score: dict[str, Any]) -> dict[str, Any] | None:
+    judge_id = str(score.get("llm_judge_config_id") or "").strip()
+    if not judge_id:
+        return None
+    return {
+        "config_id": judge_id,
+        "provider": score.get("llm_judge_provider", ""),
+        "model": score.get("llm_judge_model", ""),
+        "prompt_version": score.get("llm_judge_prompt_version", ""),
+        "prompt_hash": score.get("llm_judge_prompt_hash", ""),
+        "system_prompt_preset": score.get("llm_judge_prompt_preset", ""),
+        **{key: score.get(f"llm_judge_{key}", score.get(key)) for key in SCORE_METRIC_KEYS},
+        "utl_applicable": score.get("utl_applicable", ""),
+        "applicable_metrics": score.get("llm_judge_applicable_metrics", score.get("applicable_metrics", "")),
+        "score_denominator": score.get("llm_judge_score_denominator", score.get("score_denominator", "")),
+        "raw_metric_score": score.get("llm_judge_raw_metric_score", score.get("raw_metric_score", "")),
+        "answer_quality_score": score.get("llm_judge_answer_quality_score", score.get("answer_quality_score", "")),
+        "rag_quality_score": score.get("llm_judge_rag_quality_score", score.get("rag_quality_score", "")),
+        "overall_score": score.get("llm_judge_overall_score", score.get("overall_score", "")),
+        "pass": score.get("llm_judge_pass", score.get("pass", "")),
+        "critical_fail": score.get("llm_judge_critical_fail", score.get("critical_fail", "")),
+        "error_type": score.get("llm_judge_error_type", score.get("error_type", "")),
+        "reason": score.get("llm_judge_reason", score.get("reason", "")),
+        "role": "judge",
+    }
+
+
+def individual_judge_score_rows(score: dict[str, Any]) -> list[dict[str, Any]]:
+    individual = [
+        item
+        for item in json_list_value(score.get("llm_judge_individual_scores"))
+        if isinstance(item, dict)
+    ]
+    if not individual:
+        fallback = fallback_individual_judge_score(score)
+        individual = [fallback] if fallback else []
+    rows: list[dict[str, Any]] = []
+    for item in individual:
+        judge_id = str(item.get("config_id") or item.get("judge_config_id") or score.get("llm_judge_config_id") or "").strip()
+        if not judge_id:
+            continue
+        rows.append(
+            {
+                "run_id": score.get("run_id", ""),
+                "case_id": score.get("case_id", ""),
+                "config_id": score.get("config_id", ""),
+                "target_config_id": score.get("config_id", ""),
+                "judge_config_id": judge_id,
+                "llm_judge_config_id": judge_id,
+                "judge_provider": item.get("provider", ""),
+                "judge_model": item.get("model", ""),
+                "llm_judge_provider": item.get("provider", ""),
+                "llm_judge_model": item.get("model", ""),
+                "role": item.get("role", "judge"),
+                "prompt_version": item.get("prompt_version", ""),
+                "prompt_hash": item.get("prompt_hash", ""),
+                "system_prompt_preset": item.get("system_prompt_preset", ""),
+                **{key: item.get(key, "") for key in SCORE_METRIC_KEYS},
+                "utl_applicable": item.get("utl_applicable", score.get("utl_applicable", "")),
+                "applicable_metrics": item.get("applicable_metrics", score.get("applicable_metrics", "")),
+                "score_denominator": item.get("score_denominator", ""),
+                "raw_metric_score": item.get("raw_metric_score", ""),
+                "answer_quality_score": item.get("answer_quality_score", ""),
+                "rag_quality_score": item.get("rag_quality_score", ""),
+                "overall_score": item.get("overall_score", ""),
+                "pass": item.get("pass", ""),
+                "critical_fail": item.get("critical_fail", ""),
+                "error_type": item.get("error_type", ""),
+                "reason": item.get("reason", ""),
+                "weight": item.get("weight", ""),
+                "selected": item.get("selected", ""),
+                "output_fingerprint": score.get("output_fingerprint", ""),
+                "score_fingerprint": score.get("score_fingerprint", ""),
+                "source_llm_judge_count": score.get("llm_judge_count", ""),
+                "source_llm_judge_status": score.get("llm_judge_status", ""),
+                "source_llm_judge_conflict": score.get("llm_judge_conflict", ""),
+                "source_llm_judge_conflict_reason": score.get("llm_judge_conflict_reason", ""),
+                "source_llm_judge_conflict_resolution_policy": score.get("llm_judge_conflict_resolution_policy", ""),
+                "source_llm_judge_arbiter_config_id": score.get("llm_judge_arbiter_config_id", ""),
+            }
+        )
+    return rows
+
+
+def write_judge_artifacts(run_dir: Path, scores: list[dict[str, Any]]) -> None:
+    judge_root = run_dir / "by_judge"
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for score in scores:
+        for row in individual_judge_score_rows(score):
+            judge_id = str(row.get("judge_config_id") or "").strip()
+            if not judge_id:
+                continue
+            grouped.setdefault(judge_id, []).append(row)
+    for judge_id, rows in grouped.items():
+        judge_dir = judge_root / safe_filename(judge_id)
+        write_jsonl(judge_dir / "judge_scores.jsonl", rows)
+        write_csv(judge_dir / "judge_scores.csv", rows)
+
+
+def write_partitioned_eval_artifacts(run_dir: Path, outputs: list[dict[str, Any]], scores: list[dict[str, Any]]) -> None:
+    write_target_model_artifacts(run_dir, outputs)
+    write_judge_artifacts(run_dir, scores)
+    write_artifact_manifest(run_dir, outputs, scores)
+
+
+def write_artifact_manifest(run_dir: Path, outputs: list[dict[str, Any]], scores: list[dict[str, Any]]) -> None:
+    target_ids = sorted({str(row.get("config_id") or "") for row in outputs if row.get("config_id")})
+    judge_ids = sorted(
+        {
+            str(row.get("judge_config_id") or "")
+            for score in scores
+            for row in individual_judge_score_rows(score)
+            if row.get("judge_config_id")
+        }
+    )
+    manifest = {
+        "schema": "eval_artifacts_v2_partitioned_source",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "source_of_truth": {
+            "target_model_outputs": "by_target_model/{target_config_id}/model_outputs.jsonl",
+            "target_model_normalized_answers": "by_target_model/{target_config_id}/normalized_answers.jsonl",
+            "judge_scores": "by_judge/{judge_config_id}/judge_scores.jsonl",
+        },
+        "derived_projection_files": [
+            "model_outputs.jsonl",
+            "judge_scores.jsonl",
+            "eval_runs.csv",
+            "question_cases.csv",
+            "regression_diff.csv",
+            "run_release_gates.csv",
+            "regression_report.html",
+            "regression_report.xlsx",
+        ],
+        "answer_reuse_policy": {
+            "cache_dir_default": "out/eval_runs/_answer_cache",
+            "cache_key_schema": "answer_generation_cache_v2",
+            "cache_key_includes": [
+                "model_identity",
+                "cache_identity_or_model_artifact_id",
+                "provider",
+                "model",
+                "endpoint_when_no_cache_identity",
+                "prompt_version",
+                "system_prompt_preset",
+                "rendered_messages",
+                "generation_options",
+                "response_path",
+            ],
+            "operator_requirement": "Bump cache_identity/model_artifact_id whenever model weights, adapters, or serving artifact changes without a config/model name change.",
+        },
+        "counts": {
+            "target_models": len(target_ids),
+            "target_model_outputs": len(outputs),
+            "judges": len(judge_ids),
+            "judge_score_rows": sum(1 for score in scores for _ in individual_judge_score_rows(score)),
+            "aggregate_score_rows": len(scores),
+        },
+        "target_config_ids": target_ids,
+        "judge_config_ids": judge_ids,
+    }
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "artifact_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def eval_row_key(row: dict[str, Any]) -> tuple[str, str]:
     return str(row.get("config_id") or ""), str(row.get("case_id") or "")
 
@@ -592,8 +824,10 @@ def answer_cache_fingerprint(
 ) -> str:
     return fingerprint_payload(
         {
-            "schema": "answer_generation_cache_v1",
+            "schema": "answer_generation_cache_v2",
             "model_identity": answer_cache_model_identity(config, default_base_url=default_base_url),
+            "prompt_version": str(config.get("prompt_version") or ""),
+            "system_prompt_preset": str(config.get("system_prompt_preset") or ""),
             "messages": messages_for_case(case, config),
             "options": dict(config.get("options") or {}),
             "response_path": str(config.get("response_path") or ""),
@@ -3803,7 +4037,38 @@ def aggregate_llm_judge_scores(
     if not judge_scores:
         raise ValueError("No LLM judge scores were returned.")
     if len(judge_scores) == 1:
-        return judge_scores[0]
+        score = dict(judge_scores[0])
+        utl_applicable = bool_from_metadata(score.get("utl_applicable"), True)
+        score.setdefault("judge_count", 1)
+        score.setdefault("judge_conflict", False)
+        score.setdefault("judge_conflict_reason", "")
+        score.setdefault("judge_aggregation_method", "single")
+        score.setdefault(
+            "individual_scores",
+            [
+                {
+                    "config_id": score.get("config_id"),
+                    "provider": score.get("provider"),
+                    "model": score.get("model"),
+                    "prompt_version": score.get("prompt_version"),
+                    "prompt_hash": score.get("prompt_hash"),
+                    "system_prompt_preset": score.get("system_prompt_preset"),
+                    **{key: score.get(key) for key in SCORE_METRIC_KEYS},
+                    "utl_applicable": score.get("utl_applicable", utl_applicable),
+                    "applicable_metrics": score.get("applicable_metrics", ",".join(metric_keys_for_score(utl_applicable))),
+                    "score_denominator": score.get("score_denominator", score_denominator(utl_applicable)),
+                    "raw_metric_score": score.get("raw_metric_score", raw_metric_score(score, utl_applicable)),
+                    "answer_quality_score": score.get("answer_quality_score", score_total_from_metrics(score, False)),
+                    "rag_quality_score": score.get("rag_quality_score", score_total_from_metrics(score, True)),
+                    "overall_score": llm_judge_overall(score),
+                    "pass": score.get("pass"),
+                    "critical_fail": score.get("critical_fail"),
+                    "error_type": score.get("error_type"),
+                    "reason": score.get("reason"),
+                }
+            ],
+        )
+        return score
     requested_method = str(aggregation_method or "auto").strip()
     if requested_method not in JUDGE_AGGREGATION_METHODS:
         requested_method = "auto"
@@ -5503,6 +5768,7 @@ def main() -> None:
             config_id = config["config_id"]
             rows = [output for output in outputs if output.get("config_id") == config_id]
             write_jsonl(by_model_dir / f"{safe_filename(config_id)}.jsonl", rows)
+        write_partitioned_eval_artifacts(run_dir, outputs, [])
         ollama_dir = run_dir / "ollama"
         ollama_dir.mkdir(parents=True, exist_ok=True)
         (ollama_dir / "preflight_tags.json").write_text(
@@ -5616,6 +5882,7 @@ def main() -> None:
             score = score_by_key.get((output.get("case_id"), config_id), {})
             rows.append({**output, **{f"score_{key}": value for key, value in score.items() if key not in output}})
         write_jsonl(by_model_dir / f"{safe_filename(config_id)}.jsonl", rows)
+    write_partitioned_eval_artifacts(run_dir, outputs, scores)
     ollama_dir = run_dir / "ollama"
     ollama_dir.mkdir(parents=True, exist_ok=True)
     (ollama_dir / "preflight_tags.json").write_text(

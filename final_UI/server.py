@@ -34,12 +34,15 @@ from scripts.eval.compose_eval_dataset import (  # noqa: E402
     write_jsonl as write_composed_jsonl,
 )
 from scripts.eval.run_multi_model_eval import (  # noqa: E402
+    DEFAULT_REFUSAL_KEYWORDS,
     SCORE_METRIC_KEYS,
+    aggregate_llm_judge_scores as eval_aggregate_llm_judge_scores,
     aggregate_release_gates as eval_aggregate_release_gates,
     aggregate_runs as eval_aggregate_runs,
     anthropic_chat_url,
     anthropic_payload,
     apply_llm_judge as eval_apply_llm_judge,
+    attach_static_score_fields as eval_attach_static_score_fields,
     build_regression_diff as eval_build_regression_diff,
     canonical_error_type as eval_canonical_error_type,
     clova_chat_url,
@@ -54,9 +57,11 @@ from scripts.eval.run_multi_model_eval import (  # noqa: E402
     read_cases_path as eval_read_cases_path,
     read_jsonl as eval_read_jsonl,
     safe_filename as eval_safe_filename,
+    score_output as eval_score_output,
     write_csv as eval_write_csv,
     write_html_report as eval_write_html_report,
     write_jsonl as eval_write_jsonl,
+    write_partitioned_eval_artifacts as eval_write_partitioned_eval_artifacts,
     write_xlsx as eval_write_xlsx,
 )
 
@@ -2206,6 +2211,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if requested_run_id and not latest:
             self.send_json({"error": "unknown eval run", "run_id": requested_run_id}, status=404)
             return
+        if latest:
+            projected = self.projected_run_csv(latest, filename)
+            if projected is not None:
+                self.send_text(projected, content_type="text/csv; charset=utf-8")
+                return
         if latest and (latest / filename).exists():
             self.serve_path(latest / filename, content_type="text/csv; charset=utf-8")
             return
@@ -2221,6 +2231,273 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": "run file not found", "run_id": requested_run_id, "file": filename}, status=404)
             return
         self.serve_path(exported_path, content_type="text/csv; charset=utf-8")
+
+    def projected_run_csv(self, run_dir: Path, filename: str) -> str | None:
+        if filename not in {"eval_runs.csv", "question_cases.csv", "run_release_gates.csv", "regression_diff.csv"}:
+            return None
+        tables = self.projected_run_tables(run_dir)
+        if not tables:
+            return None
+        key_by_filename = {
+            "eval_runs.csv": "summary",
+            "question_cases.csv": "question_rows",
+            "run_release_gates.csv": "run_release_gates",
+            "regression_diff.csv": "regression_diff",
+        }
+        rows = tables.get(key_by_filename[filename], [])
+        return self.csv_text(rows, empty_csv=EMPTY_LATEST_RUN_CSV.get(filename, ""))
+
+    def csv_text(self, rows: list[dict], *, empty_csv: str = "") -> str:
+        if not rows:
+            return empty_csv
+        fieldnames: list[str] = []
+        for row in rows:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+        return buffer.getvalue()
+
+    def has_partitioned_run_source(self, run_dir: Path) -> bool:
+        return (run_dir / "by_target_model").is_dir() or (run_dir / "by_judge").is_dir()
+
+    def projected_run_tables(self, run_dir: Path) -> dict | None:
+        if not self.has_partitioned_run_source(run_dir):
+            return None
+        config = self.run_config(run_dir)
+        cases = self.projected_run_cases(config)
+        outputs = self.load_partitioned_outputs(run_dir)
+        if not cases or not outputs:
+            return None
+        configs = self.projected_run_configs(config, outputs)
+        if not configs:
+            return None
+        scores = self.projected_run_scores(run_dir, config, cases, configs, outputs)
+        baseline_config = str(config.get("baseline_config") or (configs[0].get("config_id") if configs else ""))
+        matrix = config.get("matrix") if isinstance(config.get("matrix"), dict) else {}
+        release_gate_config = matrix.get("release_gates") if isinstance(matrix.get("release_gates"), dict) else {}
+        eval_started_at = str(config.get("eval_started_at") or "")
+        regression_diff = eval_build_regression_diff(cases=cases, scores=scores, baseline_config=baseline_config)
+        summary = eval_aggregate_runs(
+            run_id=run_dir.name,
+            configs=configs,
+            scores=scores,
+            outputs=outputs,
+            eval_started_at=eval_started_at,
+        )
+        run_release_gates = eval_aggregate_release_gates(
+            run_id=run_dir.name,
+            cases=cases,
+            configs=configs,
+            scores=scores,
+            release_gate_config=release_gate_config,
+        )
+        question_rows = eval_question_case_rows(
+            cases=cases,
+            configs=configs,
+            outputs=outputs,
+            scores=scores,
+            regression_diff=regression_diff,
+        )
+        return {
+            "outputs": outputs,
+            "scores": scores,
+            "summary": summary,
+            "regression_diff": regression_diff,
+            "run_release_gates": run_release_gates,
+            "question_rows": question_rows,
+        }
+
+    def projected_run_cases(self, config: dict) -> list[dict]:
+        case_source = str(config.get("case_source") or "").strip()
+        if not case_source:
+            return []
+        try:
+            case_path = self.resolve_project_path(case_source)
+            return eval_read_cases_path(case_path)
+        except (OSError, csv.Error, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            return []
+
+    def projected_run_configs(self, config: dict, outputs: list[dict]) -> list[dict]:
+        raw_configs = [item for item in config.get("configs", []) if isinstance(item, dict)]
+        by_id = {str(item.get("config_id") or ""): dict(item) for item in raw_configs if item.get("config_id")}
+        registry = self.load_registry()
+        config_ids = sorted({str(row.get("config_id") or "") for row in outputs if row.get("config_id")})
+        configs = []
+        for config_id in config_ids:
+            item = by_id.get(config_id) or registry.get(config_id) or {"config_id": config_id, "model": config_id}
+            configs.append(dict(item))
+        return configs
+
+    def load_partitioned_outputs(self, run_dir: Path) -> list[dict]:
+        target_root = run_dir / "by_target_model"
+        rows: list[dict] = []
+        if target_root.is_dir():
+            for path in sorted(target_root.glob("*/model_outputs.jsonl")):
+                rows.extend(eval_read_jsonl(path))
+        if rows:
+            return rows
+        fallback = run_dir / "model_outputs.jsonl"
+        return eval_read_jsonl(fallback) if fallback.exists() else []
+
+    def load_partitioned_judge_rows(self, run_dir: Path) -> list[dict]:
+        judge_root = run_dir / "by_judge"
+        rows: list[dict] = []
+        if judge_root.is_dir():
+            for path in sorted(judge_root.glob("*/judge_scores.jsonl")):
+                rows.extend(eval_read_jsonl(path))
+        return rows
+
+    def projected_run_scores(self, run_dir: Path, config: dict, cases: list[dict], configs: list[dict], outputs: list[dict]) -> list[dict]:
+        case_by_id = {str(case.get("case_id") or ""): case for case in cases}
+        config_by_id = {str(item.get("config_id") or ""): item for item in configs}
+        settings = self.projected_scoring_settings(config, has_judge_rows=(run_dir / "by_judge").is_dir())
+        judge_rows_by_key: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for row in self.load_partitioned_judge_rows(run_dir):
+            target_config_id = str(row.get("target_config_id") or row.get("config_id") or "").strip()
+            case_id = str(row.get("case_id") or "").strip()
+            if target_config_id and case_id:
+                judge_rows_by_key[(target_config_id, case_id)].append(row)
+        fallback_score_path = run_dir / "judge_scores.jsonl"
+        fallback_rows = eval_read_jsonl(fallback_score_path) if fallback_score_path.exists() else []
+        fallback_scores = {
+            (str(row.get("config_id") or ""), str(row.get("case_id") or "")): row
+            for row in fallback_rows
+        }
+        scores = []
+        for output in outputs:
+            config_id = str(output.get("config_id") or "")
+            case_id = str(output.get("case_id") or "")
+            case = case_by_id.get(case_id)
+            target_config = config_by_id.get(config_id)
+            if not case or not target_config:
+                fallback = fallback_scores.get((config_id, case_id))
+                if fallback:
+                    scores.append(dict(fallback))
+                continue
+            score = self.project_score_from_partition(
+                case=case,
+                output=output,
+                target_config=target_config,
+                judge_rows=judge_rows_by_key.get((config_id, case_id), []),
+                settings=settings,
+            )
+            score.update({"run_id": output.get("run_id") or run_dir.name, "config_id": config_id, "case_id": case_id})
+            scores.append(score)
+        return scores
+
+    def projected_scoring_settings(self, config: dict, *, has_judge_rows: bool) -> dict:
+        matrix = config.get("matrix") if isinstance(config.get("matrix"), dict) else {}
+        resolved = config.get("resolved_scoring") if isinstance(config.get("resolved_scoring"), dict) else {}
+        judge_settings = matrix.get("llm_judge") if isinstance(matrix.get("llm_judge"), dict) else {}
+        scoring_mode = str(resolved.get("scoring_mode") or matrix.get("scoring_mode") or ("llm_override" if has_judge_rows else "static")).strip()
+        judge_mode = str(resolved.get("judge_mode") or judge_settings.get("mode") or ("override" if scoring_mode == "llm_override" else "audit")).strip()
+        weights = resolved.get("judge_score_weights") or judge_settings.get("score_weights") or {}
+        if isinstance(weights, str) and weights.strip():
+            try:
+                weights = json.loads(weights)
+            except json.JSONDecodeError:
+                weights = {}
+        if not isinstance(weights, dict):
+            weights = {}
+        return {
+            "scoring_mode": scoring_mode,
+            "judge_mode": judge_mode,
+            "judge_blend_weight": self.safe_float(
+                resolved.get("judge_blend_weight", matrix.get("judge_blend_weight", 0.5)),
+                default=0.5,
+                minimum=0.0,
+                maximum=1.0,
+            ),
+            "judge_aggregation_method": str(resolved.get("judge_aggregation_method") or judge_settings.get("aggregation_method") or "auto").strip(),
+            "judge_score_weights": {str(key): self.safe_float(value, default=0.0, minimum=0.0, maximum=100000.0) for key, value in weights.items()},
+            "pass_threshold": self.safe_float(
+                resolved.get("pass_threshold", config.get("pass_threshold", matrix.get("pass_threshold", 60))),
+                default=60.0,
+                minimum=0.0,
+                maximum=100.0,
+            ),
+        }
+
+    def project_score_from_partition(self, *, case: dict, output: dict, target_config: dict, judge_rows: list[dict], settings: dict) -> dict:
+        deterministic = eval_score_output(
+            case=case,
+            output=output,
+            config=target_config,
+            pass_threshold=settings["pass_threshold"],
+            refusal_keywords=DEFAULT_REFUSAL_KEYWORDS,
+            similarity_scorer=None,
+        )
+        if not judge_rows:
+            return eval_attach_static_score_fields(dict(deterministic), deterministic, "static")
+        judge_scores = [self.partition_judge_row_to_score(row) for row in judge_rows]
+        aggregate = eval_aggregate_llm_judge_scores(
+            judge_scores,
+            score_weights=settings["judge_score_weights"],
+            aggregation_method=settings["judge_aggregation_method"],
+        )
+        judge_config = {
+            "config_id": aggregate.get("config_id", ""),
+            "model": aggregate.get("model", ""),
+            "provider": aggregate.get("provider", ""),
+        }
+        score = eval_apply_llm_judge(
+            deterministic,
+            aggregate,
+            judge_config=judge_config,
+            mode=settings["judge_mode"],
+            blend_weight=settings["judge_blend_weight"],
+            pass_threshold=settings["pass_threshold"],
+            scoring_mode=settings["scoring_mode"],
+        )
+        score["output_fingerprint"] = output.get("output_fingerprint", "")
+        score["score_fingerprint"] = next((row.get("score_fingerprint") for row in judge_rows if row.get("score_fingerprint")), "")
+        return score
+
+    def partition_judge_row_to_score(self, row: dict) -> dict:
+        score = {
+            "config_id": row.get("judge_config_id") or row.get("llm_judge_config_id") or row.get("config_id", ""),
+            "provider": row.get("judge_provider") or row.get("llm_judge_provider") or row.get("provider", ""),
+            "model": row.get("judge_model") or row.get("llm_judge_model") or row.get("model", ""),
+            "prompt_version": row.get("prompt_version", ""),
+            "prompt_hash": row.get("prompt_hash", ""),
+            "system_prompt_preset": row.get("system_prompt_preset", ""),
+            **{key: self.safe_float(row.get(key), default=0.0, minimum=0.0, maximum=20.0) for key in SCORE_METRIC_KEYS},
+            "utl_applicable": self.judge_bool_value(row.get("utl_applicable", True)),
+            "applicable_metrics": row.get("applicable_metrics", ""),
+            "score_denominator": self.safe_float(row.get("score_denominator"), default=80.0, minimum=1.0, maximum=100.0),
+            "raw_metric_score": row.get("raw_metric_score", ""),
+            "answer_quality_score": row.get("answer_quality_score", ""),
+            "rag_quality_score": row.get("rag_quality_score", ""),
+            "overall_score": row.get("overall_score", ""),
+            "pass": self.judge_bool_value(row.get("pass")),
+            "critical_fail": self.judge_bool_value(row.get("critical_fail")),
+            "error_type": row.get("error_type", ""),
+            "reason": row.get("reason", ""),
+        }
+        if score["overall_score"] in ("", None):
+            raw = sum(self.safe_float(score.get(key), default=0.0, minimum=0.0, maximum=20.0) for key in SCORE_METRIC_KEYS)
+            score["overall_score"] = round(raw / score["score_denominator"] * 100.0, 2)
+        return score
+
+    def write_projected_run_files(self, run_dir: Path) -> bool:
+        tables = self.projected_run_tables(run_dir)
+        if not tables:
+            return False
+        eval_write_jsonl(run_dir / "model_outputs.jsonl", tables["outputs"])
+        eval_write_jsonl(run_dir / "judge_scores.jsonl", tables["scores"])
+        eval_write_jsonl(run_dir / "regression_diff.jsonl", tables["regression_diff"])
+        eval_write_jsonl(run_dir / "run_release_gates.jsonl", tables["run_release_gates"])
+        eval_write_csv(run_dir / "model_outputs.csv", tables["outputs"])
+        eval_write_csv(run_dir / "judge_scores.csv", tables["scores"])
+        eval_write_csv(run_dir / "regression_diff.csv", tables["regression_diff"])
+        eval_write_csv(run_dir / "run_release_gates.csv", tables["run_release_gates"])
+        eval_write_csv(run_dir / "eval_runs.csv", tables["summary"])
+        eval_write_csv(run_dir / "question_cases.csv", tables["question_rows"])
+        return True
 
     def handle_latest_run(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
@@ -2397,6 +2674,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             candidates = [path for path in EVAL_RUNS_ROOT.iterdir() if self.is_eval_run_dir(path)]
             candidates.sort(key=self.run_sort_key, reverse=True)
             for path in candidates:
+                if self.has_partitioned_run_source(path):
+                    self.write_projected_run_files(path)
                 sources.append(
                     self.judge_comparison_baseline_summary(
                         path.name,
@@ -2414,7 +2693,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         candidates = [
             path
             for path in EVAL_RUNS_ROOT.iterdir()
-            if path.is_dir() and (path / "judge_scores.jsonl").exists()
+            if path.is_dir() and ((path / "judge_scores.jsonl").exists() or (path / "by_judge").is_dir())
         ]
         candidates.sort(key=self.run_sort_key, reverse=True)
         for path in candidates:
@@ -2444,9 +2723,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         status_counts = Counter()
         row_count = 0
         ok_rows = 0
-        for row in eval_read_jsonl(path / "judge_scores.jsonl"):
+        source_rows = self.load_partitioned_judge_rows(path)
+        if not source_rows and (path / "judge_scores.jsonl").exists():
+            source_rows = eval_read_jsonl(path / "judge_scores.jsonl")
+        for row in source_rows:
             row_count += 1
-            status = str(row.get("llm_judge_status") or "").strip().lower()
+            status = str(row.get("source_llm_judge_status") or row.get("llm_judge_status") or "ok").strip().lower()
             status_counts[status or "unknown"] += 1
             if status == "ok":
                 ok_rows += 1
@@ -2472,6 +2754,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return ROOT / "data" / "question_cases.csv", "현재 UI 내보내기 데이터"
         run_dir = self.run_dir_by_id(source_id)
         if run_dir:
+            if self.has_partitioned_run_source(run_dir):
+                self.write_projected_run_files(run_dir)
             return run_dir / "question_cases.csv", run_dir.name
         return None, ""
 
@@ -2480,7 +2764,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not safe:
             return None
         candidate = EVAL_RUNS_ROOT / safe
-        if candidate.is_dir() and (candidate / "judge_scores.jsonl").exists():
+        if candidate.is_dir() and ((candidate / "judge_scores.jsonl").exists() or (candidate / "by_judge").is_dir()):
             return candidate
         return None
 
@@ -2530,10 +2814,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def load_candidate_judge_scores(self, run_dir: Path):
         scores = {}
-        for row in eval_read_jsonl(run_dir / "judge_scores.jsonl"):
-            if str(row.get("llm_judge_status") or "").strip().lower() != "ok":
+        rows = self.load_partitioned_judge_rows(run_dir)
+        if not rows and (run_dir / "judge_scores.jsonl").exists():
+            rows = eval_read_jsonl(run_dir / "judge_scores.jsonl")
+        for row in rows:
+            status = str(row.get("source_llm_judge_status") or row.get("llm_judge_status") or "ok").strip().lower()
+            if status != "ok":
                 continue
-            config_id = str(row.get("config_id") or "").strip()
+            config_id = str(row.get("target_config_id") or row.get("config_id") or "").strip()
             case_id = str(row.get("case_id") or row.get("question_id") or "").strip()
             if config_id and case_id:
                 scores[(config_id, case_id)] = self.normalized_judge_score(row, source="candidate")
@@ -2763,9 +3051,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if source == "candidate":
             score = row.get("llm_judge_overall_score", row.get("overall_score"))
             return {
-                "config_id": row.get("llm_judge_config_id", row.get("judge_config_id", "")),
-                "provider": row.get("llm_judge_provider", ""),
-                "model": row.get("llm_judge_model", ""),
+                "config_id": row.get("llm_judge_config_id") or row.get("judge_config_id") or row.get("config_id", ""),
+                "provider": row.get("llm_judge_provider") or row.get("judge_provider") or row.get("provider", ""),
+                "model": row.get("llm_judge_model") or row.get("judge_model") or row.get("model", ""),
                 "overall_score": self.safe_score(score),
                 "pass": self.judge_bool_value(row.get("llm_judge_pass", row.get("pass"))),
                 "critical_fail": self.judge_bool_value(row.get("llm_judge_critical_fail", row.get("critical_fail"))),
@@ -3158,6 +3446,21 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "llm_judge_provider": "",
             "llm_judge_model": "",
         }
+        projected = self.projected_run_tables(latest)
+        projected_rows = projected.get("question_rows", []) if projected else []
+        if projected_rows:
+            row = projected_rows[0]
+            row_scoring_mode = str(row.get("scoring_mode") or "").strip()
+            if row_scoring_mode:
+                summary["scoring_mode"] = row_scoring_mode
+            summary["llm_judge_provider"] = str(row.get("llm_judge_provider") or "").strip()
+            summary["llm_judge_model"] = str(row.get("llm_judge_model") or "").strip()
+            row_count = self.safe_int(row.get("llm_judge_count"), default=0, minimum=0, maximum=100)
+            if row_count:
+                summary["llm_judge_count"] = row_count
+            if not summary["scoring_mode"]:
+                summary["scoring_mode"] = "static"
+            return summary
         question_cases_path = latest / "question_cases.csv"
         if not question_cases_path.exists():
             if not summary["scoring_mode"]:
@@ -3339,12 +3642,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def eval_run_summary(self, path: Path, selected: bool = False):
         config = self.run_config(path)
-        rows = []
-        try:
-            with (path / "eval_runs.csv").open("r", encoding="utf-8-sig", newline="") as handle:
-                rows = list(csv.DictReader(handle))
-        except (OSError, csv.Error):
+        projected = self.projected_run_tables(path)
+        if projected:
+            rows = projected.get("summary", [])
+        else:
             rows = []
+            try:
+                with (path / "eval_runs.csv").open("r", encoding="utf-8-sig", newline="") as handle:
+                    rows = list(csv.DictReader(handle))
+            except (OSError, csv.Error):
+                rows = []
         models = [row.get("model") or row.get("version") or "" for row in rows if row.get("model") or row.get("version")]
         scores = [self.safe_float(row.get("overall_score"), default=0.0, minimum=0.0, maximum=100.0) for row in rows]
         scored_scores = [
@@ -3475,8 +3782,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return (
             path.is_dir()
             and not self.is_reserved_eval_run_name(path.name)
-            and (path / "eval_runs.csv").exists()
-            and (path / "question_cases.csv").exists()
+            and (
+                ((path / "eval_runs.csv").exists() and (path / "question_cases.csv").exists())
+                or self.has_partitioned_run_source(path)
+            )
         )
 
     def is_smoke_run(self, path: Path) -> bool:
@@ -3535,6 +3844,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return None
 
     def run_question_count(self, path: Path) -> int:
+        if self.has_partitioned_run_source(path):
+            cases = self.projected_run_cases(self.run_config(path))
+            if cases:
+                return len(cases)
+            first_outputs = next(iter(sorted((path / "by_target_model").glob("*/model_outputs.jsonl"))), None)
+            if first_outputs and first_outputs.exists():
+                return sum(1 for line in first_outputs.open(encoding="utf-8") if line.strip())
         csv_path = path / "eval_runs.csv"
         if not csv_path.exists():
             return 0
@@ -4970,6 +5286,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 score = score_by_key.get((output.get("case_id"), config_id), {})
                 rows.append({**output, **{f"score_{key}": value for key, value in score.items() if key not in output}})
             eval_write_jsonl(by_model_dir / f"{eval_safe_filename(str(config_id))}.jsonl", rows)
+        eval_write_partitioned_eval_artifacts(run_dir, outputs, scores)
         eval_write_html_report(run_dir / "regression_report.html", summary, regression_diff, run_release_gates, run_metadata)
         eval_write_xlsx(
             run_dir / "regression_report.xlsx",

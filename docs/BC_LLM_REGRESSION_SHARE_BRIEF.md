@@ -263,6 +263,7 @@ benchmark-only run
 ```text
 out/eval_runs/RUN_*/
   run_metadata.json
+  artifact_manifest.json
   model_outputs.jsonl / .csv
   judge_scores.jsonl / .csv
   regression_diff.jsonl / .csv
@@ -272,10 +273,20 @@ out/eval_runs/RUN_*/
   regression_report.html
   regression_report.xlsx
   by_model/{config_id}.jsonl
+  by_target_model/{config_id}/model_outputs.jsonl
+  by_target_model/{config_id}/model_outputs.csv
+  by_target_model/{config_id}/normalized_answers.jsonl
+  by_target_model/{config_id}/raw_responses.jsonl
+  by_judge/{judge_config_id}/judge_scores.jsonl
+  by_judge/{judge_config_id}/judge_scores.csv
   ollama/preflight_tags.json
   ollama/unload_events.jsonl
   ollama/ps_after_each_model.jsonl
 ```
+
+`by_target_model/` and `by_judge/` are the replayable source-of-truth
+artifacts. The top-level CSV/JSONL files are derived compatibility projections;
+the UI regenerates run-scoped tables from the partitioned source when possible.
 
 UI export:
 

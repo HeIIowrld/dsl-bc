@@ -291,6 +291,7 @@ full-ish run: keep_alive = 15m~30m
 ```text
 out/eval_runs/RUN_*/
   run_metadata.json
+  artifact_manifest.json
   model_outputs.jsonl
   judge_scores.jsonl
   regression_diff.jsonl
@@ -302,11 +303,27 @@ out/eval_runs/RUN_*/
     bc_gemma_9b_bcgpt_q4.jsonl
     bc_deepseek_8b_bcgpt_q4.jsonl
 
+  by_target_model/
+    bc_gemma_9b_bcgpt_q4/
+      model_outputs.jsonl
+      model_outputs.csv
+      normalized_answers.jsonl
+      raw_responses.jsonl
+
+  by_judge/
+    openai_gpt54_mini_judge/
+      judge_scores.jsonl
+      judge_scores.csv
+
   ollama/
     preflight_tags.json
     ps_after_each_model.jsonl
     unload_events.jsonl
 ```
+
+`by_target_model/` and `by_judge/` are the replayable source-of-truth
+artifacts. The top-level CSV/JSONL files are derived compatibility projections;
+the UI regenerates run-scoped tables from the partitioned source when possible.
 
 ## 10. Dataset Composer 요구사항
 

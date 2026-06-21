@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 from urllib import error as urlerror
 
-from final_UI.server import CASE_SUMMARY_CACHE, CASE_SUMMARY_CACHE_LOCK, EVAL_JOBS, EVAL_JOBS_LOCK, FinalUiHandler, MAX_JSON_BODY_BYTES, eval_runner_python
+from final_UI.server import CASE_SUMMARY_CACHE, CASE_SUMMARY_CACHE_LOCK, EVAL_JOBS, EVAL_JOBS_LOCK, FinalUiHandler, MAX_JSON_BODY_BYTES, PROJECT_ROOT, eval_runner_python
 from scripts.build.build_corpus_from_bc_cs_notice import build_artifacts
 from scripts.eval.build_card_product_cases import build_cases as build_card_product_cases
 from scripts.eval.compose_eval_dataset import compose_dataset
@@ -59,6 +59,7 @@ from scripts.eval.run_multi_model_eval import (
     unload_ollama_model,
     utl_applicable_for_score,
     valid_json_answer,
+    write_partitioned_eval_artifacts,
 )
 from scripts.eval.run_multi_model_eval import append_answer_cache, build_regression_diff, load_answer_cache, output_fingerprint, score_output
 
@@ -339,6 +340,228 @@ class EvalScoringTests(unittest.TestCase):
         self.assertFalse(utl_applicable_for_score(evidence_case, non_rag_config, {"status": "ok"}))
         self.assertTrue(utl_applicable_for_score(evidence_case, rag_config, {"status": "ok"}))
         self.assertEqual(metric_keys_for_score(False), ["acc", "com", "nac", "hal"])
+
+    def test_partitioned_eval_artifacts_store_answers_and_judges_separately(self) -> None:
+        outputs = [
+            {
+                "run_id": "RUN1",
+                "case_id": "C1",
+                "config_id": "model-a",
+                "provider": "ollama",
+                "model": "model-a:latest",
+                "display_name": "Model A",
+                "status": "ok",
+                "latency_ms": 12,
+                "model_answer": "answer one",
+                "raw_response": {"message": {"content": "answer one"}},
+                "output_fingerprint": "out-1",
+            }
+        ]
+        scores = [
+            {
+                "run_id": "RUN1",
+                "case_id": "C1",
+                "config_id": "model-a",
+                "output_fingerprint": "out-1",
+                "score_fingerprint": "score-1",
+                "llm_judge_config_id": "judge-a",
+                "llm_judge_provider": "openai_native",
+                "llm_judge_model": "gpt-test",
+                "llm_judge_status": "ok",
+                "llm_judge_count": 1,
+                "llm_judge_acc": 10,
+                "llm_judge_com": 11,
+                "llm_judge_utl": 0,
+                "llm_judge_nac": 20,
+                "llm_judge_hal": 18,
+                "llm_judge_overall_score": 73.75,
+                "llm_judge_pass": True,
+                "llm_judge_error_type": "normal",
+                "llm_judge_reason": "ok",
+                "llm_judge_individual_scores": "[]",
+                "utl_applicable": False,
+                "applicable_metrics": "acc,com,nac,hal",
+            },
+            {
+                "run_id": "RUN1",
+                "case_id": "C2",
+                "config_id": "model-a",
+                "output_fingerprint": "out-2",
+                "score_fingerprint": "score-2",
+                "llm_judge_status": "ok",
+                "llm_judge_count": 1,
+                "llm_judge_individual_scores": json.dumps(
+                    [
+                        {
+                            "config_id": "judge-b",
+                            "provider": "gemini",
+                            "model": "gemini-test",
+                            "acc": 9,
+                            "com": 10,
+                            "utl": 0,
+                            "nac": 20,
+                            "hal": 15,
+                            "overall_score": 67.5,
+                            "pass": True,
+                            "critical_fail": False,
+                            "error_type": "normal",
+                            "reason": "ok",
+                            "role": "judge",
+                        }
+                    ]
+                ),
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "RUN1"
+            write_partitioned_eval_artifacts(run_dir, outputs, scores)
+
+            target_outputs = [
+                json.loads(line)
+                for line in (run_dir / "by_target_model" / "model-a" / "model_outputs.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            normalized_answers = [
+                json.loads(line)
+                for line in (run_dir / "by_target_model" / "model-a" / "normalized_answers.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            raw_responses = [
+                json.loads(line)
+                for line in (run_dir / "by_target_model" / "model-a" / "raw_responses.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            judge_a = [
+                json.loads(line)
+                for line in (run_dir / "by_judge" / "judge-a" / "judge_scores.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            judge_b = [
+                json.loads(line)
+                for line in (run_dir / "by_judge" / "judge-b" / "judge_scores.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(target_outputs[0]["model_answer"], "answer one")
+        self.assertEqual(normalized_answers[0]["answer_excerpt"], "answer one")
+        self.assertEqual(raw_responses[0]["raw_response"]["message"]["content"], "answer one")
+        self.assertEqual(judge_a[0]["target_config_id"], "model-a")
+        self.assertEqual(judge_a[0]["judge_config_id"], "judge-a")
+        self.assertEqual(judge_b[0]["judge_provider"], "gemini")
+
+    def test_answer_cache_fingerprint_changes_with_prompt_version(self) -> None:
+        case = {"case_id": "C1", "question": "What is CVC?"}
+        base_config = {
+            "config_id": "model-a",
+            "provider": "ollama",
+            "model": "model-a:latest",
+            "system_prompt": "Answer briefly.",
+            "options": {"temperature": 0},
+        }
+        first = answer_cache_fingerprint({**base_config, "prompt_version": "v1"}, case)
+        second = answer_cache_fingerprint({**base_config, "prompt_version": "v2"}, case)
+
+        self.assertNotEqual(first, second)
+
+    def test_server_projection_reflects_partitioned_judge_edits(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        temp_parent = PROJECT_ROOT / "out"
+        temp_parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_parent) as tmp:
+            root = Path(tmp)
+            cases_path = root / "cases.jsonl"
+            cases_path.write_text(
+                json.dumps(
+                    {
+                        "case_id": "C1",
+                        "question": "What is CVC?",
+                        "gold_answer": "CVC is the three-digit code on the back of the card.",
+                        "expected_behavior": "answer_from_source",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            run_dir = root / "RUN1"
+            run_dir.mkdir()
+            config = {
+                "run_id": "RUN1",
+                "eval_started_at": "2026-06-21T00:00:00",
+                "case_source": str(cases_path),
+                "baseline_config": "model-a",
+                "configs": [
+                    {
+                        "config_id": "model-a",
+                        "provider": "ollama",
+                        "model": "model-a:latest",
+                        "prompt_version": "v1",
+                    }
+                ],
+                "resolved_scoring": {
+                    "scoring_mode": "llm_override",
+                    "judge_mode": "override",
+                    "judge_aggregation_method": "auto",
+                    "pass_threshold": 60,
+                },
+            }
+            (run_dir / "config.json").write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+            outputs = [
+                {
+                    "run_id": "RUN1",
+                    "case_id": "C1",
+                    "config_id": "model-a",
+                    "provider": "ollama",
+                    "model": "model-a:latest",
+                    "status": "ok",
+                    "model_answer": "CVC is on the back of the card.",
+                    "output_fingerprint": "out-1",
+                }
+            ]
+            scores = [
+                {
+                    "run_id": "RUN1",
+                    "case_id": "C1",
+                    "config_id": "model-a",
+                    "llm_judge_config_id": "judge-a",
+                    "llm_judge_provider": "openai_native",
+                    "llm_judge_model": "judge-a-model",
+                    "llm_judge_status": "ok",
+                    "llm_judge_count": 1,
+                    "llm_judge_acc": 10,
+                    "llm_judge_com": 10,
+                    "llm_judge_utl": 0,
+                    "llm_judge_nac": 20,
+                    "llm_judge_hal": 10,
+                    "llm_judge_overall_score": 62.5,
+                    "llm_judge_pass": True,
+                    "llm_judge_error_type": "normal",
+                    "llm_judge_reason": "initial",
+                    "llm_judge_individual_scores": "[]",
+                    "utl_applicable": False,
+                    "applicable_metrics": "acc,com,nac,hal",
+                }
+            ]
+            write_partitioned_eval_artifacts(run_dir, outputs, scores)
+
+            initial = handler.projected_run_tables(run_dir)
+            self.assertEqual(initial["question_rows"][0]["overall_score"], 62.5)
+
+            judge_path = run_dir / "by_judge" / "judge-a" / "judge_scores.jsonl"
+            judge_row = json.loads(judge_path.read_text(encoding="utf-8").splitlines()[0])
+            judge_row.update(
+                {
+                    "acc": 18,
+                    "com": 18,
+                    "nac": 20,
+                    "hal": 18,
+                    "overall_score": 92.5,
+                    "pass": True,
+                    "reason": "edited",
+                }
+            )
+            judge_path.write_text(json.dumps(judge_row, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            updated = handler.projected_run_tables(run_dir)
+
+        self.assertEqual(updated["question_rows"][0]["overall_score"], 92.5)
+        individual_scores = json.loads(updated["question_rows"][0]["llm_judge_individual_scores"])
+        self.assertEqual([item.get("config_id") for item in individual_scores], ["judge-a"])
 
     def test_openai_compatible_chat_url_defaults_to_chat_completions(self) -> None:
         self.assertEqual(

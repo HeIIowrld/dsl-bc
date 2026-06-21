@@ -246,6 +246,7 @@ MODEL_LIVE_HEALTH_TIMEOUT_SECONDS  Ollama live load/unload healthcheck timeout
 ```text
 config.yaml
 run_metadata.json
+artifact_manifest.json
 model_outputs.jsonl
 model_outputs.csv
 judge_scores.jsonl
@@ -259,10 +260,24 @@ eval_runs.csv
 regression_report.html
 regression_report.xlsx
 by_model/{config_id}.jsonl
+by_target_model/{config_id}/model_outputs.jsonl
+by_target_model/{config_id}/model_outputs.csv
+by_target_model/{config_id}/normalized_answers.jsonl
+by_target_model/{config_id}/raw_responses.jsonl
+by_judge/{judge_config_id}/judge_scores.jsonl
+by_judge/{judge_config_id}/judge_scores.csv
 ollama/preflight_tags.json
 ollama/unload_events.jsonl
 ollama/ps_after_each_model.jsonl
 ```
+
+Source-of-truth artifacts are partitioned by producer:
+`by_target_model/{config_id}/...` stores generated answers/raw responses, and
+`by_judge/{judge_config_id}/...` stores judge scores. Top-level
+`model_outputs.*`, `judge_scores.*`, `eval_runs.csv`, `question_cases.csv`,
+`regression_diff.*`, and `run_release_gates.*` are compatibility projections
+that can be regenerated from the partitioned source. The UI serves a live
+projection for run-scoped CSV requests when partitioned artifacts are present.
 
 `--export-final-ui`를 붙이면 아래 파일도 갱신됩니다.
 
