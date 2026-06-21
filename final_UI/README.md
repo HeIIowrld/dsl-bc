@@ -1,14 +1,16 @@
 # Final UI
 
-LLM 평가 실행과 결과 확인을 위한 로컬 웹 대시보드입니다. 모델 등록, 답변 생성, 저장된 답변 재채점, 결과 비교, 문항별 응답 확인을 한 화면에서 처리합니다.
+BC 금융 RAG 회귀 평가 결과를 확인하는 로컬 대시보드입니다. 모델 등록, 평가 실행, 저장된 실행 결과 선택, 모델별 비교, 문항별 응답과 Judge 사유 확인을 한 화면에서 처리합니다.
 
 ## 실행
 
-저장소 루트에서 실행합니다.
+저장소 루트에서 의존성을 설치합니다.
 
 ```powershell
 python -m pip install -r .\requirements.txt
 ```
+
+로컬 UI 서버를 실행합니다.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run_final_ui.ps1 -Port 8512 -StopExisting
@@ -20,7 +22,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_final_ui.ps1 -Port 8512 -
 http://localhost:8512
 ```
 
-외부 기기에서 접속해야 하면 인증 정보를 먼저 설정한 뒤 공개 바인딩으로 실행합니다.
+다른 기기에서 접속해야 한다면 인증 정보를 먼저 설정한 뒤 공개 바인딩으로 실행합니다.
 
 ```powershell
 $env:FINAL_UI_AUTH_USERS = "admin:your-password:admin"
@@ -31,97 +33,50 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_final_ui.ps1 -Port 8512 -
 
 | 화면 | 역할 |
 | --- | --- |
-| 설정 | 모델 등록, Judge 비중 설정, 접속 기록 확인 |
-| 테스트셋 | 평가 데이터셋 구성과 문항 분포 확인 |
-| 실행 | 답변 생성, 저장 답변 재채점, CSV import/export |
-| 결과 | 실행별 KPI, 모델별 점수, 배포 차단 현황 확인 |
-| 비교 | 모델별 점수와 문항별 차이 비교 |
-| 통과/실패 문항 개요 | 실패, 회귀, 탐색 케이스 요약 |
-| 문항별 모델 상세 응답 | 문항 단위 모델 답변과 Judge 판단 확인 |
-| 전체 검색 | 질문, 답변, Judge 사유, 오류 유형 검색 |
+| 설정 | 대상 모델, Judge 모델, 프롬프트 변형, API 연결 상태를 관리합니다. |
+| 테스트셋 | 평가 데이터셋 구성, 문항 분포, 업로드 CSV 미리보기를 확인합니다. |
+| 실행 | 대상 모델과 Judge 조합을 선택해 평가를 실행하고 진행 상태를 확인합니다. |
+| 결과 | 실행별 KPI, 배포 판정, 문항-모델 결과표, 모델 점수 차트를 확인합니다. |
+| 비교 | 선택한 모델만 남겨 지표별 점수와 통과율을 비교합니다. |
+| 통과/실패 문항 개요 | 실패, 검토 필요, 탐색 케이스를 요약합니다. |
+| 문항별 모델 상세 응답 | 특정 문항의 모델 답변, 모범답안, Judge 판단 사유를 확인합니다. |
+| 전체 검색 | 질문, 답변, Judge 사유, 오류 유형을 통합 검색합니다. |
+
+## UI/UX 확인 포인트
+
+- 결과 차트는 x축에 긴 모델명을 직접 표시하지 않고 `M1`, `M2` 축 표기와 하단 범례를 사용합니다.
+- 차트 막대나 점에 포인터를 올리면 모델명, 종합 점수, 통과율을 확인할 수 있습니다.
+- 문항별 결과표는 첫 문항 열과 헤더가 고정되며, 긴 Judge 라벨은 셀 안에서 2줄까지 표시됩니다.
+- 일반 표는 가로 스크롤과 sticky 헤더를 사용해 긴 모델명, 경로, 한국어 문장이 레이아웃을 밀지 않게 처리합니다.
+
+## 데이터 파일
+
+UI는 아래 파일을 우선 읽습니다.
+
+```text
+final_UI/data/active_run.json
+final_UI/data/eval_runs.csv
+final_UI/data/question_cases.csv
+final_UI/data/run_release_gates.csv
+final_UI/data/registered_target_models.json
+final_UI/data/registered_judge_models.json
+```
+
+파일이 없으면 `final_UI/samples/`의 샘플 데이터를 사용해 화면 구조를 확인합니다. 실제 API 키와 비밀번호는 `.env`, 환경변수, 또는 로컬 전용 `final_UI/data/server_api_secrets.json`으로만 관리하고 GitHub에 올리지 않습니다.
 
 ## 질문셋 확장
 
-Final UI는 현재 포함된 BC FAQ/금융/카드상품 데이터셋 외에도 다른 질문셋을 실행할 수 있습니다. CSV 업로드 또는 `config/eval_dataset_catalog.yaml`에 등록한 dataset pool을 통해 benchmark/regression 후보로 노출됩니다.
-
-최소 입력 계약은 질문과 기준 답변입니다.
+CSV 업로드나 `config/eval_dataset_catalog.yaml`에 등록된 dataset pool을 통해 benchmark/regression 후보를 확장할 수 있습니다. 최소 입력은 질문과 기준 답변입니다.
 
 | 개념 | 권장 컬럼 | 허용 alias |
 | --- | --- | --- |
 | 질문 | `question` | `instruction`, `input`, `prompt`, `query`, `문제`, `질문` |
 | 기준 답변 | `ground_truth` | `output`, `answer`, `gold_answer`, `expected_output`, `정답` |
-| 질문유형 | `question_type` | `qtype`, `type`, `task_type`, `문제유형`, `질문유형` |
+| 질문 유형 | `question_type` | `qtype`, `type`, `task_type`, `문제유형`, `질문유형` |
 
-새 `qa_category`, `qa_topic`, `question_type` 값은 필터와 요약에 표시됩니다. 현재 기본 집계 축은 `qa_category`/`question_type`/`qa_topic`이며, 기본 점수 지표는 ACC/COM/UTL/NAC/HAL입니다.
+`qa_category`, `qa_topic`, `question_type` 값은 필터와 요약에 표시됩니다. 기본 점수 지표는 ACC, COM, UTL, NAC, HAL입니다.
 
-## 모델 연결 확인
-
-`연결 확인` 버튼은 등록된 대상 모델을 순차적으로 확인합니다. Ollama 모델은 단순 태그 조회만으로 `연결됨` 처리하지 않고, 해당 모델을 짧게 로드해 응답 가능 여부를 확인한 뒤 언로드 요청을 보냅니다. 따라서 모델 수와 크기에 따라 확인 시간이 걸릴 수 있습니다.
-
-| Provider | 확인 방식 |
-| --- | --- |
-| Ollama | `/api/tags`로 태그 존재 확인 후 `mode=load_unload` healthcheck에서 짧은 생성 요청과 언로드 수행 |
-| API 모델 | 등록된 `health_url` 또는 provider 기본 health endpoint 호출 |
-| local_path | 로컬 경로 존재 여부 확인 |
-
-관련 환경 변수:
-
-| 환경 변수 | 설명 |
-| --- | --- |
-| `MODEL_HEALTH_TIMEOUT_SECONDS` | 태그 조회, health endpoint, `/api/ps` 확인 timeout |
-| `MODEL_LIVE_HEALTH_TIMEOUT_SECONDS` | Ollama 모델 실제 로드 확인 timeout |
-
-## 로컬 데이터 폴더
-
-업로드본에는 로컬 데이터와 실행 결과를 채울 폴더가 준비되어 있습니다.
-
-```text
-final_UI/data/   UI가 바로 읽을 CSV/JSON 데이터
-out/eval_runs/   평가 실행 결과
-```
-
-각 폴더의 `.gitkeep`은 폴더 구조 유지용입니다. 실제 CSV, JSON, JSONL, 로그 파일은 로컬에서 생성하거나 복사해 채워 넣습니다. 데이터가 아직 채워지지 않은 상태에서도 UI는 실행됩니다.
-
-## GitHub 샘플 파일
-
-민감정보 없이 구조를 확인할 수 있는 샘플은 `final_UI/samples/`에 있습니다.
-
-| 샘플 | 용도 |
-| --- | --- |
-| `registered_target_models.sample.json` | 대상 모델 등록 JSON 예시 |
-| `registered_judge_models.sample.json` | Judge 모델 등록 JSON 예시 |
-| `server_api_secrets.sample.json` | 서버 API key 저장소의 빈 구조 |
-| `question_dataset_sample.csv` | 테스트셋 업로드용 기본 CSV |
-| `question_dataset_aliases.sample.csv` | 다른 컬럼명 alias CSV |
-| `eval_runs.sample.csv`, `question_cases.sample.csv` | 결과 화면 확인용 CSV 구조 |
-
-실제 API key는 UI에서 저장하거나 `.env`/환경 변수로 주입하고, `final_UI/data/server_api_secrets.json`은 GitHub에 올리지 않습니다.
-
-## 인증
-
-기본적으로 공개 바인딩(`0.0.0.0`)에서는 인증이 필요합니다.
-
-| 환경 변수 | 설명 |
-| --- | --- |
-| `FINAL_UI_AUTH_USERS` | `admin:password:admin,user:password:user` 형식의 계정 목록 |
-| `FINAL_UI_AUTH_TOKEN` | 토큰 기반 관리자 접근 |
-| `FINAL_UI_AUTH_DISABLED` | 로컬 개발용 인증 비활성화 |
-
-비밀번호와 API key는 `.env` 또는 실행 환경 변수로만 관리하고 GitHub에 올리지 않습니다.
-
-## 주요 파일
-
-```text
-index.html       화면 구조
-styles.css       BC카드 폰트, 반응형 레이아웃, 상태 표시
-app.js           데이터 로딩, 화면 렌더링, 실행 제어
-server.py        정적 파일 서버와 로컬 API
-assets/          UI 로고 이미지
-data/.gitkeep    로컬 데이터 폴더 유지용 파일
-samples/         GitHub 공유용 sanitized sample
-```
-
-## 점검
+## 검증
 
 ```powershell
 python -m py_compile .\final_UI\server.py

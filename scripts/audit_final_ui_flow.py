@@ -59,6 +59,7 @@ def collect_state(page) -> dict[str, Any]:
     return page.evaluate(
         """() => ({
             runCount: runs.length,
+            runHistoryCount: evalRunHistory.length,
             caseCount: cases.length,
             gateCount: runReleaseGates.length,
             modelCount: [...new Set(cases.map((row) => row.version))].length,
@@ -218,7 +219,13 @@ def audit(url: str, *, headless: bool, screenshot_dir: Path | None) -> dict[str,
         page.wait_for_function("() => typeof appReady !== 'undefined' && appReady === true", timeout=120000)
 
         state = collect_state(page)
-        assert_true(state["runCount"] >= 10, f"expected many run rows, got {state['runCount']}", failures)
+        assert_true(state["runCount"] >= 1, f"expected selected run summary rows, got {state['runCount']}", failures)
+        if state["latestRunId"]:
+            assert_true(
+                state["runHistoryCount"] >= 2,
+                f"expected persisted run history, got {state['runHistoryCount']}",
+                failures,
+            )
         assert_true(state["caseCount"] >= 1000, f"expected case rows loaded, got {state['caseCount']}", failures)
         assert_true(state["modelCount"] >= 10, f"expected all model result rows, got {state['modelCount']}", failures)
 

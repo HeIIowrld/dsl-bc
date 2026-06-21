@@ -6,6 +6,7 @@ import csv
 import json
 import re
 import sys
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -44,6 +45,7 @@ from scripts.eval.run_multi_model_eval import (
     qa_slice_score_rows,
     question_case_rows,
     read_jsonl,
+    resolve_judge_system_prompt,
     run_type_for_cases,
     safe_filename,
     score_fingerprint,
@@ -563,12 +565,49 @@ def score_row_key(row: dict[str, Any]) -> tuple[str, str]:
     return str(row.get("config_id") or ""), str(row.get("case_id") or "")
 
 
-def is_resumable_score(row: dict[str, Any], *, judge_required: bool) -> bool:
+def unique_join(values: list[str]) -> str:
+    return ", ".join(dict.fromkeys(value for value in values if value))
+
+
+def expected_judge_resume_metadata(judge_configs: list[dict[str, Any]]) -> dict[str, str]:
+    config_ids: list[str] = []
+    prompt_versions: list[str] = []
+    prompt_hashes: list[str] = []
+    prompt_presets: list[str] = []
+    for judge_config in judge_configs:
+        _prompt, version, preset, prompt_hash = resolve_judge_system_prompt(judge_config)
+        config_ids.append(str(judge_config.get("config_id") or ""))
+        prompt_versions.append(str(version or ""))
+        prompt_hashes.append(str(prompt_hash or ""))
+        prompt_presets.append(str(preset or ""))
+    return {
+        "llm_judge_config_id": unique_join(config_ids),
+        "llm_judge_prompt_version": unique_join(prompt_versions),
+        "llm_judge_prompt_hash": unique_join(prompt_hashes),
+        "llm_judge_prompt_preset": unique_join(prompt_presets),
+    }
+
+
+def judge_resume_metadata_matches(row: dict[str, Any], expected: dict[str, str]) -> bool:
+    for key, value in expected.items():
+        if value and str(row.get(key) or "") != value:
+            return False
+    return True
+
+
+def is_resumable_score(
+    row: dict[str, Any],
+    *,
+    judge_required: bool,
+    expected_judge_metadata: dict[str, str] | None = None,
+) -> bool:
     if not row.get("config_id") or not row.get("case_id"):
         return False
     if not judge_required:
         return True
-    return str(row.get("llm_judge_status") or "").lower() in {"ok", "refused_by_provider_policy"}
+    if str(row.get("llm_judge_status") or "").lower() not in {"ok", "refused_by_provider_policy"}:
+        return False
+    return judge_resume_metadata_matches(row, expected_judge_metadata or {})
 
 
 def is_transient_judge_error(score: dict[str, Any]) -> bool:
@@ -587,6 +626,7 @@ def is_transient_judge_error(score: dict[str, Any]) -> bool:
         "temporarily unavailable",
         "remote end closed",
         "connection reset",
+        "did not return a json object",
     )
     return any(marker in reason for marker in transient_markers)
 
@@ -740,10 +780,15 @@ def main() -> None:
     write_csv(run_dir / "model_outputs.csv", outputs)
     score_path = run_dir / "judge_scores.jsonl"
     judge_required = bool(judge_configs and args.scoring_mode in {"static_llm", "llm_override", "blend"})
+    expected_judge_metadata = expected_judge_resume_metadata(judge_configs) if judge_required else {}
     completed_scores_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     if args.resume and score_path.exists():
         for existing_score in read_jsonl(score_path):
-            if is_resumable_score(existing_score, judge_required=judge_required):
+            if is_resumable_score(
+                existing_score,
+                judge_required=judge_required,
+                expected_judge_metadata=expected_judge_metadata,
+            ):
                 completed_scores_by_key[score_row_key(existing_score)] = existing_score
 
     print(f"run_id={run_id}", flush=True)
@@ -793,6 +838,7 @@ def main() -> None:
         for key in ordered_keys
         if key in completed_scores_by_key
     ]
+    score_append_lock = threading.Lock()
     write_jsonl(score_path, scores)
     if completed_scores_by_key:
         print(f"RESUME_DONE completed={len(completed_scores_by_key)} pending={len(tasks)}", flush=True)
@@ -919,7 +965,8 @@ def main() -> None:
                 print(f"JUDGE_START [{task['config_id']}] {task['index']}/{task['total']} {task['output'].get('case_id')}", flush=True)
             _, score = score_task(task)
             scores.append(score)
-            append_jsonl(score_path, score)
+            with score_append_lock:
+                append_jsonl(score_path, score)
             if judge_configs and task["output"].get("status") == "ok":
                 print(
                     f"JUDGE_DONE [{task['config_id']}] {task['index']}/{task['total']} "
@@ -948,7 +995,8 @@ def main() -> None:
                     print(traceback.format_exc(), file=sys.stderr, flush=True)
                     continue
                 scores.append(score)
-                append_jsonl(score_path, score)
+                with score_append_lock:
+                    append_jsonl(score_path, score)
                 if judge_configs and task["output"].get("status") == "ok":
                     print(
                         f"JUDGE_DONE [{task['config_id']}] {task['index']}/{task['total']} "

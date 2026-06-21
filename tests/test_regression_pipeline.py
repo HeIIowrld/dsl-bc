@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import os
 import tempfile
@@ -9,12 +10,13 @@ from pathlib import Path
 from unittest import mock
 from urllib import error as urlerror
 
-from final_UI.server import CASE_SUMMARY_CACHE, CASE_SUMMARY_CACHE_LOCK, EVAL_JOBS, EVAL_JOBS_LOCK, FinalUiHandler, eval_runner_python
+from final_UI.server import CASE_SUMMARY_CACHE, CASE_SUMMARY_CACHE_LOCK, EVAL_JOBS, EVAL_JOBS_LOCK, FinalUiHandler, MAX_JSON_BODY_BYTES, eval_runner_python
 from scripts.build.build_corpus_from_bc_cs_notice import build_artifacts
 from scripts.eval.build_card_product_cases import build_cases as build_card_product_cases
 from scripts.eval.compose_eval_dataset import compose_dataset
 from scripts.eval.build_diverse_regression_suites import DEFAULT_QUOTAS, build_cases, numeric_terms, scaled_quotas
 from scripts.eval.build_questionlist_cases import NEGATIVE_BEHAVIOR, balanced_select, case_from_question, prompt_change_select
+from scripts.eval.judge_saved_answers import expected_judge_resume_metadata, is_resumable_score
 from scripts.eval.run_multi_model_eval import (
     answer_cache_fingerprint,
     aggregate_llm_judge_scores,
@@ -581,9 +583,78 @@ class EvalScoringTests(unittest.TestCase):
         self.assertTrue(result["pass"])
         self.assertEqual(result["model"], "HCX-007")
         self.assertEqual(result["provider"], "clova_studio")
-        self.assertEqual(result["prompt_version"], "judge_v2_acc_com_utl_nac_hal")
+        self.assertEqual(result["prompt_version"], "judge_submission_v1_partial_credit_acc_com_utl_nac_hal")
         self.assertEqual(result["system_prompt_preset"], "judge_default_v1")
         self.assertTrue(result["prompt_hash"])
+
+    def test_run_llm_judge_defaults_nac_when_no_numeric_facts_exist(self) -> None:
+        class FakeApiProvider:
+            def chat(self, *, config, messages, options, response_schema=None):
+                return {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "acc": 0,
+                                "com": 0,
+                                "utl": 0,
+                                "nac": 0,
+                                "hal": 20,
+                                "pass": False,
+                                "critical_fail": False,
+                                "error_type": "missing_condition",
+                                "reason": "질문에 필요한 내용을 답하지 못했습니다. 수치 정보가 없어 NAC는 0점입니다.",
+                                "confidence": 0.7,
+                                "evidence_notes": [],
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+
+        result = run_llm_judge(
+            case={
+                "case_id": "C1",
+                "question": "Q",
+                "gold_answer": "A",
+                "required_conditions": ["A"],
+                "gold_evidence": [{"title": "T", "excerpt": "A"}],
+                "utl_applicable": False,
+            },
+            output={"status": "ok", "model_answer": "A와 다른 일반 안내입니다."},
+            deterministic_score={"overall_score": 0, "pass": False},
+            judge_config={"provider": "clova_studio", "model": "HCX-007", "options": {}},
+            provider=None,
+            api_provider=FakeApiProvider(),
+            keep_alive=None,
+            installed_models=set(),
+        )
+
+        self.assertEqual(result["nac"], 20)
+        self.assertIn("NAC 정규화", result["reason"])
+        self.assertEqual(result["raw_metric_score"], 40)
+
+    def test_saved_answer_resume_rejects_stale_judge_prompt_metadata(self) -> None:
+        judge_config = {
+            "config_id": "gemini_2_5_flash_judge",
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "system_prompt_preset": "judge_default_v1",
+        }
+        expected = expected_judge_resume_metadata([judge_config])
+        row = {
+            "config_id": "target_model",
+            "case_id": "case_001",
+            "llm_judge_status": "ok",
+            **expected,
+        }
+        self.assertTrue(
+            is_resumable_score(row, judge_required=True, expected_judge_metadata=expected)
+        )
+        stale = dict(row)
+        stale["llm_judge_prompt_version"] = "judge_v2_acc_com_utl_nac_hal"
+        self.assertFalse(
+            is_resumable_score(stale, judge_required=True, expected_judge_metadata=expected)
+        )
 
     def test_anthropic_payload_uses_messages_endpoint_and_system_prompt(self) -> None:
         self.assertEqual(anthropic_chat_url({}), "https://api.anthropic.com/v1/messages")
@@ -611,11 +682,12 @@ class EvalScoringTests(unittest.TestCase):
                 {"role": "system", "content": "Return JSON only."},
                 {"role": "user", "content": "채점해줘"},
             ],
-            options={"max_output_tokens": 512, "temperature": 0},
+            options={"max_output_tokens": 512, "temperature": 0, "thinking_budget": 512},
             response_schema={"type": "object", "required": ["pass"], "properties": {"pass": {"type": "boolean"}}},
         )
         self.assertEqual(payload["contents"][0]["role"], "user")
         self.assertEqual(payload["generationConfig"]["maxOutputTokens"], 512)
+        self.assertEqual(payload["generationConfig"]["thinkingConfig"], {"thinkingBudget": 512})
         self.assertEqual(payload["generationConfig"]["responseMimeType"], "application/json")
         self.assertEqual(payload["generationConfig"]["responseSchema"]["required"], ["pass"])
         self.assertNotIn("responseFormat", payload["generationConfig"])
@@ -2002,6 +2074,29 @@ class QuestionlistCaseTests(unittest.TestCase):
 
 
 class FinalUiServerHelperTests(unittest.TestCase):
+    def test_resolve_project_path_rejects_paths_outside_project_root(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+
+        inside = FinalUiHandler.resolve_project_path(handler, "config/eval_matrix.yaml")
+        self.assertTrue(inside.is_absolute())
+        self.assertTrue(str(inside).replace("\\", "/").endswith("config/eval_matrix.yaml"))
+
+        with self.assertRaises(ValueError):
+            FinalUiHandler.resolve_project_path(handler, "../outside.csv")
+        with self.assertRaises(ValueError):
+            FinalUiHandler.resolve_project_path(handler, str(Path(tempfile.gettempdir()) / "outside.csv"))
+
+    def test_read_json_body_rejects_oversized_request_before_reading_body(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        handler.headers = {"Content-Length": str(MAX_JSON_BODY_BYTES + 1)}
+        handler.rfile = io.BytesIO(b'{"ignored": true}')
+
+        payload = FinalUiHandler.read_json_body(handler)
+
+        self.assertIsNone(payload)
+        self.assertEqual(handler._json_body_status, 413)
+        self.assertIn("too large", handler._json_body_error)
+
     def test_latest_run_empty_state_returns_200_missing_payload(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
@@ -2224,6 +2319,8 @@ class FinalUiServerHelperTests(unittest.TestCase):
                 "prompt_version": "strict_v1",
                 "system_prompt": "SYS",
                 "query_prompt_template": "Q={question}",
+                "model_family": "Gemma",
+                "model_family_color": "#2563eb",
                 "options": {"temperature": 0.2, "top_p": 0.8},
             },
         )
@@ -2232,6 +2329,8 @@ class FinalUiServerHelperTests(unittest.TestCase):
         self.assertEqual(config["base_url_env"], "OLLAMA_BASE_URL")
         self.assertEqual(config["system_prompt"], "SYS")
         self.assertEqual(config["query_prompt_template"], "Q={question}")
+        self.assertEqual(config["model_family"], "Gemma")
+        self.assertEqual(config["model_family_color"], "#2563eb")
         self.assertEqual(config["options"]["temperature"], 0.2)
 
     def test_normalize_model_config_does_not_promote_internal_proxy_urls_to_upstream(self) -> None:
@@ -3446,6 +3545,40 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn('const sourceLabel = "사용자 등록";', app_js)
         self.assertIn('data-check-model="${escapeHtml(id)}"', app_js)
         self.assertIn('data-check-judge="${escapeHtml(id)}"', app_js)
+        self.assertIn('id="judgeRegistryHealthCheck"', index_html)
+        self.assertIn("Judge 일괄 연결 확인", app_js)
+        self.assertIn('await syncSelectedModelApis(judgeIds, { requireSelected: false, scope: "judge-all" });', app_js)
+        self.assertIn("function resultScoringLabel", app_js)
+        self.assertIn("function resultJudgeSummaryLabel", app_js)
+        self.assertIn("function resultFinalReason", app_js)
+        self.assertIn("result-final-summary", app_js)
+        self.assertIn("detail-meta-grid", styles_css)
+        self.assertIn("resultScoringLabel(row)", app_js)
+        self.assertIn("function modelFamilyInfo", app_js)
+        self.assertIn("function populateModelFamilySelect", app_js)
+        self.assertIn("function modelFamilyPayloadFromForm", app_js)
+        self.assertIn("새 모델 계열명을 입력하세요.", app_js)
+        self.assertIn('id="modelFamilySelect"', index_html)
+        self.assertIn('id="modelFamilyCustom"', index_html)
+        self.assertIn('name="model_family_color"', index_html)
+        self.assertIn("model_family_color", server_py)
+        self.assertIn("def safe_hex_color", server_py)
+        self.assertIn("function renderModelFamilyLegend", app_js)
+        self.assertIn("model-family-chart", styles_css)
+        self.assertIn("trend-row", app_js)
+        self.assertIn("trend-family-chip", styles_css)
+        self.assertIn("registry-family-badge", styles_css)
+        self.assertIn("function matrixSecondaryBadge", app_js)
+        self.assertIn("matrix-secondary-badge", app_js)
+        self.assertIn(".matrix-result-cell .matrix-secondary-badge", styles_css)
+        self.assertIn("function badgeCell", app_js)
+        self.assertIn("function scoreBadge", app_js)
+        self.assertIn("function gateBadge", app_js)
+        self.assertIn("function errorBadge", app_js)
+        self.assertIn("function modelCell", app_js)
+        self.assertIn(".ui-badge", styles_css)
+        self.assertIn(".table-model-cell", styles_css)
+        self.assertIn(".case-badge-row", styles_css)
         self.assertIn('await syncSelectedModelApis([version], { requireSelected: false, scope: "single" });', app_js)
         self.assertIn("Judge 연결 확인 중", app_js)
         self.assertIn("Judge 연결 확인 완료", app_js)
@@ -3490,8 +3623,10 @@ class FinalUiJavascriptContractTests(unittest.TestCase):
         self.assertIn('class="run-cache-option"', index_html)
         self.assertIn("2단계 실행 시 1단계/이전 답변을 먼저 사용", index_html)
         self.assertIn(".run-step-two-action", styles_css)
-        self.assertIn('await syncSelectedModelApis(targetVersions, { requireSelected: false, scope: "all" });', app_js)
-        self.assertIn("const targetVersions = evalTargetRegistryIds();", app_js)
+        self.assertIn("function connectionRegistryIds", app_js)
+        self.assertIn('await syncSelectedModelApis(connectionVersions, { requireSelected: false, scope: "all" });', app_js)
+        self.assertIn("const connectionVersions = connectionRegistryIds();", app_js)
+        self.assertIn("등록된 대상/Judge 모델 연결 확인", app_js)
         self.assertIn('scope: "single"', app_js)
         self.assertIn('scope: "all"', app_js)
         self.assertIn('progress?.scope === "single"', app_js)

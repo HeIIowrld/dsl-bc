@@ -83,6 +83,17 @@
         <label>Model
           <input id="modelName" name="model" placeholder="model name or deployment id">
         </label>
+        <label>Model family
+          <select id="modelFamilySelect" name="model_family_select">
+            <option value="">Auto detect</option>
+          </select>
+        </label>
+        <label>New family
+          <input id="modelFamilyCustom" name="model_family_custom" placeholder="e.g. Mistral">
+        </label>
+        <label>Family color
+          <input id="modelFamilyColor" name="model_family_color" type="color" value="#64748b">
+        </label>
         <label>Base URL
           <input id="modelBaseUrl" name="base_url" placeholder="https://host.example.com">
         </label>
@@ -287,6 +298,7 @@
           </label>
           <label>Judge provider
             <select id="evalJudgeProvider" name="judge_provider">
+              <option value="">Judge provider 선택</option>
               <option value="clova_studio">CLOVA Studio</option>
               <option value="anthropic">Claude</option>
               <option value="gemini">Gemini</option>

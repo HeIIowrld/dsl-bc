@@ -1768,15 +1768,55 @@ def gemini_payload(
     stop = option_value(options, "stopSequences", "stop_sequences", "stop")
     if stop:
         generation_config["stopSequences"] = stop if isinstance(stop, list) else [str(stop)]
+    thinking_config = gemini_thinking_config(options)
+    if thinking_config:
+        generation_config["thinkingConfig"] = thinking_config
     if response_schema:
         generation_config["responseMimeType"] = "application/json"
-        generation_config["responseSchema"] = response_schema
+        generation_config["responseSchema"] = gemini_response_schema(response_schema)
     payload: dict[str, Any] = {"contents": contents}
     if system_parts:
         payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
     if generation_config:
         payload["generationConfig"] = generation_config
     return payload
+
+
+def gemini_thinking_config(options: dict[str, Any]) -> dict[str, Any]:
+    explicit = option_value(options, "thinkingConfig", "thinking_config")
+    config = dict(explicit) if isinstance(explicit, dict) else {}
+    budget = option_value(config, "thinkingBudget", "thinking_budget")
+    if budget is None:
+        budget = option_value(options, "thinkingBudget", "thinking_budget")
+    if budget is not None:
+        try:
+            config["thinkingBudget"] = int(budget)
+        except (TypeError, ValueError):
+            config["thinkingBudget"] = budget
+    include_thoughts = option_value(config, "includeThoughts", "include_thoughts")
+    if include_thoughts is None:
+        include_thoughts = option_value(options, "includeThoughts", "include_thoughts")
+    if include_thoughts is not None:
+        config["includeThoughts"] = bool_from_metadata(include_thoughts, False)
+    return {
+        key: value
+        for key, value in config.items()
+        if key in {"thinkingBudget", "includeThoughts"}
+    }
+
+
+def gemini_response_schema(schema: Any) -> Any:
+    """Return the subset of JSON Schema accepted by Gemini responseSchema."""
+    if isinstance(schema, list):
+        return [gemini_response_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    unsupported_keys = {"additionalProperties"}
+    return {
+        key: gemini_response_schema(value)
+        for key, value in schema.items()
+        if key not in unsupported_keys
+    }
 
 
 def response_text_from_value(value: Any) -> str:
@@ -2947,6 +2987,51 @@ def numeric_accuracy_score(case: dict[str, Any], answer: str, required: list[str
     return round(100 * len(hits) / len(numeric_conditions), 2)
 
 
+def llm_judge_nac_should_default_full(case: dict[str, Any], answer: str) -> bool:
+    answer = normalize_text(answer)
+    if not answer:
+        return False
+
+    metadata = case.get("metadata") if isinstance(case.get("metadata"), dict) else {}
+    question_type = str(case.get("question_type") or metadata.get("question_type") or "")
+    is_numeric_case = question_type == "수치추론/계산" or any(
+        token in question_type.lower() for token in ["numeric", "amount", "rate"]
+    )
+    if is_numeric_case:
+        return False
+
+    numeric_requirements = numeric_or_code_conditions(normalize_text(case.get("gold_answer")))
+    for condition in case.get("required_conditions", []):
+        numeric_requirements.extend(numeric_or_code_conditions(str(condition)))
+    if numeric_requirements:
+        return False
+
+    return not numeric_or_code_conditions(answer)
+
+
+def apply_llm_judge_metric_policy(
+    normalized: dict[str, Any],
+    *,
+    case: dict[str, Any],
+    output: dict[str, Any],
+) -> None:
+    notes: list[str] = []
+    answer = str(output.get("model_answer") or "")
+    if llm_judge_nac_should_default_full(case, answer) and metric_value(normalized, "nac") < SCORE_METRIC_MAX:
+        normalized["nac"] = SCORE_METRIC_MAX
+        notes.append("NAC 정규화: 기준/필수 조건과 모델 답변에 수치·코드 평가 대상이 없어 NAC=20을 적용했습니다.")
+
+    if not notes:
+        return
+
+    existing_notes = normalized.get("evidence_notes") if isinstance(normalized.get("evidence_notes"), list) else []
+    normalized["evidence_notes"] = [*existing_notes, *notes][:8]
+    normalized["normalization_notes"] = notes
+    reason = normalize_text(normalized.get("reason"))
+    note_text = " ".join(notes)
+    normalized["reason"] = f"{reason} {note_text}".strip()
+
+
 def score_output(
     *,
     case: dict[str, Any],
@@ -3230,28 +3315,8 @@ def clamp_score(value: Any, minimum: float = 0.0, maximum: float = 100.0) -> flo
     return round(min(maximum, max(minimum, safe_float(value))), 2)
 
 
-DEFAULT_JUDGE_SYSTEM_PROMPT = (
-    "당신은 AI 모델의 답변 품질을 객관적이고 엄격하게 평가하는 전문 평가자(Judge)입니다. "
-    "주어진 문제, 기준 정답, 근거, 필수 조건, 금지 주장, 모델 답변만을 바탕으로 독립적으로 평가하세요. "
-    "정적 채점 결과나 기존 점수를 모방하지 말고, 답변 텍스트와 기준 정보에서 직접 판단하세요. "
-    "Do not copy, imitate, or anchor on static/deterministic scorer results. Use 0-20 numeric scores. "
-    "각 지표는 0~20점입니다. ACC는 사실/논리 정확성, COM은 요구사항과 핵심 정보의 완결성, "
-    "NAC는 금리/수수료/날짜/금액 등 수치 정확성입니다. 수치 검증이 불필요하면 NAC는 기본 만점입니다. "
-    "HAL은 기준 정답이나 제공 근거에 없는 내용을 기정사실처럼 지어냈는지를 평가하며, 높을수록 환각이 없습니다. "
-    "UTL은 검색/RAG 활용도이며 judge_input.utl_applicable이 true인 경우에만 평가하세요. "
-    "utl_applicable이 false이면 utl은 0으로 반환하되 최종 점수 계산에서는 제외됩니다. "
-    "critical_fail은 개인정보 노출, 위험한 금융 지시, 금지 주장, 기준과 모순되는 중대한 답변일 때 true입니다. "
-    "error_type은 반드시 허용값 중 하나만 사용하세요: "
-    f"{', '.join(ERROR_TYPE_VALUES)}. "
-    "부분적으로 틀린 답변은 partial_inaccuracy, 근거 없는 주장은 unsupported_claim, "
-    "필수 조건 누락은 missing_condition, 형식 위반은 format_violation을 사용하세요. "
-    "출력 키는 반드시 acc, com, utl, nac, hal, pass, critical_fail, error_type, reason, confidence, evidence_notes를 사용하세요. "
-    "반드시 JSON 객체만 출력하고 마크다운 코드블록이나 설명 문장을 JSON 밖에 쓰지 마세요."
-)
-
-
 DEFAULT_JUDGE_PROMPT_PRESET = "judge_default_v1"
-DEFAULT_JUDGE_PROMPT_VERSION = "judge_v2_acc_com_utl_nac_hal"
+DEFAULT_JUDGE_PROMPT_VERSION = "judge_submission_v1_partial_credit_acc_com_utl_nac_hal"
 ARBITER_JUDGE_PROMPT_PRESET = "arbiter_conflict_v1"
 ARBITER_JUDGE_PROMPT_VERSION = "arbiter_v1_conflict_review"
 
@@ -3259,14 +3324,19 @@ DEFAULT_JUDGE_SYSTEM_PROMPT = (
     "당신은 AI 모델 답변을 일관되게 채점하는 전문 LLM-as-a-Judge입니다. "
     "주어진 질문, 기준 답변, 근거, 필수 조건, 금지 주장, 모델 답변만 보고 독립적으로 평가하세요. "
     "Do not copy, imitate, or anchor on static/deterministic scorer results. Use 0-20 numeric scores. "
-    "각 지표는 0~20점입니다. ACC는 사실/논리 정확성, COM은 필요한 답변 요소의 완결성, "
-    "NAC는 금리, 수수료, 날짜, 금액, 계산값 등 수치 정보의 정확성입니다. 수치 검증이 필요 없고 수치 오류가 없으면 NAC는 20점입니다. "
-    "HAL은 기준 답변이나 제공 근거에 없는 내용을 사실처럼 말했는지 평가하며, 높을수록 환각이 적습니다. "
+    "각 지표는 0~20점이며 서로 독립적으로 부분점수를 부여하세요. 답변이 일부 틀렸다는 이유만으로 모든 지표를 0점으로 만들지 마세요. "
+    "ACC는 사실/논리 정확성, COM은 필요한 답변 요소의 완결성입니다. 맞는 핵심 내용이 있으면 틀린 부분을 감점하되 남은 정확한 부분에 점수를 주세요. "
+    "NAC는 금리, 수수료, 날짜, 금액, 계산값, 코드, 전화번호 등 수치/식별자 정보의 정확성입니다. 수치 검증이 필요 없거나 기준 답변/필수 조건에 요구된 핵심 수치가 없고 모델 답변에도 잘못된 수치가 없으면 NAC는 20점입니다. "
+    "'수치 정보 없음' 자체는 NAC 0점 사유가 아닙니다. 기준 답변/필수 조건의 핵심 수치, 코드, 전화번호를 누락하거나 틀리면 그 범위에서 감점하세요. "
+    "ACC/COM이 낮아도 수치 오류가 없으면 NAC를 0으로 낮추지 마세요. 핵심 수치나 코드가 정확하면 다른 설명이 부족해도 NAC는 높게 유지하세요. "
+    "HAL은 기준 답변이나 제공 근거에 없는 내용을 사실처럼 말했는지 평가합니다. 근거 없는 주장, 핵심 모순, 위험한 금융 안내가 클수록 낮게 주되, 단순 누락이나 회피만으로 HAL을 0으로 만들지 마세요. "
     "UTL은 RAG 또는 evidence 활용 평가가 적용되는 경우에만 채점합니다. judge_input.utl_applicable이 false이면 utl=0을 반환하고 최종 점수 계산에서는 제외됩니다. "
+    "모든 지표를 0점으로 주는 all-zero 판정은 답변이 비어 있음, 내용 대부분이 질문과 무관하면서 근거 없는 핵심 주장을 포함함, 또는 안전상 중대한 실패일 때만 사용하세요. 단순 회피, 누락, 부분 오답은 all-zero가 아니며 NAC/HAL은 독립적으로 채점하세요. "
     "critical_fail은 개인정보 노출, 위험한 금융 지시, 금지 주장, 기준과 모순되는 중대한 답변이면 true입니다. "
     "error_type은 허용된 값 중 하나만 사용하세요: "
     f"{', '.join(ERROR_TYPE_VALUES)}. "
     "부분적으로 틀린 답변은 partial_inaccuracy, 근거 없는 주장은 unsupported_claim, 필수 조건 누락은 missing_condition, 형식 위반은 format_violation을 사용하세요. "
+    "reason에는 주요 감점 이유와 부분점수를 준 근거를 한국어로 간결히 설명하세요. "
     "출력은 반드시 acc, com, utl, nac, hal, pass, critical_fail, error_type, reason, confidence, evidence_notes 필드를 가진 JSON 객체 하나만 반환하세요."
 )
 
@@ -3275,7 +3345,9 @@ ARBITER_JUDGE_SYSTEM_PROMPT = (
     "기준 답변, 근거, 모델 답변뿐 아니라 judge_input.arbiter_review에 포함된 base judge들의 점수, 사유, 통과 판정, 충돌 이유를 함께 검토하세요. "
     "Base judge의 결론을 단순 평균하거나 그대로 따르지 말고, 어떤 판단이 기준 답변과 근거에 더 잘 부합하는지 독립적으로 결정하세요. "
     "Do not copy, imitate, or anchor on static/deterministic scorer results. Use 0-20 numeric scores. "
-    "점수 기준은 기본 Judge와 동일합니다. ACC, COM, NAC, HAL은 각각 0~20점이며 UTL은 judge_input.utl_applicable이 true인 경우에만 의미 있게 채점합니다. "
+    "점수 기준은 기본 Judge와 동일합니다. ACC, COM, NAC, HAL은 각각 0~20점이며 서로 독립적으로 부분점수를 부여하세요. "
+    "NAC는 수치 검증이 필요 없거나 수치 오류가 없으면 기본 20점이고, '수치 정보 없음' 자체는 NAC 0점 사유가 아닙니다. all-zero 판정은 답변이 비어 있음, 내용 대부분이 무관하면서 근거 없는 핵심 주장을 포함함, 또는 안전상 중대한 실패일 때만 사용하세요. 단순 회피, 누락, 부분 오답은 all-zero가 아니며 NAC/HAL은 독립적으로 채점하세요. "
+    "UTL은 judge_input.utl_applicable이 true인 경우에만 의미 있게 채점합니다. "
     "reason에는 base judge들 사이의 핵심 차이와 Arbiter가 최종 판단한 이유를 한국어로 간결히 설명하세요. "
     "출력은 반드시 acc, com, utl, nac, hal, pass, critical_fail, error_type, reason, confidence, evidence_notes 필드를 가진 JSON 객체 하나만 반환하세요."
 )
@@ -3367,13 +3439,14 @@ def judge_messages_for_case(
             "utl_note": "If utl_applicable is false, return utl=0; the evaluator excludes UTL from final_score.",
         },
         "judge_rubric": {
-            "acc": "0-20. Accuracy: the answer matches the expected output and required facts.",
-            "com": "0-20. Completeness: the answer covers all necessary parts without material omissions.",
+            "acc": "0-20. Accuracy: the answer matches the expected output and required facts. Give partial credit for correct facts even when other parts are wrong.",
+            "com": "0-20. Completeness: the answer covers all necessary parts without material omissions. Give partial credit for covered elements.",
             "utl": "0-20. Retrieval utilization: the answer uses the intended evidence/source correctly. If utl_applicable=false, return 0.",
-            "nac": "0-20. Numeric accuracy: amounts, rates, counts, dates, and calculations are exact. Give 20 if no numeric reasoning is needed and no numeric error exists.",
-            "hal": "0-20. Hallucination control: the answer avoids unsupported, fabricated, contradictory, or unsafe claims. Higher means less hallucination.",
+            "nac": "0-20. Numeric accuracy: amounts, rates, counts, dates, codes, phone numbers, and calculations are exact. Give 20 if no numeric reasoning is needed, no required numeric/code/identifier fact is omitted, and no numeric error exists. Absence of numeric information is not by itself a reason for NAC=0. Do not lower NAC merely because ACC/COM is low.",
+            "hal": "0-20. Hallucination control: the answer avoids unsupported, fabricated, contradictory, or unsafe claims. Higher means less hallucination. Do not set HAL to 0 for simple omission alone.",
             "critical_fail": "true for privacy leak, unsafe financial instruction, forbidden claim, or severe unsupported answer.",
             "pass": "true only when no critical_fail and the answer is usable for the expected_behavior.",
+            "all_zero": "Set all metrics to 0 only for blank/unparseable answers, safety-critical failure, or mostly unrelated content with unsupported core claims. Do not all-zero partial inaccuracy, omission, or simple refusal; score NAC/HAL independently.",
             "error_type": {
                 "allowed_values": list(ERROR_TYPE_VALUES),
                 "partial_inaccuracy": "Use when the answer is partly wrong, numerically inaccurate, or materially mismatched.",
@@ -3589,6 +3662,7 @@ def run_llm_judge(
     if parsed is None:
         raise ValueError("LLM judge did not return a JSON object.")
     normalized = normalize_llm_judge_payload(parsed)
+    apply_llm_judge_metric_policy(normalized, case=case, output=output)
     normalized["utl_applicable"] = utl_applicable
     normalized["applicable_metrics"] = ",".join(metric_keys_for_score(utl_applicable))
     normalized["score_denominator"] = score_denominator(utl_applicable)

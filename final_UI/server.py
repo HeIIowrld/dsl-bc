@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import base64
+import hashlib
 import ipaddress
 import io
 import json
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from collections import Counter, defaultdict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from datetime import datetime
@@ -99,6 +101,7 @@ ACTIVE_RUN_PATHS = [
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://afsd.iptime.org:11434").rstrip("/")
 MODEL_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MODEL_HEALTH_TIMEOUT_SECONDS", "8"))
 MODEL_LIVE_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MODEL_LIVE_HEALTH_TIMEOUT_SECONDS", "180"))
+MAX_JSON_BODY_BYTES = int(os.environ.get("FINAL_UI_MAX_JSON_BODY_BYTES", str(8 * 1024 * 1024)))
 RUN_EXCLUDE_MARKERS = ("SMOKE", "DEBUG", "TEST")
 RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs"}
 MIN_DISPLAY_QUESTIONS = 10
@@ -597,6 +600,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/eval/runs":
             self.handle_eval_runs()
             return
+        if parsed.path == "/api/eval/judge-comparison/options":
+            self.handle_judge_comparison_options()
+            return
+        if parsed.path == "/api/eval/judge-comparison/artifact":
+            self.handle_judge_comparison_artifact(parsed.query)
+            return
         if parsed.path == "/api/eval/jobs":
             self.handle_eval_jobs()
             return
@@ -642,6 +651,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "/api/eval/catalog",
             "/api/eval/latest-run",
             "/api/eval/runs",
+            "/api/eval/judge-comparison/options",
+            "/api/eval/judge-comparison/artifact",
             "/api/eval/jobs",
             "/api/eval/answers-template",
             "/data/eval_runs.csv",
@@ -689,6 +700,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/eval/judge-saved":
             self.handle_start_saved_answer_judge()
+            return
+        if parsed.path == "/api/eval/judge-comparison":
+            self.handle_create_judge_comparison()
             return
         control_match = re.match(r"^/api/eval/jobs/([^/]+)/control$", parsed.path)
         if control_match:
@@ -1138,6 +1152,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "safety_policy": config.get("safety_policy"),
             "role_notes": config.get("role_notes") or "",
             "model_group": config.get("model_group") or "",
+            "model_family": str(config.get("model_family") or config.get("family") or "").strip(),
+            "model_family_color": self.safe_hex_color(config.get("model_family_color") or config.get("family_color") or ""),
             "candidate_role": raw_candidate_role,
             "evaluation_role": evaluation_role,
             "judge_role": judge_role,
@@ -1188,6 +1204,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         text = "".join(ch if ch.isalnum() else "_" for ch in text)
         text = "_".join(part for part in text.split("_") if part)
         return text[:80]
+
+    def safe_hex_color(self, value):
+        text = str(value or "").strip()
+        if re.fullmatch(r"#[0-9a-fA-F]{6}", text):
+            return text
+        if re.fullmatch(r"#[0-9a-fA-F]{3}", text):
+            return "#" + "".join(char * 2 for char in text[1:])
+        return ""
 
     def external_http_url(self, value):
         text = str(value or "").strip()
@@ -1254,7 +1278,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_save_judge_api_preset(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "Invalid JSON body"}, status=400)
+            self.send_json_body_error()
             return
         preset = payload.get("preset") if isinstance(payload.get("preset"), dict) else payload
         if not isinstance(preset, dict):
@@ -1306,7 +1330,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_save_server_api_secret(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "Invalid JSON body"}, status=400)
+            self.send_json_body_error()
             return
         env_name = self.safe_env_name(payload.get("env_name") or payload.get("name"))
         value = str(payload.get("value") or "").strip()
@@ -1544,7 +1568,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_save_model_registry_entry(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "Invalid JSON body"}, status=400)
+            self.send_json_body_error()
             return
         config = payload.get("config") if isinstance(payload.get("config"), dict) else payload
         incoming_config_id = self.safe_config_id(config.get("config_id") or config.get("model") or config.get("display_name"))
@@ -1657,6 +1681,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "safety_policy": "hidden_by_user",
             "role_notes": "Hidden from the Final UI model registry by user request.",
             "model_group": source_spec.get("model_group") or "",
+            "model_family": source_spec.get("model_family") or "",
+            "model_family_color": source_spec.get("model_family_color") or "",
             "candidate_role": source_spec.get("candidate_role") or "",
             "evaluation_role": source_spec.get("evaluation_role") or "",
             "judge_role": source_spec.get("judge_role") or "",
@@ -1689,16 +1715,30 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return {}
 
     def read_json_body(self):
+        self._json_body_error = ""
+        self._json_body_status = 400
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
         if length <= 0:
             return {}
+        if length > MAX_JSON_BODY_BYTES:
+            self._json_body_error = f"JSON request body is too large. Limit is {MAX_JSON_BODY_BYTES} bytes."
+            self._json_body_status = 413
+            return None
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._json_body_error = "Invalid JSON body"
+            self._json_body_status = 400
             return None
+
+    def send_json_body_error(self, default_message: str = "Invalid JSON body") -> None:
+        self.send_json(
+            {"error": getattr(self, "_json_body_error", "") or default_message},
+            status=int(getattr(self, "_json_body_status", 400) or 400),
+        )
 
     def load_structured_file(self, path: Path):
         text = path.read_text(encoding="utf-8-sig")
@@ -2045,6 +2085,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def auth_headers(self, model_spec: dict):
         headers = {"Content-Type": "application/json"}
         provider = str(model_spec.get("provider") or "")
+        if self.api_key_env_name_error(model_spec.get("api_key_env")):
+            return None
         token, api_key_env = self.provider_api_key_value(model_spec)
         if api_key_env:
             if not token:
@@ -2202,6 +2244,735 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_eval_runs(self):
         self.send_json({"status": "ok", "runs": self.eval_run_summaries()})
+
+    def handle_judge_comparison_options(self):
+        self.send_json(
+            {
+                "status": "ok",
+                "baseline_sources": self.judge_comparison_baseline_sources(),
+                "judge_runs": self.judge_comparison_run_sources(),
+            }
+        )
+
+    def handle_judge_comparison_artifact(self, query: str = ""):
+        raw_path = parse_qs(query or "").get("path", [""])[0]
+        if not raw_path:
+            self.send_json({"error": "artifact path is required"}, status=400)
+            return
+        try:
+            path = self.resolve_project_path(raw_path)
+            path.resolve(strict=False).relative_to(EVAL_RUNS_ROOT.resolve(strict=False))
+        except (ValueError, OSError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        suffix = path.suffix.lower()
+        content_type = {
+            ".md": "text/markdown; charset=utf-8",
+            ".csv": "text/csv; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".jsonl": "application/x-ndjson; charset=utf-8",
+        }.get(suffix, "text/plain; charset=utf-8")
+        self.serve_path(path, content_type=content_type)
+
+    def handle_create_judge_comparison(self):
+        payload = self.read_json_body()
+        if payload is None:
+            self.send_json_body_error()
+            return
+        baseline_source_id = str(payload.get("baseline_source_id") or "").strip()
+        baseline_judge_config_id = str(payload.get("baseline_judge_config_id") or "").strip()
+        candidate_run_id = str(payload.get("candidate_run_id") or "").strip()
+        if not baseline_source_id or not baseline_judge_config_id or not candidate_run_id:
+            self.send_json(
+                {"error": "baseline_source_id, baseline_judge_config_id, candidate_run_id are required"},
+                status=400,
+            )
+            return
+        baseline_path, baseline_label = self.resolve_judge_comparison_baseline(baseline_source_id)
+        if not baseline_path or not baseline_path.exists():
+            self.send_json({"error": f"baseline question_cases.csv not found: {baseline_source_id}"}, status=404)
+            return
+        candidate_dir = self.resolve_judge_score_run_dir(candidate_run_id)
+        if not candidate_dir:
+            self.send_json({"error": f"candidate judge run not found: {candidate_run_id}"}, status=404)
+            return
+        threshold = self.safe_float(payload.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=100.0)
+        include_error_type = bool(payload.get("include_error_type_mismatch", True))
+        normalize_error_type = bool(payload.get("normalize_error_type", True))
+        default_comparison_id = self.default_judge_comparison_id(
+            baseline_judge_config_id=baseline_judge_config_id,
+            candidate_run_id=candidate_dir.name,
+        )
+        comparison_id = self.safe_run_id(payload.get("comparison_id") or default_comparison_id)
+        out_dir = candidate_dir / "judge_comparisons" / comparison_id
+        try:
+            result = self.build_judge_comparison_report(
+                baseline_path=baseline_path,
+                baseline_label=baseline_label,
+                baseline_judge_config_id=baseline_judge_config_id,
+                candidate_dir=candidate_dir,
+                out_dir=out_dir,
+                score_gap_threshold=threshold,
+                include_error_type_mismatch=include_error_type,
+                normalize_error_type=normalize_error_type,
+            )
+        except (OSError, RuntimeError) as exc:
+            self.send_json({"error": str(exc)}, status=400)
+            return
+        self.send_json({"status": "ok", **result})
+
+    def default_judge_comparison_id(self, *, baseline_judge_config_id: str, candidate_run_id: str) -> str:
+        judge_key = self.safe_run_id(baseline_judge_config_id).replace("_judge", "")
+        candidate_key = hashlib.sha1(candidate_run_id.encode("utf-8")).hexdigest()[:8]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"cmp_{judge_key[:32]}_{candidate_key}_{timestamp}"
+
+    def judge_comparison_baseline_sources(self):
+        sources = []
+        exported = ROOT / "data" / "question_cases.csv"
+        if exported.exists():
+            sources.append(
+                self.judge_comparison_baseline_summary(
+                    "__final_ui_data__",
+                    "현재 UI 내보내기 데이터",
+                    exported,
+                    selected=True,
+                )
+            )
+        if EVAL_RUNS_ROOT.exists():
+            candidates = [path for path in EVAL_RUNS_ROOT.iterdir() if self.is_eval_run_dir(path)]
+            candidates.sort(key=self.run_sort_key, reverse=True)
+            for path in candidates:
+                sources.append(
+                    self.judge_comparison_baseline_summary(
+                        path.name,
+                        path.name,
+                        path / "question_cases.csv",
+                        selected=False,
+                    )
+                )
+        return [source for source in sources if source.get("judge_configs")]
+
+    def judge_comparison_run_sources(self):
+        sources = []
+        if not EVAL_RUNS_ROOT.exists():
+            return sources
+        candidates = [
+            path
+            for path in EVAL_RUNS_ROOT.iterdir()
+            if path.is_dir() and (path / "judge_scores.jsonl").exists()
+        ]
+        candidates.sort(key=self.run_sort_key, reverse=True)
+        for path in candidates:
+            sources.append(self.judge_score_run_summary(path))
+        return sorted(
+            [source for source in sources if source.get("ok_rows")],
+            key=lambda source: (int(source.get("ok_rows") or 0), float(source.get("updated_at") or 0)),
+            reverse=True,
+        )
+
+    def judge_comparison_baseline_summary(self, source_id: str, label: str, path: Path, *, selected: bool):
+        judge_counts, rows = self.question_cases_judge_counts(path)
+        return {
+            "source_id": source_id,
+            "label": label,
+            "path": self.display_path(path),
+            "selected": selected,
+            "rows": rows,
+            "judge_configs": [
+                {"config_id": config_id, "rows": count}
+                for config_id, count in judge_counts.most_common()
+            ],
+        }
+
+    def judge_score_run_summary(self, path: Path):
+        config_counts = Counter()
+        status_counts = Counter()
+        row_count = 0
+        ok_rows = 0
+        for row in eval_read_jsonl(path / "judge_scores.jsonl"):
+            row_count += 1
+            status = str(row.get("llm_judge_status") or "").strip().lower()
+            status_counts[status or "unknown"] += 1
+            if status == "ok":
+                ok_rows += 1
+                config_id = str(row.get("llm_judge_config_id") or row.get("judge_config_id") or "").strip()
+                if config_id:
+                    config_counts[config_id] += 1
+        return {
+            "run_id": path.name,
+            "label": path.name,
+            "path": self.display_path(path),
+            "updated_at": path.stat().st_mtime,
+            "rows": row_count,
+            "ok_rows": ok_rows,
+            "status_counts": dict(status_counts),
+            "judge_configs": [
+                {"config_id": config_id, "rows": count}
+                for config_id, count in config_counts.most_common()
+            ],
+        }
+
+    def resolve_judge_comparison_baseline(self, source_id: str):
+        if source_id == "__final_ui_data__":
+            return ROOT / "data" / "question_cases.csv", "현재 UI 내보내기 데이터"
+        run_dir = self.run_dir_by_id(source_id)
+        if run_dir:
+            return run_dir / "question_cases.csv", run_dir.name
+        return None, ""
+
+    def resolve_judge_score_run_dir(self, run_id: str):
+        safe = self.safe_run_id(run_id)
+        if not safe:
+            return None
+        candidate = EVAL_RUNS_ROOT / safe
+        if candidate.is_dir() and (candidate / "judge_scores.jsonl").exists():
+            return candidate
+        return None
+
+    def question_cases_judge_counts(self, path: Path):
+        counts = Counter()
+        rows = 0
+        if not path.exists():
+            return counts, rows
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    rows += 1
+                    for score in self.parse_json_array_field(row.get("llm_judge_individual_scores")):
+                        config_id = str(score.get("config_id") or "").strip()
+                        if config_id:
+                            counts[config_id] += 1
+        except (OSError, csv.Error):
+            return Counter(), 0
+        return counts, rows
+
+    def load_baseline_judge_scores(self, path: Path, judge_config_id: str):
+        scores = {}
+        metadata = {}
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                config_id = str(row.get("version") or row.get("config_id") or "").strip()
+                case_id = str(row.get("question_id") or row.get("case_id") or "").strip()
+                if not config_id or not case_id:
+                    continue
+                key = (config_id, case_id)
+                metadata.setdefault(
+                    key,
+                    {
+                        "qa_category": row.get("qa_category") or row.get("source_type") or "",
+                        "question_type": row.get("question_type") or "",
+                        "qa_topic": row.get("qa_topic") or row.get("qa_matrix_topic") or "",
+                        "instruction": row.get("instruction") or "",
+                        "expected_output": row.get("output") or "",
+                        "model_answer": row.get("model_answer") or row.get("answer_excerpt") or "",
+                    },
+                )
+                for item in self.parse_json_array_field(row.get("llm_judge_individual_scores")):
+                    if str(item.get("config_id") or "").strip() == judge_config_id:
+                        scores[key] = self.normalized_judge_score(item, source="baseline")
+                        break
+        return scores, metadata
+
+    def load_candidate_judge_scores(self, run_dir: Path):
+        scores = {}
+        for row in eval_read_jsonl(run_dir / "judge_scores.jsonl"):
+            if str(row.get("llm_judge_status") or "").strip().lower() != "ok":
+                continue
+            config_id = str(row.get("config_id") or "").strip()
+            case_id = str(row.get("case_id") or row.get("question_id") or "").strip()
+            if config_id and case_id:
+                scores[(config_id, case_id)] = self.normalized_judge_score(row, source="candidate")
+        return scores
+
+    def build_judge_comparison_report(
+        self,
+        *,
+        baseline_path: Path,
+        baseline_label: str,
+        baseline_judge_config_id: str,
+        candidate_dir: Path,
+        out_dir: Path,
+        score_gap_threshold: float,
+        include_error_type_mismatch: bool,
+        normalize_error_type: bool,
+    ):
+        baseline_scores, case_meta = self.load_baseline_judge_scores(baseline_path, baseline_judge_config_id)
+        candidate_scores = self.load_candidate_judge_scores(candidate_dir)
+        if not baseline_scores:
+            raise RuntimeError(f"No baseline rows found for judge config: {baseline_judge_config_id}")
+        if not candidate_scores:
+            raise RuntimeError(f"No ok candidate judge rows found: {candidate_dir.name}")
+
+        matched_keys = sorted(set(baseline_scores) & set(candidate_scores))
+        rows = []
+        arbiter_keys = []
+        for config_id, case_id in matched_keys:
+            base = baseline_scores[(config_id, case_id)]
+            cand = candidate_scores[(config_id, case_id)]
+            base_score = self.safe_score(base.get("overall_score"))
+            cand_score = self.safe_score(cand.get("overall_score"))
+            delta = round(cand_score - base_score, 2)
+            gap = round(abs(delta), 2)
+            base_error = str(base.get("error_type") or "")
+            cand_error = str(cand.get("error_type") or "")
+            compare_base_error = eval_canonical_error_type(base_error) if normalize_error_type else base_error
+            compare_cand_error = eval_canonical_error_type(cand_error) if normalize_error_type else cand_error
+            pass_mismatch = bool(base.get("pass")) != bool(cand.get("pass"))
+            error_mismatch = bool(include_error_type_mismatch and compare_base_error != compare_cand_error)
+            reasons = []
+            if pass_mismatch:
+                reasons.append("judge pass/fail disagreement")
+            if gap >= score_gap_threshold:
+                reasons.append(f"judge score gap {gap:.2f}")
+            if error_mismatch:
+                reasons.append(f"judge error-type disagreement: {compare_base_error}, {compare_cand_error}")
+            meta = case_meta.get((config_id, case_id), {})
+            row = {
+                "config_id": config_id,
+                "case_id": case_id,
+                "qa_category": meta.get("qa_category", ""),
+                "question_type": meta.get("question_type", ""),
+                "qa_topic": meta.get("qa_topic", ""),
+                "baseline_judge": baseline_judge_config_id,
+                "candidate_judge": cand.get("config_id", ""),
+                "baseline_score": base_score,
+                "candidate_score": cand_score,
+                "delta_candidate_minus_baseline": delta,
+                "abs_score_gap": gap,
+                "baseline_pass": bool(base.get("pass")),
+                "candidate_pass": bool(cand.get("pass")),
+                "pass_mismatch": pass_mismatch,
+                "baseline_error_type": base_error,
+                "candidate_error_type": cand_error,
+                "baseline_canonical_error_type": compare_base_error,
+                "candidate_canonical_error_type": compare_cand_error,
+                "error_type_mismatch": error_mismatch,
+                "conflict_for_arbiter": bool(reasons),
+                "conflict_reason": "; ".join(reasons),
+                "topic_key": " / ".join(
+                    item
+                    for item in [
+                        meta.get("qa_category", ""),
+                        meta.get("question_type", ""),
+                        meta.get("qa_topic", ""),
+                    ]
+                    if item
+                ),
+                "instruction": meta.get("instruction", ""),
+                "expected_output": meta.get("expected_output", ""),
+                "model_answer": meta.get("model_answer", ""),
+                "baseline_reason": base.get("reason", ""),
+                "candidate_reason": cand.get("reason", ""),
+            }
+            rows.append(row)
+            if reasons:
+                arbiter_keys.append(
+                    {
+                        "config_id": config_id,
+                        "case_id": case_id,
+                        "reason": row["conflict_reason"],
+                        "arbiter_context": {
+                            "comparison_target": f"{baseline_judge_config_id}_vs_{cand.get('config_id', '')}",
+                            "score_gap": gap,
+                            "score_min": min(base_score, cand_score),
+                            "score_max": max(base_score, cand_score),
+                            "pass_mismatch": pass_mismatch,
+                            "base_judges": [
+                                {**base, "label": baseline_judge_config_id},
+                                {**cand, "label": cand.get("config_id", "")},
+                            ],
+                        },
+                    }
+                )
+
+        summary = self.judge_comparison_summary(
+            rows=rows,
+            baseline_scores=baseline_scores,
+            candidate_scores=candidate_scores,
+            baseline_label=baseline_label,
+            baseline_judge_config_id=baseline_judge_config_id,
+            candidate_run_id=candidate_dir.name,
+            score_gap_threshold=score_gap_threshold,
+            include_error_type_mismatch=include_error_type_mismatch,
+            normalize_error_type=normalize_error_type,
+            arbiter_key_rows=len(arbiter_keys),
+        )
+        if not rows:
+            raise RuntimeError("No matching config_id/case_id rows between the selected sources.")
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        files = {
+            "comparison_jsonl": out_dir / "judge_comparison.jsonl",
+            "comparison_csv": out_dir / "judge_comparison.csv",
+            "arbiter_keys_jsonl": out_dir / "judge_comparison_arbiter_keys.jsonl",
+            "summary_json": out_dir / "judge_comparison_summary.json",
+            "report_md": out_dir / "judge_score_diff_report.md",
+            "top_cases_csv": out_dir / "judge_score_diff_top_cases.csv",
+            "by_model_csv": out_dir / "judge_score_diff_by_model.csv",
+            "by_category_csv": out_dir / "judge_score_diff_by_category.csv",
+            "by_topic_csv": out_dir / "judge_score_diff_by_topic.csv",
+        }
+        eval_write_jsonl(files["comparison_jsonl"], rows)
+        eval_write_csv(files["comparison_csv"], rows)
+        eval_write_jsonl(files["arbiter_keys_jsonl"], arbiter_keys)
+        files["summary_json"].write_text(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        by_model = self.judge_group_rows(rows, "config_id")
+        by_category = self.judge_group_rows(rows, "qa_category")
+        by_topic = self.judge_group_rows(rows, "topic_key")
+        eval_write_csv(files["by_model_csv"], by_model)
+        eval_write_csv(files["by_category_csv"], by_category)
+        eval_write_csv(files["by_topic_csv"], by_topic)
+        top_rows = self.judge_top_diff_rows(rows)
+        eval_write_csv(files["top_cases_csv"], top_rows)
+        files["report_md"].write_text(
+            self.judge_comparison_markdown(summary, by_model, by_category, by_topic, top_rows),
+            encoding="utf-8",
+        )
+        return {
+            "summary": summary,
+            "artifacts": {
+                key: {
+                    "path": self.display_path(path),
+                    "url": "/api/eval/judge-comparison/artifact?path=" + self.display_path(path).replace("\\", "/"),
+                }
+                for key, path in files.items()
+            },
+        }
+
+    def parse_json_array_field(self, value):
+        if not value:
+            return []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        try:
+            parsed = json.loads(str(value))
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+    def safe_score(self, value):
+        return self.safe_float(value, default=0.0, minimum=0.0, maximum=100.0)
+
+    def judge_bool_value(self, value):
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "pass"}
+
+    def normalized_judge_score(self, row: dict, *, source: str):
+        if source == "candidate":
+            score = row.get("llm_judge_overall_score", row.get("overall_score"))
+            return {
+                "config_id": row.get("llm_judge_config_id", row.get("judge_config_id", "")),
+                "provider": row.get("llm_judge_provider", ""),
+                "model": row.get("llm_judge_model", ""),
+                "overall_score": self.safe_score(score),
+                "pass": self.judge_bool_value(row.get("llm_judge_pass", row.get("pass"))),
+                "critical_fail": self.judge_bool_value(row.get("llm_judge_critical_fail", row.get("critical_fail"))),
+                "error_type": row.get("llm_judge_error_type", row.get("error_type", "")),
+                "reason": row.get("llm_judge_reason", row.get("judge_reason", "")),
+            }
+        score = row.get("overall_score")
+        if score in (None, ""):
+            denominator = self.safe_float(row.get("score_denominator"), default=80.0, minimum=1.0, maximum=100.0)
+            raw = sum(self.safe_float(row.get(key), default=0.0, minimum=0.0, maximum=20.0) for key in SCORE_METRIC_KEYS)
+            score = round(raw / denominator * 100, 2)
+        return {
+            "config_id": row.get("config_id", ""),
+            "provider": row.get("provider", ""),
+            "model": row.get("model", ""),
+            "overall_score": self.safe_score(score),
+            "pass": self.judge_bool_value(row.get("pass")),
+            "critical_fail": self.judge_bool_value(row.get("critical_fail")),
+            "error_type": row.get("error_type", ""),
+            "reason": row.get("reason", ""),
+        }
+
+    def judge_comparison_summary(
+        self,
+        *,
+        rows: list[dict],
+        baseline_scores: dict,
+        candidate_scores: dict,
+        baseline_label: str,
+        baseline_judge_config_id: str,
+        candidate_run_id: str,
+        score_gap_threshold: float,
+        include_error_type_mismatch: bool,
+        normalize_error_type: bool,
+        arbiter_key_rows: int,
+    ):
+        deltas = [self.safe_float(row.get("delta_candidate_minus_baseline"), default=0.0, minimum=-100.0, maximum=100.0) for row in rows]
+        gaps = [abs(delta) for delta in deltas]
+        baseline_values = [self.safe_score(row.get("baseline_score")) for row in rows]
+        candidate_values = [self.safe_score(row.get("candidate_score")) for row in rows]
+        return {
+            "baseline_label": baseline_label,
+            "baseline_judge_config_id": baseline_judge_config_id,
+            "candidate_run_id": candidate_run_id,
+            "score_gap_threshold": score_gap_threshold,
+            "include_error_type_mismatch": include_error_type_mismatch,
+            "normalize_error_type": normalize_error_type,
+            "baseline_source_rows": len(baseline_scores),
+            "candidate_source_rows": len(candidate_scores),
+            "matched_rows": len(rows),
+            "missing_baseline_rows": len(set(candidate_scores) - set(baseline_scores)),
+            "missing_candidate_rows": len(set(baseline_scores) - set(candidate_scores)),
+            "baseline_avg": self.round_mean(baseline_values),
+            "candidate_avg": self.round_mean(candidate_values),
+            "avg_delta_candidate_minus_baseline": self.round_mean(deltas),
+            "avg_abs_gap": self.round_mean(gaps),
+            "median_abs_gap": self.round_quantile(gaps, 0.5),
+            "p90_abs_gap": self.round_quantile(gaps, 0.9),
+            "p95_abs_gap": self.round_quantile(gaps, 0.95),
+            "candidate_higher_rows": sum(1 for delta in deltas if delta > 0),
+            "baseline_higher_rows": sum(1 for delta in deltas if delta < 0),
+            "same_score_rows": sum(1 for delta in deltas if delta == 0),
+            "gap_threshold_rows": sum(1 for gap in gaps if gap >= score_gap_threshold),
+            "pass_mismatch_rows": sum(1 for row in rows if row.get("pass_mismatch")),
+            "error_type_mismatch_rows": sum(1 for row in rows if row.get("error_type_mismatch")),
+            "arbiter_key_rows": arbiter_key_rows,
+            "baseline_pass_rows": sum(1 for row in rows if row.get("baseline_pass")),
+            "candidate_pass_rows": sum(1 for row in rows if row.get("candidate_pass")),
+            "gap_bands": self.judge_gap_bands(gaps),
+        }
+
+    def round_mean(self, values):
+        clean = [float(value) for value in values if value is not None]
+        return round(sum(clean) / len(clean), 2) if clean else 0.0
+
+    def round_quantile(self, values, quantile: float):
+        clean = sorted(float(value) for value in values if value is not None)
+        if not clean:
+            return 0.0
+        if len(clean) == 1:
+            return round(clean[0], 2)
+        position = (len(clean) - 1) * quantile
+        lower = int(position)
+        upper = min(lower + 1, len(clean) - 1)
+        fraction = position - lower
+        return round(clean[lower] * (1 - fraction) + clean[upper] * fraction, 2)
+
+    def judge_gap_bands(self, gaps):
+        bands = [
+            ("0", lambda gap: gap == 0),
+            ("0 초과~5 미만", lambda gap: 0 < gap < 5),
+            ("5~10 미만", lambda gap: 5 <= gap < 10),
+            ("10~20 미만", lambda gap: 10 <= gap < 20),
+            ("20~30 미만", lambda gap: 20 <= gap < 30),
+            ("30 이상", lambda gap: gap >= 30),
+        ]
+        total = len(gaps)
+        return [
+            {"band": label, "rows": count, "rate": round(count / total * 100, 1) if total else 0.0}
+            for label, predicate in bands
+            for count in [sum(1 for gap in gaps if predicate(gap))]
+        ]
+
+    def judge_group_rows(self, rows: list[dict], field: str):
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for row in rows:
+            key = str(row.get(field) or "미분류")
+            groups[key].append(row)
+        output = []
+        for key, group in sorted(groups.items()):
+            deltas = [self.safe_float(row.get("delta_candidate_minus_baseline"), default=0.0, minimum=-100.0, maximum=100.0) for row in group]
+            gaps = [abs(delta) for delta in deltas]
+            output.append(
+                {
+                    field: key,
+                    "rows": len(group),
+                    "baseline_avg": self.round_mean([row.get("baseline_score") for row in group]),
+                    "candidate_avg": self.round_mean([row.get("candidate_score") for row in group]),
+                    "avg_delta": self.round_mean(deltas),
+                    "avg_abs_gap": self.round_mean(gaps),
+                    "p90_abs_gap": self.round_quantile(gaps, 0.9),
+                    "gap_threshold_rows": sum(
+                        1 for row in group if row.get("conflict_reason", "").find("judge score gap") >= 0
+                    ),
+                    "pass_mismatch_rows": sum(1 for row in group if row.get("pass_mismatch")),
+                    "error_type_mismatch_rows": sum(1 for row in group if row.get("error_type_mismatch")),
+                }
+            )
+        return sorted(output, key=lambda row: (-abs(float(row.get("avg_delta") or 0)), str(row.get(field) or "")))
+
+    def judge_top_diff_rows(self, rows: list[dict]):
+        output = []
+        selected = [
+            ("candidate_higher", sorted(rows, key=lambda row: self.safe_float(row.get("delta_candidate_minus_baseline"), default=0.0, minimum=-100.0, maximum=100.0), reverse=True)[:30]),
+            ("baseline_higher", sorted(rows, key=lambda row: self.safe_float(row.get("delta_candidate_minus_baseline"), default=0.0, minimum=-100.0, maximum=100.0))[:30]),
+            ("largest_abs_gap", sorted(rows, key=lambda row: self.safe_score(row.get("abs_score_gap")), reverse=True)[:100]),
+        ]
+        for direction, group in selected:
+            for rank, row in enumerate(group, 1):
+                output.append(
+                    {
+                        "rank": rank,
+                        "direction": direction,
+                        **{
+                            key: row.get(key, "")
+                            for key in (
+                                "config_id",
+                                "case_id",
+                                "qa_category",
+                                "question_type",
+                                "qa_topic",
+                                "baseline_score",
+                                "candidate_score",
+                                "delta_candidate_minus_baseline",
+                                "abs_score_gap",
+                                "baseline_pass",
+                                "candidate_pass",
+                                "baseline_error_type",
+                                "candidate_error_type",
+                                "instruction",
+                                "expected_output",
+                                "model_answer",
+                                "baseline_reason",
+                                "candidate_reason",
+                            )
+                        },
+                    }
+                )
+        return output
+
+    def judge_comparison_markdown(self, summary: dict, by_model: list[dict], by_category: list[dict], by_topic: list[dict], top_rows: list[dict]):
+        def table(headers, rows):
+            lines = [
+                "| " + " | ".join(headers) + " |",
+                "| " + " | ".join(["---"] + ["---:"] * (len(headers) - 1)) + " |",
+            ]
+            for row in rows:
+                lines.append("| " + " | ".join(str(item).replace("|", "/") for item in row) + " |")
+            return "\n".join(lines)
+
+        def trunc(value, limit=72):
+            text = " ".join(str(value or "").split())
+            return text if len(text) <= limit else text[: limit - 1] + "..."
+
+        model_rows = [
+            [
+                row.get("config_id", ""),
+                row.get("rows", 0),
+                row.get("baseline_avg", 0),
+                row.get("candidate_avg", 0),
+                f"{float(row.get('avg_delta') or 0):+.2f}",
+                row.get("avg_abs_gap", 0),
+                row.get("p90_abs_gap", 0),
+                row.get("gap_threshold_rows", 0),
+                row.get("pass_mismatch_rows", 0),
+            ]
+            for row in by_model
+        ]
+        category_rows = [
+            [
+                row.get("qa_category", ""),
+                row.get("rows", 0),
+                row.get("baseline_avg", 0),
+                row.get("candidate_avg", 0),
+                f"{float(row.get('avg_delta') or 0):+.2f}",
+                row.get("avg_abs_gap", 0),
+                row.get("gap_threshold_rows", 0),
+                row.get("pass_mismatch_rows", 0),
+            ]
+            for row in by_category
+        ]
+        topic_rows = [
+            [
+                row.get("topic_key", ""),
+                row.get("rows", 0),
+                f"{float(row.get('avg_delta') or 0):+.2f}",
+                row.get("avg_abs_gap", 0),
+                row.get("p90_abs_gap", 0),
+                row.get("gap_threshold_rows", 0),
+                row.get("pass_mismatch_rows", 0),
+            ]
+            for row in sorted(by_topic, key=lambda item: -float(item.get("avg_abs_gap") or 0))[:12]
+        ]
+        positive = [row for row in top_rows if row.get("direction") == "candidate_higher"][:10]
+        negative = [row for row in top_rows if row.get("direction") == "baseline_higher"][:10]
+        top_headers = ["모델", "문항", "분류", "유형", "Baseline", "Candidate", "차이", "질문"]
+        positive_rows = [
+            [
+                row.get("config_id", ""),
+                row.get("case_id", ""),
+                row.get("qa_category", ""),
+                row.get("question_type", ""),
+                row.get("baseline_score", ""),
+                row.get("candidate_score", ""),
+                f"{float(row.get('delta_candidate_minus_baseline') or 0):+.2f}",
+                trunc(row.get("instruction")),
+            ]
+            for row in positive
+        ]
+        negative_rows = [
+            [
+                row.get("config_id", ""),
+                row.get("case_id", ""),
+                row.get("qa_category", ""),
+                row.get("question_type", ""),
+                row.get("baseline_score", ""),
+                row.get("candidate_score", ""),
+                f"{float(row.get('delta_candidate_minus_baseline') or 0):+.2f}",
+                trunc(row.get("instruction")),
+            ]
+            for row in negative
+        ]
+        lines = [
+            "# Judge-vs-Judge 점수 차이 리포트",
+            "",
+            "## 범위",
+            "",
+            f"- 기준 Judge: {summary.get('baseline_judge_config_id')} ({summary.get('baseline_label')})",
+            f"- 비교 Judge run: {summary.get('candidate_run_id')}",
+            "- 기준 점수 차이: `비교 Judge 점수 - 기준 Judge 점수`",
+            "- Arbiter는 실행하지 않았고 후보 행만 산출했습니다.",
+            "",
+            "## 핵심 요약",
+            "",
+            f"- 비교 가능 행: {summary.get('matched_rows', 0):,}건",
+            f"- 기준 Judge 평균: {summary.get('baseline_avg')}",
+            f"- 비교 Judge 평균: {summary.get('candidate_avg')}",
+            f"- 평균 차이: {float(summary.get('avg_delta_candidate_minus_baseline') or 0):+.2f}",
+            f"- 평균 절대 차이: {summary.get('avg_abs_gap')}",
+            f"- P90 절대 차이: {summary.get('p90_abs_gap')}",
+            f"- 30점 이상 차이: {summary.get('gap_threshold_rows', 0):,}건",
+            f"- pass/fail 불일치: {summary.get('pass_mismatch_rows', 0):,}건",
+            f"- fail 유형 불일치: {summary.get('error_type_mismatch_rows', 0):,}건",
+            f"- Arbiter 후보: {summary.get('arbiter_key_rows', 0):,}건",
+            "",
+            "## 점수 차이 구간",
+            "",
+            table(["절대 점수 차이", "건수", "비율"], [[row["band"], f"{row['rows']:,}", f"{row['rate']}%"] for row in summary.get("gap_bands", [])]),
+            "",
+            "## 모델별 차이",
+            "",
+            table(["모델", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", "P90 절대차", "30점+", "Pass 불일치"], model_rows),
+            "",
+            "## 대분류별 차이",
+            "",
+            table(["대분류", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", "30점+", "Pass 불일치"], category_rows),
+            "",
+            "## 세부 주제별 변동이 큰 영역",
+            "",
+            table(["분류 / 유형 / 토픽", "행", "평균 차이", "평균 절대차", "P90 절대차", "30점+", "Pass 불일치"], topic_rows),
+            "",
+            "## 비교 Judge가 더 높게 준 대표 케이스",
+            "",
+            table(top_headers, positive_rows),
+            "",
+            "## 기준 Judge가 더 높게 준 대표 케이스",
+            "",
+            table(top_headers, negative_rows),
+            "",
+            "## 해석 메모",
+            "",
+            "- 평균 차이는 전반적인 채점 성향을, 평균 절대 차이는 행 단위 판단 흔들림을 보여줍니다.",
+            "- Arbiter 후보는 pass/fail 불일치, 점수 차이 threshold, 선택 시 fail 유형 불일치의 합집합입니다.",
+            "- fail 유형 비교는 기본적으로 canonical error_type 기준으로 계산했습니다.",
+            "",
+        ]
+        return "\n".join(lines)
 
     def latest_judge_summary(self, latest: Path, config: dict):
         matrix = config.get("matrix") if isinstance(config.get("matrix"), dict) else {}
@@ -2655,7 +3426,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         for pool in pools.values():
             if not isinstance(pool, dict) or not pool.get("path"):
                 continue
-            path = self.resolve_project_path(str(pool.get("path") or ""))
+            try:
+                path = self.resolve_project_path(str(pool.get("path") or ""))
+            except ValueError:
+                continue
             if self.catalog_dataset_visible(pool, path):
                 catalog_paths.add(str(path.resolve()).lower())
         for dataset in self.discover_question_csv_datasets().values():
@@ -2694,7 +3468,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         for pool_id, pool in pools.items():
             if str(pool_id) in seen_dataset_ids:
                 continue
-            path = self.resolve_project_path(str(pool.get("path") or ""))
+            try:
+                path = self.resolve_project_path(str(pool.get("path") or ""))
+            except ValueError:
+                continue
             if not self.catalog_dataset_visible(pool, path):
                 continue
             datasets.append(
@@ -2767,7 +3544,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_upload_question_dataset(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "invalid JSON body"}, status=400)
+            self.send_json_body_error("invalid JSON body")
             return
         if not isinstance(payload, dict):
             self.send_json({"error": "request body must be an object"}, status=400)
@@ -2853,7 +3630,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         profiles = catalog.get("profiles") if isinstance(catalog.get("profiles"), dict) else {}
         pool_payload = {}
         for pool_id, pool in pools.items():
-            path = self.resolve_project_path(str(pool.get("path") or ""))
+            try:
+                path = self.resolve_project_path(str(pool.get("path") or ""))
+            except ValueError:
+                continue
             if not self.catalog_dataset_visible(pool, path):
                 continue
             pool_payload[str(pool_id)] = {
@@ -2981,7 +3761,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.send_json({"status": "ok", "job": self.job_for_response(job, include_log=True)})
 
     def handle_eval_job_control(self, job_id: str):
-        payload = self.read_json_body() or {}
+        payload = self.read_json_body()
+        if payload is None:
+            self.send_json_body_error()
+            return
+        payload = payload or {}
         action = str(payload.get("action") or "").strip().lower()
         if action not in {"pause", "resume", "cancel"}:
             self.send_json({"error": "action must be one of: pause, resume, cancel"}, status=400)
@@ -3053,7 +3837,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_start_eval_run(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "Invalid JSON body"}, status=400)
+            self.send_json_body_error()
             return
 
         requested_job_id = self.safe_run_id(payload.get("job_id") or payload.get("resume_job_id") or "")
@@ -3071,7 +3855,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         composed_summary = {}
         raw_cases_file = str(payload.get("cases_file") or payload.get("raw_cases_file") or "").strip()
         if raw_cases_file:
-            cases_path = self.resolve_project_path(raw_cases_file)
+            try:
+                cases_path = self.resolve_project_path(raw_cases_file)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
             if not cases_path.exists():
                 self.send_json({"error": f"cases file is missing: {self.display_path(cases_path)}"}, status=404)
                 return
@@ -3292,7 +4080,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 template_output = str(template_path)
                 cmd.extend(["--template-output", str(template_path)])
             else:
-                prediction_path = self.resolve_project_path(prediction_file)
+                try:
+                    prediction_path = self.resolve_project_path(prediction_file)
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, status=400)
+                    return
                 if not prediction_file or not prediction_path.exists():
                     self.send_json(
                         {
@@ -3426,7 +4218,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_start_saved_answer_judge(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "Invalid JSON body"}, status=400)
+            self.send_json_body_error()
             return
 
         source_run_id = self.safe_run_id(payload.get("source_run_id") or "") if payload.get("source_run_id") else ""
@@ -3448,7 +4240,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             if not cases_path.exists():
                 self.send_json({"error": f"dataset file is missing: {self.display_path(cases_path)}"}, status=404)
                 return
-            answers_path = self.resolve_project_path(answers_csv)
+            try:
+                answers_path = self.resolve_project_path(answers_csv)
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, status=400)
+                return
             if not answers_path.exists():
                 self.send_json({"error": f"answers CSV not found: {self.display_path(answers_path)}"}, status=404)
                 return
@@ -3581,7 +4377,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if source_run_id:
             cmd.extend(["--source-run-id", source_run_id])
         else:
-            cmd.extend(["--answers-csv", str(self.resolve_project_path(answers_csv))])
+            cmd.extend(["--answers-csv", str(answers_path)])
             cmd.extend(["--cases-file", str(cases_path)])
             external_config_id = self.safe_config_id(payload.get("external_config_id") or "external_model_v1")
             cmd.extend(["--external-config-id", external_config_id])
@@ -3686,7 +4482,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 if ids:
                     return ids
             return []
-        path = self.resolve_project_path(answers_csv)
+        try:
+            path = self.resolve_project_path(answers_csv)
+        except ValueError:
+            return [self.safe_config_id(default_config_id or "external_model_v1")]
         ids = []
         if path.exists():
             try:
@@ -3705,7 +4504,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_reblend_eval_run(self):
         payload = self.read_json_body()
         if payload is None:
-            self.send_json({"error": "Invalid JSON body"}, status=400)
+            self.send_json_body_error()
             return
         source_run_id = self.safe_run_id(payload.get("source_run_id") or "") if payload.get("source_run_id") else ""
         source_dir = self.resolve_eval_run_dir(source_run_id)
@@ -3790,7 +4589,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         pass_threshold: float,
         export_final_ui: bool,
     ):
-        cases_path = self.resolve_project_path(str(source_config.get("case_source") or ""))
+        try:
+            cases_path = self.resolve_project_path(str(source_config.get("case_source") or ""))
+        except ValueError as exc:
+            return {"error": str(exc)}
         if not cases_path.exists():
             return {"error": f"case source not found: {self.display_path(cases_path)}"}
         outputs = eval_read_jsonl(source_dir / "model_outputs.jsonl")
@@ -4527,7 +5329,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not path:
             pool = self.catalog_pool(dataset_id)
             if pool:
-                path = self.resolve_project_path(str(pool.get("path") or ""))
+                try:
+                    path = self.resolve_project_path(str(pool.get("path") or ""))
+                except ValueError:
+                    path = None
                 filters = pool.get("filters")
                 role = str(pool.get("role") or "")
         return path, filters, role
@@ -4964,7 +5769,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "base_url": base_url,
                 "chat_url": str(judge_payload.get("chat_url") or "").strip(),
                 "api_key_env": api_key_env,
-                "prompt_version": str(judge_payload.get("prompt_version") or "judge_v2_acc_com_utl_nac_hal").strip(),
+                "prompt_version": str(judge_payload.get("prompt_version") or "judge_submission_v1_partial_credit_acc_com_utl_nac_hal").strip(),
                 "system_prompt_preset": str(judge_payload.get("system_prompt_preset") or "judge_default_v1").strip(),
                 "system_prompt": str(judge_payload.get("system_prompt") or "").strip(),
                 "rag_config": "none",
@@ -5087,10 +5892,19 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return str(path)
 
     def resolve_project_path(self, value: str) -> Path:
-        path = Path(str(value or "").strip())
+        raw = str(value or "").strip()
+        if not raw:
+            raise ValueError("path is required")
+        path = Path(raw)
         if not path.is_absolute():
             path = PROJECT_ROOT / path
-        return path
+        resolved = path.resolve(strict=False)
+        project_root = PROJECT_ROOT.resolve(strict=False)
+        try:
+            resolved.relative_to(project_root)
+        except ValueError as exc:
+            raise ValueError(f"path must stay under project root: {self.display_path(path)}") from exc
+        return resolved
 
     def summarize_questionlist_source(self, path: Path):
         if not path.exists():
@@ -5189,7 +6003,7 @@ def main():
         else:
             print("Using FINAL_UI_AUTH_USERS credentials.", flush=True)
     elif FINAL_UI_AUTH_TOKEN:
-        print(f"Write API token URL: http://{display_host}:{port}/?token={FINAL_UI_AUTH_TOKEN}", flush=True)
+        print("Write API token enabled. Pass it in X-Final-UI-Token or Authorization: Bearer headers.", flush=True)
     server.serve_forever()
 
 
