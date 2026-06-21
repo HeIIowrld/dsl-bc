@@ -3252,6 +3252,7 @@ class FinalUiServerHelperTests(unittest.TestCase):
     def test_model_registry_rejects_raw_key_like_api_key_env(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
+        raw_key_like_value = "rawsecretvaluewithoutunderscores12345"
 
         def fake_send_json(payload, status=200):
             captured["payload"] = payload
@@ -3263,7 +3264,7 @@ class FinalUiServerHelperTests(unittest.TestCase):
             "display_name": "Bad Gemini Judge",
             "provider": "gemini",
             "model": "gemini-2.5-pro",
-            "api_key_env": "AIzaSyLooksLikeRawKeyValue1234567890",
+            "api_key_env": raw_key_like_value,
             "evaluation_role": "llm_judge",
             "judge_role": "judge",
         }
@@ -3284,6 +3285,7 @@ class FinalUiServerHelperTests(unittest.TestCase):
     def test_healthcheck_invalid_api_key_env_does_not_echo_secret_like_value(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
         captured = {}
+        raw_key_like_value = "rawsecretvaluewithoutunderscores12345"
 
         def fake_send_json(payload, status=200):
             captured["payload"] = payload
@@ -3297,13 +3299,13 @@ class FinalUiServerHelperTests(unittest.TestCase):
                 "provider": "gemini",
                 "model": "gemini-2.5-pro",
                 "base_url": "https://generativelanguage.googleapis.com",
-                "api_key_env": "AIzaSyLooksLikeRawKeyValue1234567890",
+                "api_key_env": raw_key_like_value,
             },
         )
 
         self.assertEqual(captured["status"], 503)
         self.assertIn("raw API key", captured["payload"]["message"])
-        self.assertNotIn("AIzaSyLooksLikeRawKeyValue1234567890", captured["payload"]["message"])
+        self.assertNotIn(raw_key_like_value, captured["payload"]["message"])
 
     def test_gemini_healthcheck_without_health_url_posts_generate_content_probe(self) -> None:
         handler = FinalUiHandler.__new__(FinalUiHandler)
