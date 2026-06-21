@@ -2295,7 +2295,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             scores=scores,
             release_gate_config=release_gate_config,
         )
-        if self.uses_sparse_output_projection(config):
+        if self.uses_sparse_output_projection(config, cases=cases, configs=configs, outputs=outputs):
             question_rows = self.sparse_question_case_rows(
                 cases=cases,
                 configs=configs,
@@ -2320,10 +2320,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "question_rows": question_rows,
         }
 
-    def uses_sparse_output_projection(self, config: dict) -> bool:
+    def uses_sparse_output_projection(self, config: dict, *, cases: list[dict], configs: list[dict], outputs: list[dict]) -> bool:
         run_type = str(config.get("run_type") or "").lower()
         scoring_mode = str(config.get("scoring_mode") or "").lower()
-        return "reconciled" in run_type or "arbiter_report" in run_type or "dual_judge_arbiter" in scoring_mode
+        if "reconciled" in run_type or "arbiter_report" in run_type or "dual_judge_arbiter" in scoring_mode:
+            return True
+        expected_dense_rows = len(cases) * len(configs)
+        return expected_dense_rows > 0 and len(outputs) < expected_dense_rows
 
     def sparse_question_case_rows(
         self,

@@ -629,6 +629,72 @@ class EvalScoringTests(unittest.TestCase):
         self.assertEqual(len(projected["question_rows"]), 1)
         self.assertEqual(projected["question_rows"][0]["question_id"], "C1")
 
+    def test_server_projection_keeps_partial_imported_runs_sparse(self) -> None:
+        handler = FinalUiHandler.__new__(FinalUiHandler)
+        temp_parent = PROJECT_ROOT / "out"
+        temp_parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_parent) as tmp:
+            root = Path(tmp)
+            cases_path = root / "cases.jsonl"
+            cases_path.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"case_id": "C1", "question": "Q1", "gold_answer": "A1"}, ensure_ascii=False),
+                        json.dumps({"case_id": "C2", "question": "Q2", "gold_answer": "A2"}, ensure_ascii=False),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            run_dir = root / "RUN_IMPORTED_PARTIAL"
+            run_dir.mkdir()
+            config = {
+                "run_id": "RUN_IMPORTED_PARTIAL",
+                "run_type": "imported_answers",
+                "case_source": str(cases_path),
+                "configs": [{"config_id": "model-a", "model": "model-a"}],
+                "resolved_scoring": {
+                    "scoring_mode": "llm_override",
+                    "judge_mode": "override",
+                    "pass_threshold": 60,
+                },
+            }
+            (run_dir / "config.json").write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+            outputs = [
+                {
+                    "run_id": "RUN_IMPORTED_PARTIAL",
+                    "case_id": "C1",
+                    "config_id": "model-a",
+                    "status": "ok",
+                    "model_answer": "A1",
+                }
+            ]
+            scores = [
+                {
+                    "run_id": "RUN_IMPORTED_PARTIAL",
+                    "case_id": "C1",
+                    "config_id": "model-a",
+                    "llm_judge_config_id": "judge-a",
+                    "llm_judge_status": "ok",
+                    "llm_judge_acc": 20,
+                    "llm_judge_com": 20,
+                    "llm_judge_utl": 20,
+                    "llm_judge_nac": 20,
+                    "llm_judge_hal": 20,
+                    "llm_judge_overall_score": 100,
+                    "llm_judge_pass": True,
+                    "llm_judge_error_type": "normal",
+                    "llm_judge_reason": "partial",
+                    "utl_applicable": True,
+                }
+            ]
+            write_partitioned_eval_artifacts(run_dir, outputs, scores)
+
+            projected = handler.projected_run_tables(run_dir)
+
+        self.assertEqual(len(projected["question_rows"]), 1)
+        self.assertEqual(projected["summary"][0]["total_questions"], 1)
+
     def test_openai_compatible_chat_url_defaults_to_chat_completions(self) -> None:
         self.assertEqual(
             openai_chat_url({"base_url": "https://gpu.example.test"}),
