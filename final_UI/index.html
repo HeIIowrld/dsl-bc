@@ -496,58 +496,7 @@
           <div id="evalRunMessage" class="form-message"></div>
         </article>
 
-        <!-- 2-3. 실행 로그 -->
-        <article class="card">
-          <div class="card-head">
-            <h2>실행 로그</h2>
-            <span>최근 웹 작업</span>
-          </div>
-          <div id="evalJobStatus"></div>
-          <div id="evalJobControls"></div>
-          <div id="evalJobProgress">
-            <div class="eval-progress idle">
-              <div class="progress-head">
-                <strong>대기</strong>
-                <span>테스트를 실행하면 진행률과 현재 케이스가 표시됩니다.</span>
-              </div>
-            </div>
-          </div>
-          <pre id="evalJobLog" class="job-log"></pre>
-        </article>
-
-        <!-- 2-4. 기존 실행 점수 재계산 -->
-        <details class="card advanced-action-card">
-          <summary class="card-head">
-            <h2>기존 실행 점수 재계산</h2>
-            <span>저장된 static/Judge 점수만 재조합 · 모델/Judge 재호출 없음</span>
-          </summary>
-          <form id="evalReblendForm" class="run-form">
-            <label>원본 실행 선택
-              <select id="reblendSourceRunId" name="source_run_id"></select>
-            </label>
-            <label>재계산 방식
-              <select id="reblendScoringMode" name="scoring_mode">
-                <option value="llm_override">저장된 Judge 점수만</option>
-                <option value="blend">저장된 Judge+규칙 혼합</option>
-                <option value="static">저장된 규칙 점수만</option>
-              </select>
-            </label>
-            <label>Judge 점수 반영 비율
-              <input id="reblendWeight" name="blend_weight" type="number" min="0" max="1" step="0.05" value="0.5">
-            </label>
-            <label class="check-inline">
-              <input id="reblendExportFinalUi" name="export_final_ui" type="checkbox" checked>
-              UI로 내보내기
-            </label>
-          </form>
-          <button id="evalReblendSubmit" class="secondary-action-button" type="button">
-            <span>재계산 결과 생성</span>
-            <small>선택한 기존 실행에서 새 결과 생성</small>
-          </button>
-          <div id="evalReblendMessage" class="form-message"></div>
-        </details>
-
-        <!-- 2-5. Judge 결과 비교 리포트 -->
+        <!-- 2-3. Judge 결과 비교 리포트 -->
         <details class="card advanced-action-card" id="judgeComparisonCard">
           <summary class="card-head">
             <h2>Judge 결과 비교 리포트</h2>
@@ -584,12 +533,63 @@
               fail 유형 정규화 후 비교
             </label>
           </form>
-          <button id="judgeComparisonSubmit" class="secondary-action-button" type="button">
+          <button id="judgeComparisonSubmit" class="secondary-action-button primary-action-button" type="button">
             <span>비교 리포트 생성</span>
             <small>Arbiter는 실행하지 않음</small>
           </button>
           <div id="judgeComparisonMessage" class="form-message"></div>
           <div id="judgeComparisonResult" class="judge-comparison-result"></div>
+        </details>
+
+        <!-- 2-4. 실행 로그 -->
+        <article class="card">
+          <div class="card-head">
+            <h2>실행 로그</h2>
+            <span>최근 웹 작업</span>
+          </div>
+          <div id="evalJobStatus"></div>
+          <div id="evalJobControls"></div>
+          <div id="evalJobProgress">
+            <div class="eval-progress idle">
+              <div class="progress-head">
+                <strong>대기</strong>
+                <span>테스트를 실행하면 진행률과 현재 케이스가 표시됩니다.</span>
+              </div>
+            </div>
+          </div>
+          <pre id="evalJobLog" class="job-log"></pre>
+        </article>
+
+        <!-- 2-5. 기존 실행 점수 재계산 -->
+        <details class="card advanced-action-card">
+          <summary class="card-head">
+            <h2>기존 실행 점수 재계산</h2>
+            <span>저장된 static/Judge 점수만 재조합 · 모델/Judge 재호출 없음</span>
+          </summary>
+          <form id="evalReblendForm" class="run-form">
+            <label>원본 실행 선택
+              <select id="reblendSourceRunId" name="source_run_id"></select>
+            </label>
+            <label>재계산 방식
+              <select id="reblendScoringMode" name="scoring_mode">
+                <option value="llm_override">저장된 Judge 점수만</option>
+                <option value="blend">저장된 Judge+규칙 혼합</option>
+                <option value="static">저장된 규칙 점수만</option>
+              </select>
+            </label>
+            <label>Judge 점수 반영 비율
+              <input id="reblendWeight" name="blend_weight" type="number" min="0" max="1" step="0.05" value="0.5">
+            </label>
+            <label class="check-inline">
+              <input id="reblendExportFinalUi" name="export_final_ui" type="checkbox" checked>
+              UI로 내보내기
+            </label>
+          </form>
+          <button id="evalReblendSubmit" class="secondary-action-button" type="button">
+            <span>재계산 결과 생성</span>
+            <small>선택한 기존 실행에서 새 결과 생성</small>
+          </button>
+          <div id="evalReblendMessage" class="form-message"></div>
         </details>
 
       </section>

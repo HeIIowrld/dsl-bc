@@ -993,6 +993,18 @@ button.run-submit small {
   box-shadow: none;
 }
 
+.secondary-action-button.primary-action-button {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.secondary-action-button.primary-action-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+  border-color: color-mix(in srgb, var(--accent) 88%, black);
+  color: white;
+}
+
 .secondary-action-button span,
 .secondary-action-button small {
   display: block;
@@ -1002,6 +1014,10 @@ button.run-submit small {
   margin-top: 2px;
   color: var(--text-dim);
   font-size: 10px;
+}
+
+.secondary-action-button.primary-action-button small {
+  color: rgba(255, 255, 255, 0.78);
 }
 
 .model-form .form-actions {
@@ -4018,15 +4034,20 @@ pre,
 }
 
 .link-button {
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border-mid);
   border-radius: var(--radius-sm);
   padding: 5px 8px;
-  background: var(--accent-dim);
-  color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--text);
   cursor: pointer;
   font-family: var(--font-mono);
   font-size: 11px;
   text-decoration: none;
+}
+
+.link-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .dataset-sample-download {

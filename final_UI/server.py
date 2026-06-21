@@ -69,6 +69,8 @@ EVAL_DATASET_CATALOG_PATH = PROJECT_ROOT / "config" / "eval_dataset_catalog.yaml
 EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
 EVAL_ARCHIVE_ROOT = EVAL_RUNS_ROOT / "archive"
 WEB_JOBS_ROOT = EVAL_ARCHIVE_ROOT / "web_jobs"
+FINAL_UI_DATA_RUN_ID = "__final_ui_data__"
+FINAL_UI_DATA_LABEL = "현재 내보낸 전체 결과"
 BENCHMARK_CSV_ROOT = PROJECT_ROOT / "questionlist" / "benchmark"
 REGRESSION_CSV_ROOT = PROJECT_ROOT / "questionlist" / "regression"
 USER_UPLOAD_CSV_ROOT = PROJECT_ROOT / "questionlist" / "user_uploads"
@@ -2189,6 +2191,17 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_latest_run_file(self, filename: str, query: str = ""):
         requested_run_id = self.requested_run_id(query)
+        if requested_run_id == FINAL_UI_DATA_RUN_ID:
+            exported_path = ROOT / "data" / filename
+            if exported_path.exists():
+                self.serve_path(exported_path, content_type="text/csv; charset=utf-8")
+                return
+            empty_csv = EMPTY_LATEST_RUN_CSV.get(filename)
+            if empty_csv is not None:
+                self.send_text(empty_csv, content_type="text/csv; charset=utf-8")
+                return
+            self.send_json({"error": "exported UI file not found", "run_id": requested_run_id, "file": filename}, status=404)
+            return
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
             self.send_json({"error": "unknown eval run", "run_id": requested_run_id}, status=404)
@@ -2211,6 +2224,32 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_latest_run(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
+        if requested_run_id == FINAL_UI_DATA_RUN_ID:
+            summary = self.final_ui_data_run_summary(selected=True)
+            if not summary:
+                self.send_json({"status": "missing", "message": "No exported Final UI data found."}, status=404)
+                return
+            self.send_json(
+                {
+                    "status": "ok",
+                    **summary,
+                    "path": str(ROOT / "data"),
+                    "case_source": "final_ui_export",
+                    "uses_final_question_sets": True,
+                    "baseline_config": "",
+                    "judge_config_ids": [],
+                    "files": {
+                        "eval_runs": f"/data/eval_runs.csv?run_id={FINAL_UI_DATA_RUN_ID}",
+                        "question_cases": f"/data/question_cases.csv?run_id={FINAL_UI_DATA_RUN_ID}",
+                        "run_release_gates": f"/data/run_release_gates.csv?run_id={FINAL_UI_DATA_RUN_ID}",
+                        "regression_diff": f"/data/regression_diff.csv?run_id={FINAL_UI_DATA_RUN_ID}",
+                        "report_html": "/report/regression_report.html",
+                        "report_raw_html": "/report/raw_regression_report.html",
+                        "report_ui": f"/?run_id={FINAL_UI_DATA_RUN_ID}#overview",
+                    },
+                }
+            )
+            return
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
             self.send_json({"status": "missing", "error": "unknown eval run", "run_id": requested_run_id}, status=404)
@@ -3155,6 +3194,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_latest_report(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
+        if requested_run_id == FINAL_UI_DATA_RUN_ID:
+            self.send_text(self.ui_report_html(FINAL_UI_DATA_RUN_ID), content_type="text/html; charset=utf-8")
+            return
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
             self.send_json({"error": "unknown eval run", "run_id": requested_run_id}, status=404)
@@ -3166,6 +3208,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_raw_report(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
+        if requested_run_id == FINAL_UI_DATA_RUN_ID:
+            requested_run_id = ""
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
             self.send_json({"error": "unknown eval run", "run_id": requested_run_id}, status=404)
@@ -3205,8 +3249,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return None
 
     def eval_run_summaries(self):
+        summaries = []
+        exported = self.final_ui_data_run_summary(selected=False)
+        if exported:
+            summaries.append(exported)
         if not EVAL_RUNS_ROOT.exists():
-            return []
+            return summaries
         candidates = [
             path
             for path in EVAL_RUNS_ROOT.iterdir()
@@ -3214,7 +3262,80 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         ]
         candidates.sort(key=self.run_sort_key, reverse=True)
         latest = self.latest_run_dir()
-        return [self.eval_run_summary(path, selected=bool(latest and path.resolve() == latest.resolve())) for path in candidates]
+        summaries.extend(
+            self.eval_run_summary(path, selected=bool(latest and path.resolve() == latest.resolve()))
+            for path in candidates
+        )
+        return summaries
+
+    def final_ui_data_run_summary(self, selected: bool = False):
+        eval_path = ROOT / "data" / "eval_runs.csv"
+        case_path = ROOT / "data" / "question_cases.csv"
+        if not eval_path.exists() or not case_path.exists():
+            return None
+        rows = []
+        try:
+            with eval_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        except (OSError, csv.Error):
+            rows = []
+        models = [row.get("model") or row.get("version") or "" for row in rows if row.get("model") or row.get("version")]
+        scores = [self.safe_float(row.get("overall_score"), default=0.0, minimum=0.0, maximum=100.0) for row in rows]
+        scored_scores = [
+            self.safe_float(row.get("scored_average"), default=0.0, minimum=0.0, maximum=100.0)
+            for row in rows
+            if row.get("scored_average") not in {None, ""}
+        ]
+        pass_rates = [self.safe_float(row.get("pass_rate"), default=0.0, minimum=0.0, maximum=1.0) for row in rows]
+        scored_pass_rates = [
+            self.safe_float(row.get("scored_pass_rate"), default=0.0, minimum=0.0, maximum=1.0)
+            for row in rows
+            if row.get("scored_pass_rate") not in {None, ""}
+        ]
+        review_pending_counts = [
+            self.safe_float(row.get("review_pending_count"), default=0.0, minimum=0.0, maximum=1000000.0)
+            for row in rows
+            if row.get("review_pending_count") not in {None, ""}
+        ]
+        case_ids = set()
+        case_count = 0
+        try:
+            with case_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                for row in csv.DictReader(handle):
+                    case_count += 1
+                    case_id = row.get("question_id") or row.get("case_id") or ""
+                    if case_id:
+                        case_ids.add(case_id)
+        except (OSError, csv.Error):
+            case_count = 0
+        updated_at = max(eval_path.stat().st_mtime, case_path.stat().st_mtime)
+        scoring_mode = next((row.get("scoring_mode") for row in rows if row.get("scoring_mode")), "static")
+        return {
+            "run_id": FINAL_UI_DATA_RUN_ID,
+            "label": FINAL_UI_DATA_LABEL,
+            "selected": selected,
+            "updated_at": updated_at,
+            "eval_started_at": datetime.fromtimestamp(updated_at).isoformat(timespec="seconds"),
+            "run_type": "final_ui_export",
+            "case_source_status": "exported",
+            "total_questions": len(case_ids) or case_count,
+            "model_count": len(rows),
+            "models": models,
+            "avg_score": round(sum(scores) / len(scores), 2) if scores else 0.0,
+            "avg_scored_score": round(sum(scored_scores) / len(scored_scores), 2) if scored_scores else 0.0,
+            "avg_pass_rate": round(sum(pass_rates) / len(pass_rates), 4) if pass_rates else 0.0,
+            "avg_scored_pass_rate": round(sum(scored_pass_rates) / len(scored_pass_rates), 4) if scored_pass_rates else 0.0,
+            "review_pending_count": int(max(review_pending_counts)) if review_pending_counts else 0,
+            "provider_refused_count": 0,
+            "sanitized_eval_count": 0,
+            "unresolved_conflict_count": 0,
+            "scoring_mode": scoring_mode,
+            "llm_judge_provider": next((row.get("llm_judge_provider") for row in rows if row.get("llm_judge_provider")), ""),
+            "llm_judge_model": next((row.get("llm_judge_model") for row in rows if row.get("llm_judge_model")), ""),
+            "report_html": "/report/regression_report.html",
+            "report_raw_html": "/report/raw_regression_report.html",
+            "report_ui": f"/?run_id={FINAL_UI_DATA_RUN_ID}#overview",
+        }
 
     def eval_run_summary(self, path: Path, selected: bool = False):
         config = self.run_config(path)

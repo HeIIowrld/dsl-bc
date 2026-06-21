@@ -2364,7 +2364,7 @@ function renderResultRunSelector() {
   const currentId = selectedRunId || latestRun?.run_id || "";
   const historyOptions = evalRunHistory.map((run) => {
     const label = [
-      run.run_id,
+      run.label || run.run_id,
       run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
     ].filter(Boolean).join(" · ");
     return `<option value="${escapeHtml(run.run_id)}" ${run.run_id === currentId ? "selected" : ""}>${escapeHtml(label)}</option>`;
@@ -2383,7 +2383,7 @@ function renderResultRunSelector() {
   const current = evalRunHistory.find((run) => run.run_id === currentId) || {};
   if (summary) {
     summary.innerHTML = current.run_id ? `
-      <span><strong>${escapeHtml(current.run_id)}</strong></span>
+      <span><strong>${escapeHtml(current.label || current.run_id)}</strong></span>
       <span>${escapeHtml(current.run_type || "-")}</span>
       <span>${Number(current.total_questions || 0).toLocaleString()}문항</span>
       <span>${Number(current.model_count || 0).toLocaleString()}개 모델</span>
@@ -2427,7 +2427,7 @@ function formatDateTime(value) {
 
 function runHistoryOptionLabel(run) {
   return [
-    run.run_id,
+    run.label || run.run_id,
     run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
     Number(run.total_questions || 0) ? `${Number(run.total_questions || 0).toLocaleString()}문항` : "",
     scoringModeLabel(run.scoring_mode) || "",
