@@ -551,6 +551,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.current_auth_scheme = ""
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
+    def guess_type(self, path):
+        content_type = super().guess_type(path)
+        bare_type = content_type.split(";", 1)[0].lower()
+        if bare_type in {"text/html", "text/css", "text/javascript", "application/javascript"}:
+            return f"{bare_type}; charset=utf-8"
+        return content_type
+
     def do_GET(self):
         if not self.require_read_auth():
             return
@@ -2296,9 +2303,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not candidate_dir:
             self.send_json({"error": f"candidate judge run not found: {candidate_run_id}"}, status=404)
             return
-        threshold = self.safe_float(payload.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=100.0)
-        include_error_type = bool(payload.get("include_error_type_mismatch", True))
-        normalize_error_type = bool(payload.get("normalize_error_type", True))
+        threshold = self.safe_float(payload.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=10000.0)
+        score_gap_mode = str(payload.get("score_gap_mode") or "points").strip().lower()
+        if score_gap_mode not in {"points", "relative_percent"}:
+            score_gap_mode = "points"
+        include_error_type = self.judge_bool_value(payload.get("include_error_type_mismatch", False))
+        normalize_error_type = True
+        if "normalize_error_type" in payload:
+            normalize_error_type = self.judge_bool_value(payload.get("normalize_error_type"))
+        arbiter_judge_config_id = str(payload.get("arbiter_judge_config_id") or "").strip()
         default_comparison_id = self.default_judge_comparison_id(
             baseline_judge_config_id=baseline_judge_config_id,
             candidate_run_id=candidate_dir.name,
@@ -2313,8 +2326,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 candidate_dir=candidate_dir,
                 out_dir=out_dir,
                 score_gap_threshold=threshold,
+                score_gap_mode=score_gap_mode,
                 include_error_type_mismatch=include_error_type,
                 normalize_error_type=normalize_error_type,
+                arbiter_judge_config_id=arbiter_judge_config_id,
             )
         except (OSError, RuntimeError) as exc:
             self.send_json({"error": str(exc)}, status=400)
@@ -2494,10 +2509,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         candidate_dir: Path,
         out_dir: Path,
         score_gap_threshold: float,
+        score_gap_mode: str,
         include_error_type_mismatch: bool,
         normalize_error_type: bool,
+        arbiter_judge_config_id: str,
     ):
         baseline_scores, case_meta = self.load_baseline_judge_scores(baseline_path, baseline_judge_config_id)
+        arbiter_scores = {}
+        if arbiter_judge_config_id:
+            arbiter_scores, _ = self.load_baseline_judge_scores(baseline_path, arbiter_judge_config_id)
         candidate_scores = self.load_candidate_judge_scores(candidate_dir)
         if not baseline_scores:
             raise RuntimeError(f"No baseline rows found for judge config: {baseline_judge_config_id}")
@@ -2514,6 +2534,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             cand_score = self.safe_score(cand.get("overall_score"))
             delta = round(cand_score - base_score, 2)
             gap = round(abs(delta), 2)
+            relative_gap = round(gap / max(abs(base_score), 1.0) * 100.0, 2)
+            selected_gap = relative_gap if score_gap_mode == "relative_percent" else gap
+            score_gap_threshold_met = bool(selected_gap >= score_gap_threshold)
             base_error = str(base.get("error_type") or "")
             cand_error = str(cand.get("error_type") or "")
             compare_base_error = eval_canonical_error_type(base_error) if normalize_error_type else base_error
@@ -2523,11 +2546,21 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             reasons = []
             if pass_mismatch:
                 reasons.append("judge pass/fail disagreement")
-            if gap >= score_gap_threshold:
-                reasons.append(f"judge score gap {gap:.2f}")
+            if score_gap_threshold_met:
+                if score_gap_mode == "relative_percent":
+                    reasons.append(f"judge relative score gap {relative_gap:.2f}%")
+                else:
+                    reasons.append(f"judge score gap {gap:.2f}")
             if error_mismatch:
                 reasons.append(f"judge error-type disagreement: {compare_base_error}, {compare_cand_error}")
             meta = case_meta.get((config_id, case_id), {})
+            arbiter = arbiter_scores.get((config_id, case_id), {}) if arbiter_scores else {}
+            has_arbiter = bool(arbiter)
+            arbiter_score = self.safe_score(arbiter.get("overall_score")) if has_arbiter else ""
+            arbiter_pass = bool(arbiter.get("pass")) if has_arbiter else ""
+            arbiter_error = str(arbiter.get("error_type") or "") if has_arbiter else ""
+            arbiter_status = "existing_arbiter_applied" if has_arbiter else ("missing_arbiter" if reasons else "not_required")
+            final_status = "complete" if has_arbiter else ("missing_arbiter" if reasons else "not_required")
             row = {
                 "config_id": config_id,
                 "case_id": case_id,
@@ -2540,6 +2573,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "candidate_score": cand_score,
                 "delta_candidate_minus_baseline": delta,
                 "abs_score_gap": gap,
+                "relative_score_gap_percent": relative_gap,
+                "score_gap_mode": score_gap_mode,
+                "selected_score_gap_value": selected_gap,
+                "score_gap_threshold_met": score_gap_threshold_met,
                 "baseline_pass": bool(base.get("pass")),
                 "candidate_pass": bool(cand.get("pass")),
                 "pass_mismatch": pass_mismatch,
@@ -2550,6 +2587,24 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "error_type_mismatch": error_mismatch,
                 "conflict_for_arbiter": bool(reasons),
                 "conflict_reason": "; ".join(reasons),
+                "existing_arbiter_available": has_arbiter,
+                "existing_arbiter_judge": arbiter_judge_config_id if has_arbiter else "",
+                "existing_arbiter_score": arbiter_score,
+                "existing_arbiter_pass": arbiter_pass,
+                "existing_arbiter_error_type": arbiter_error,
+                "existing_arbiter_reason": arbiter.get("reason", "") if has_arbiter else "",
+                "arbiter_status": arbiter_status,
+                "resolved_judge": arbiter_judge_config_id if has_arbiter else "",
+                "resolved_score": arbiter_score,
+                "resolved_pass": arbiter_pass,
+                "resolved_error_type": arbiter_error,
+                "resolved_reason": arbiter.get("reason", "") if has_arbiter else "",
+                "final_status": final_status,
+                "final_judge": arbiter_judge_config_id if has_arbiter else "",
+                "final_score": arbiter_score,
+                "final_pass": arbiter_pass,
+                "final_error_type": arbiter_error,
+                "final_reason": arbiter.get("reason", "") if has_arbiter else "",
                 "topic_key": " / ".join(
                     item
                     for item in [
@@ -2566,7 +2621,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "candidate_reason": cand.get("reason", ""),
             }
             rows.append(row)
-            if reasons:
+            if reasons and not has_arbiter:
                 arbiter_keys.append(
                     {
                         "config_id": config_id,
@@ -2575,6 +2630,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         "arbiter_context": {
                             "comparison_target": f"{baseline_judge_config_id}_vs_{cand.get('config_id', '')}",
                             "score_gap": gap,
+                            "relative_score_gap_percent": relative_gap,
+                            "score_gap_mode": score_gap_mode,
+                            "selected_score_gap_value": selected_gap,
                             "score_min": min(base_score, cand_score),
                             "score_max": max(base_score, cand_score),
                             "pass_mismatch": pass_mismatch,
@@ -2594,8 +2652,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             baseline_judge_config_id=baseline_judge_config_id,
             candidate_run_id=candidate_dir.name,
             score_gap_threshold=score_gap_threshold,
+            score_gap_mode=score_gap_mode,
             include_error_type_mismatch=include_error_type_mismatch,
             normalize_error_type=normalize_error_type,
+            arbiter_judge_config_id=arbiter_judge_config_id,
+            arbiter_scores=arbiter_scores,
             arbiter_key_rows=len(arbiter_keys),
         )
         if not rows:
@@ -2698,21 +2759,45 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         baseline_judge_config_id: str,
         candidate_run_id: str,
         score_gap_threshold: float,
+        score_gap_mode: str,
         include_error_type_mismatch: bool,
         normalize_error_type: bool,
+        arbiter_judge_config_id: str,
+        arbiter_scores: dict,
         arbiter_key_rows: int,
     ):
         deltas = [self.safe_float(row.get("delta_candidate_minus_baseline"), default=0.0, minimum=-100.0, maximum=100.0) for row in rows]
         gaps = [abs(delta) for delta in deltas]
+        selected_gaps = [
+            self.safe_float(row.get("selected_score_gap_value"), default=0.0, minimum=0.0, maximum=1000000.0)
+            for row in rows
+        ]
         baseline_values = [self.safe_score(row.get("baseline_score")) for row in rows]
         candidate_values = [self.safe_score(row.get("candidate_score")) for row in rows]
+        arbiter_candidate_rows = sum(1 for row in rows if row.get("conflict_for_arbiter"))
+        arbiter_existing_rows = sum(1 for row in rows if row.get("existing_arbiter_available"))
+        arbiter_existing_candidate_rows = sum(
+            1 for row in rows if row.get("conflict_for_arbiter") and row.get("existing_arbiter_available")
+        )
+        final_rows = [row for row in rows if row.get("final_status") == "complete"]
+        final_candidate_rows = [row for row in final_rows if row.get("conflict_for_arbiter")]
+        error_type_total_mismatch_rows = sum(
+            1
+            for row in rows
+            if row.get("baseline_canonical_error_type") != row.get("candidate_canonical_error_type")
+        )
         return {
             "baseline_label": baseline_label,
             "baseline_judge_config_id": baseline_judge_config_id,
             "candidate_run_id": candidate_run_id,
             "score_gap_threshold": score_gap_threshold,
+            "score_gap_mode": score_gap_mode,
+            "score_gap_mode_label": "relative_percent" if score_gap_mode == "relative_percent" else "points",
+            "relative_gap_denominator": "baseline_score_min_1",
             "include_error_type_mismatch": include_error_type_mismatch,
             "normalize_error_type": normalize_error_type,
+            "arbiter_judge_config_id": arbiter_judge_config_id,
+            "arbiter_source_rows": len(arbiter_scores),
             "baseline_source_rows": len(baseline_scores),
             "candidate_source_rows": len(candidate_scores),
             "matched_rows": len(rows),
@@ -2725,13 +2810,26 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "median_abs_gap": self.round_quantile(gaps, 0.5),
             "p90_abs_gap": self.round_quantile(gaps, 0.9),
             "p95_abs_gap": self.round_quantile(gaps, 0.95),
+            "avg_selected_gap": self.round_mean(selected_gaps),
+            "p90_selected_gap": self.round_quantile(selected_gaps, 0.9),
             "candidate_higher_rows": sum(1 for delta in deltas if delta > 0),
             "baseline_higher_rows": sum(1 for delta in deltas if delta < 0),
             "same_score_rows": sum(1 for delta in deltas if delta == 0),
-            "gap_threshold_rows": sum(1 for gap in gaps if gap >= score_gap_threshold),
+            "gap_threshold_rows": sum(1 for row in rows if row.get("score_gap_threshold_met")),
             "pass_mismatch_rows": sum(1 for row in rows if row.get("pass_mismatch")),
+            "error_type_total_mismatch_rows": error_type_total_mismatch_rows,
             "error_type_mismatch_rows": sum(1 for row in rows if row.get("error_type_mismatch")),
+            "arbiter_candidate_rows": arbiter_candidate_rows,
+            "arbiter_existing_rows": arbiter_existing_rows,
+            "arbiter_existing_candidate_rows": arbiter_existing_candidate_rows,
+            "arbiter_missing_rows": arbiter_candidate_rows - arbiter_existing_candidate_rows,
+            "arbiter_not_required_rows": sum(1 for row in rows if not row.get("conflict_for_arbiter")),
             "arbiter_key_rows": arbiter_key_rows,
+            "final_complete_rows": len(final_rows),
+            "final_complete_candidate_rows": len(final_candidate_rows),
+            "final_missing_candidate_rows": arbiter_candidate_rows - len(final_candidate_rows),
+            "final_avg": self.round_mean([row.get("final_score") for row in final_rows]),
+            "final_pass_rows": sum(1 for row in final_rows if row.get("final_pass")),
             "baseline_pass_rows": sum(1 for row in rows if row.get("baseline_pass")),
             "candidate_pass_rows": sum(1 for row in rows if row.get("candidate_pass")),
             "gap_bands": self.judge_gap_bands(gaps),
@@ -2787,9 +2885,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "avg_delta": self.round_mean(deltas),
                     "avg_abs_gap": self.round_mean(gaps),
                     "p90_abs_gap": self.round_quantile(gaps, 0.9),
-                    "gap_threshold_rows": sum(
-                        1 for row in group if row.get("conflict_reason", "").find("judge score gap") >= 0
-                    ),
+                    "gap_threshold_rows": sum(1 for row in group if row.get("score_gap_threshold_met")),
                     "pass_mismatch_rows": sum(1 for row in group if row.get("pass_mismatch")),
                     "error_type_mismatch_rows": sum(1 for row in group if row.get("error_type_mismatch")),
                 }
@@ -2825,6 +2921,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                                 "candidate_pass",
                                 "baseline_error_type",
                                 "candidate_error_type",
+                                "relative_score_gap_percent",
+                                "score_gap_mode",
+                                "selected_score_gap_value",
+                                "score_gap_threshold_met",
+                                "final_status",
+                                "final_judge",
+                                "final_score",
+                                "final_pass",
+                                "final_error_type",
                                 "instruction",
                                 "expected_output",
                                 "model_answer",
@@ -2850,6 +2955,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             text = " ".join(str(value or "").split())
             return text if len(text) <= limit else text[: limit - 1] + "..."
 
+        threshold = self.safe_float(summary.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=10000.0)
+        score_gap_mode = str(summary.get("score_gap_mode") or "points")
+        threshold_label = f"{threshold:g}% 상대차+" if score_gap_mode == "relative_percent" else f"{threshold:g}점+"
+        arbiter_judge = str(summary.get("arbiter_judge_config_id") or "").strip()
         model_rows = [
             [
                 row.get("config_id", ""),
@@ -2891,7 +3000,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         ]
         positive = [row for row in top_rows if row.get("direction") == "candidate_higher"][:10]
         negative = [row for row in top_rows if row.get("direction") == "baseline_higher"][:10]
-        top_headers = ["모델", "문항", "분류", "유형", "Baseline", "Candidate", "차이", "질문"]
+        top_headers_with_final = ["모델", "문항", "분류", "유형", "Baseline", "Candidate", "Final", "차이", "질문"]
         positive_rows = [
             [
                 row.get("config_id", ""),
@@ -2900,6 +3009,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 row.get("question_type", ""),
                 row.get("baseline_score", ""),
                 row.get("candidate_score", ""),
+                row.get("final_score", ""),
                 f"{float(row.get('delta_candidate_minus_baseline') or 0):+.2f}",
                 trunc(row.get("instruction")),
             ]
@@ -2913,6 +3023,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 row.get("question_type", ""),
                 row.get("baseline_score", ""),
                 row.get("candidate_score", ""),
+                row.get("final_score", ""),
                 f"{float(row.get('delta_candidate_minus_baseline') or 0):+.2f}",
                 trunc(row.get("instruction")),
             ]
@@ -2926,7 +3037,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             f"- 기준 Judge: {summary.get('baseline_judge_config_id')} ({summary.get('baseline_label')})",
             f"- 비교 Judge run: {summary.get('candidate_run_id')}",
             "- 기준 점수 차이: `비교 Judge 점수 - 기준 Judge 점수`",
-            "- Arbiter는 실행하지 않았고 후보 행만 산출했습니다.",
+            f"- Arbiter 점수차 후보 기준: {threshold_label} ({'기준 Judge 대비 상대 차이' if score_gap_mode == 'relative_percent' else '절대 점수차/%p'})",
+            f"- 기존 Arbiter 결과: {arbiter_judge or '선택 안 함'}",
+            "- 새 Arbiter는 실행하지 않았고, 기존 결과가 없는 후보 행만 후속 입력으로 산출했습니다.",
             "",
             "## 핵심 요약",
             "",
@@ -2936,40 +3049,57 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             f"- 평균 차이: {float(summary.get('avg_delta_candidate_minus_baseline') or 0):+.2f}",
             f"- 평균 절대 차이: {summary.get('avg_abs_gap')}",
             f"- P90 절대 차이: {summary.get('p90_abs_gap')}",
-            f"- 30점 이상 차이: {summary.get('gap_threshold_rows', 0):,}건",
+            f"- {threshold_label} 차이: {summary.get('gap_threshold_rows', 0):,}건",
             f"- pass/fail 불일치: {summary.get('pass_mismatch_rows', 0):,}건",
-            f"- fail 유형 불일치: {summary.get('error_type_mismatch_rows', 0):,}건",
-            f"- Arbiter 후보: {summary.get('arbiter_key_rows', 0):,}건",
+            f"- fail 유형 불일치 전체: {summary.get('error_type_total_mismatch_rows', 0):,}건",
+            f"- fail 유형 불일치 후보 포함: {'예' if summary.get('include_error_type_mismatch') else '아니오'}",
+            f"- Arbiter 대상 후보: {summary.get('arbiter_candidate_rows', 0):,}건",
+            f"- 기존 Arbiter 반영 가능 후보: {summary.get('arbiter_existing_candidate_rows', 0):,}건",
+            f"- 기존 Arbiter 없는 후보: {summary.get('arbiter_missing_rows', 0):,}건",
+            f"- 후속 Arbiter 입력 JSONL 행: {summary.get('arbiter_key_rows', 0):,}건",
+            f"- 부분 최종값 완료 행: {summary.get('final_complete_rows', 0):,}건",
+            f"- 부분 최종값 평균: {summary.get('final_avg')}",
             "",
-            "## 점수 차이 구간",
+            "## 기존 Arbiter 부분 반영",
+            "",
+            f"- 기존 Arbiter source rows: {summary.get('arbiter_source_rows', 0):,}건",
+            f"- 비교 전체 중 기존 Arbiter 결과가 있는 행: {summary.get('arbiter_existing_rows', 0):,}건",
+            f"- Arbiter 후보 중 최종값 완료 행: {summary.get('final_complete_candidate_rows', 0):,}건",
+            f"- Arbiter 후보 중 최종값 미완료 행: {summary.get('final_missing_candidate_rows', 0):,}건",
+            f"- 최종값 완료 행 중 pass: {summary.get('final_pass_rows', 0):,}건",
+            f"- 후보가 아니어서 Arbiter가 필요 없는 행: {summary.get('arbiter_not_required_rows', 0):,}건",
+            f"- 기존 결과가 없는 후보는 새 호출 없이 `judge_comparison_arbiter_keys.jsonl`에만 남겼습니다.",
+            "",
+            "## 절대 점수 차이 구간",
             "",
             table(["절대 점수 차이", "건수", "비율"], [[row["band"], f"{row['rows']:,}", f"{row['rate']}%"] for row in summary.get("gap_bands", [])]),
             "",
             "## 모델별 차이",
             "",
-            table(["모델", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", "P90 절대차", "30점+", "Pass 불일치"], model_rows),
+            table(["모델", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", "P90 절대차", threshold_label, "Pass 불일치"], model_rows),
             "",
             "## 대분류별 차이",
             "",
-            table(["대분류", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", "30점+", "Pass 불일치"], category_rows),
+            table(["대분류", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", threshold_label, "Pass 불일치"], category_rows),
             "",
             "## 세부 주제별 변동이 큰 영역",
             "",
-            table(["분류 / 유형 / 토픽", "행", "평균 차이", "평균 절대차", "P90 절대차", "30점+", "Pass 불일치"], topic_rows),
+            table(["분류 / 유형 / 토픽", "행", "평균 차이", "평균 절대차", "P90 절대차", threshold_label, "Pass 불일치"], topic_rows),
             "",
             "## 비교 Judge가 더 높게 준 대표 케이스",
             "",
-            table(top_headers, positive_rows),
+            table(top_headers_with_final, positive_rows),
             "",
             "## 기준 Judge가 더 높게 준 대표 케이스",
             "",
-            table(top_headers, negative_rows),
+            table(top_headers_with_final, negative_rows),
             "",
             "## 해석 메모",
             "",
             "- 평균 차이는 전반적인 채점 성향을, 평균 절대 차이는 행 단위 판단 흔들림을 보여줍니다.",
-            "- Arbiter 후보는 pass/fail 불일치, 점수 차이 threshold, 선택 시 fail 유형 불일치의 합집합입니다.",
-            "- fail 유형 비교는 기본적으로 canonical error_type 기준으로 계산했습니다.",
+            "- Arbiter 후보는 pass/fail 불일치, 점수 차이 기준, 선택 시 fail 유형 불일치의 합집합입니다.",
+            "- fail 유형 불일치는 기본적으로 Arbiter 후보에서 제외하고, 별도 선택 시에만 포함합니다.",
+            "- fail 유형 비교는 canonical error_type 기준으로 계산할 수 있습니다.",
             "",
         ]
         return "\n".join(lines)

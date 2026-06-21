@@ -4102,6 +4102,7 @@ function judgeResolutionPolicyLabel(value) {
 function humanJudgeConflictReason(value) {
   return String(value || "")
     .replace(/judge pass\/fail disagreement/gi, "Judge 통과/실패 판단 불일치")
+    .replace(/judge relative score gap\s*([0-9.]+)%/gi, "Judge 상대 점수차 $1%")
     .replace(/judge score gap\s*([0-9.]+)/gi, "Judge 점수차 $1점")
     .replace(/resolved by arbiter override:\s*/gi, "상위 Judge 최종 반영: ")
     .replace(/arbiter missing; manual review required/gi, "상위 Judge 결과가 없어 수동 검토 필요")
@@ -4949,13 +4950,28 @@ async function submitReblendRun() {
   }
 }
 
+function judgeScoreGapModeLabel(mode) {
+  return mode === "relative_percent" ? "상대 차이" : "절대 점수차";
+}
+
+function judgeScoreGapThresholdLabel(threshold, mode) {
+  const number = Number(threshold);
+  if (!Number.isFinite(number)) return "-";
+  return mode === "relative_percent" ? `${number}%+` : `${number}점+`;
+}
+
 function initializeJudgeComparisonControls() {
   renderJudgeComparisonControls();
   document.getElementById("judgeCompareBaselineSource")?.addEventListener("change", () => {
     renderJudgeComparisonBaselineJudgeOptions();
+    renderJudgeComparisonArbiterOptions();
     renderJudgeComparisonPreview();
   });
-  ["judgeCompareBaselineJudge", "judgeCompareCandidateRun", "judgeCompareScoreGap", "judgeCompareErrorType", "judgeCompareNormalizeErrorType"].forEach((id) => {
+  document.getElementById("judgeCompareBaselineJudge")?.addEventListener("change", () => {
+    renderJudgeComparisonArbiterOptions();
+    renderJudgeComparisonPreview();
+  });
+  ["judgeCompareExistingArbiter", "judgeCompareCandidateRun", "judgeCompareScoreGap", "judgeCompareScoreGapMode", "judgeCompareErrorType", "judgeCompareNormalizeErrorType"].forEach((id) => {
     document.getElementById(id)?.addEventListener("change", renderJudgeComparisonPreview);
     document.getElementById(id)?.addEventListener("input", renderJudgeComparisonPreview);
   });
@@ -4988,6 +5004,7 @@ function renderJudgeComparisonControls() {
     `;
   }).join("");
   renderJudgeComparisonBaselineJudgeOptions();
+  renderJudgeComparisonArbiterOptions();
   renderJudgeComparisonPreview();
 }
 
@@ -5008,6 +5025,27 @@ function renderJudgeComparisonBaselineJudgeOptions() {
   `).join("");
 }
 
+function renderJudgeComparisonArbiterOptions() {
+  const sourceId = document.getElementById("judgeCompareBaselineSource")?.value || "";
+  const baselineJudgeId = document.getElementById("judgeCompareBaselineJudge")?.value || "";
+  const arbiterSelect = document.getElementById("judgeCompareExistingArbiter");
+  if (!arbiterSelect) return;
+  const source = (judgeComparisonOptions?.baseline_sources || []).find((item) => item.source_id === sourceId)
+    || (judgeComparisonOptions?.baseline_sources || [])[0];
+  const judges = (source?.judge_configs || []).filter((judge) => judge.config_id && judge.config_id !== baselineJudgeId);
+  const preferred = judges.find((judge) => String(judge.config_id || "").toLowerCase().includes("gpt55"))
+    || judges.find((judge) => String(judge.config_id || "").toLowerCase().includes("arbiter"))
+    || null;
+  arbiterSelect.innerHTML = [
+    `<option value="">사용 안 함 · 기존 Arbiter 결과 없음</option>`,
+    ...judges.map((judge) => `
+      <option value="${escapeHtml(judge.config_id)}" ${judge.config_id === preferred?.config_id ? "selected" : ""}>
+        ${escapeHtml(judge.config_id)} · ${Number(judge.rows || 0).toLocaleString()} rows
+      </option>
+    `),
+  ].join("");
+}
+
 function renderJudgeComparisonPreview() {
   const result = document.getElementById("judgeComparisonResult");
   if (!result) return;
@@ -5015,7 +5053,11 @@ function renderJudgeComparisonPreview() {
   const candidateRuns = judgeComparisonOptions?.judge_runs || [];
   const source = sources.find((item) => item.source_id === document.getElementById("judgeCompareBaselineSource")?.value);
   const judgeId = document.getElementById("judgeCompareBaselineJudge")?.value || "";
+  const arbiterId = document.getElementById("judgeCompareExistingArbiter")?.value || "";
   const candidate = candidateRuns.find((item) => item.run_id === document.getElementById("judgeCompareCandidateRun")?.value);
+  const scoreGapThreshold = Number(document.getElementById("judgeCompareScoreGap")?.value || 30);
+  const scoreGapMode = document.getElementById("judgeCompareScoreGapMode")?.value || "points";
+  const includeErrorTypeMismatch = Boolean(document.getElementById("judgeCompareErrorType")?.checked);
   if (!sources.length || !candidateRuns.length) {
     result.innerHTML = emptyState("비교 가능한 기존 Judge 점수 또는 새 Judge run이 없습니다.");
     return;
@@ -5024,8 +5066,10 @@ function renderJudgeComparisonPreview() {
     <div class="judge-comparison-preview">
       <span><strong>기준</strong>${escapeHtml(source?.label || "-")}</span>
       <span><strong>Judge</strong>${escapeHtml(judgeId || "-")}</span>
+      <span><strong>기존 Arbiter</strong>${escapeHtml(arbiterId || "사용 안 함")}</span>
       <span><strong>비교 run</strong>${escapeHtml(candidate?.label || "-")}</span>
       <span><strong>비교 rows</strong>${Number(candidate?.ok_rows || 0).toLocaleString()}</span>
+      <span><strong>후보 기준</strong>${escapeHtml(judgeScoreGapModeLabel(scoreGapMode))} ${escapeHtml(judgeScoreGapThresholdLabel(scoreGapThreshold, scoreGapMode))} · pass/fail${includeErrorTypeMismatch ? " · fail 유형" : ""}</span>
     </div>
   `;
 }
@@ -5042,16 +5086,18 @@ async function submitJudgeComparison() {
   const previous = button?.innerHTML || "";
   const baselineSourceId = document.getElementById("judgeCompareBaselineSource")?.value || "";
   const baselineJudgeConfigId = document.getElementById("judgeCompareBaselineJudge")?.value || "";
+  const arbiterJudgeConfigId = document.getElementById("judgeCompareExistingArbiter")?.value || "";
   const candidateRunId = document.getElementById("judgeCompareCandidateRun")?.value || "";
   const scoreGapThreshold = Number(document.getElementById("judgeCompareScoreGap")?.value || 30);
+  const scoreGapMode = document.getElementById("judgeCompareScoreGapMode")?.value || "points";
   const includeErrorTypeMismatch = Boolean(document.getElementById("judgeCompareErrorType")?.checked);
   const normalizeErrorType = Boolean(document.getElementById("judgeCompareNormalizeErrorType")?.checked);
   if (!baselineSourceId || !baselineJudgeConfigId || !candidateRunId) {
     setJudgeComparisonMessage("기준 점수 소스, 기준 Judge, 비교 Judge run을 모두 선택하세요.", "error");
     return;
   }
-  if (!Number.isFinite(scoreGapThreshold) || scoreGapThreshold < 0 || scoreGapThreshold > 100) {
-    setJudgeComparisonMessage("점수 차이 기준은 0~100 사이 숫자여야 합니다.", "error");
+  if (!Number.isFinite(scoreGapThreshold) || scoreGapThreshold < 0 || scoreGapThreshold > 10000) {
+    setJudgeComparisonMessage("점수 차이 기준은 0~10000 사이 숫자여야 합니다.", "error");
     return;
   }
   if (button) {
@@ -5066,8 +5112,10 @@ async function submitJudgeComparison() {
       body: JSON.stringify({
         baseline_source_id: baselineSourceId,
         baseline_judge_config_id: baselineJudgeConfigId,
+        arbiter_judge_config_id: arbiterJudgeConfigId,
         candidate_run_id: candidateRunId,
         score_gap_threshold: scoreGapThreshold,
+        score_gap_mode: scoreGapMode,
         include_error_type_mismatch: includeErrorTypeMismatch,
         normalize_error_type: normalizeErrorType,
       }),
@@ -5096,16 +5144,24 @@ function renderJudgeComparisonResult(payload) {
     if (!item?.url) return "";
     return `<a class="link-button" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
   };
+  const threshold = Number(summary.score_gap_threshold ?? 30);
+  const scoreGapMode = summary.score_gap_mode || "points";
+  const thresholdLabel = judgeScoreGapThresholdLabel(threshold, scoreGapMode);
+  const thresholdModeLabel = judgeScoreGapModeLabel(scoreGapMode);
   target.innerHTML = `
     <div class="judge-comparison-output">
       <div class="run-summary-strip">
         <span><strong>비교 행</strong> ${Number(summary.matched_rows || 0).toLocaleString()}</span>
         <span><strong>평균 차이</strong> ${signedNumber(summary.avg_delta_candidate_minus_baseline)}</span>
         <span><strong>평균 절대차</strong> ${scoreValueLabel(summary.avg_abs_gap)}</span>
-        <span><strong>30점+</strong> ${Number(summary.gap_threshold_rows || 0).toLocaleString()}</span>
+        <span><strong>${escapeHtml(thresholdModeLabel)} ${escapeHtml(thresholdLabel)}</strong> ${Number(summary.gap_threshold_rows || 0).toLocaleString()}</span>
         <span><strong>Pass 불일치</strong> ${Number(summary.pass_mismatch_rows || 0).toLocaleString()}</span>
-        <span><strong>Fail 유형 불일치</strong> ${Number(summary.error_type_mismatch_rows || 0).toLocaleString()}</span>
-        <span><strong>Arbiter 후보</strong> ${Number(summary.arbiter_key_rows || 0).toLocaleString()}</span>
+        <span><strong>Fail 유형 불일치</strong> ${Number(summary.error_type_total_mismatch_rows || summary.error_type_mismatch_rows || 0).toLocaleString()}</span>
+        <span><strong>Arbiter 대상</strong> ${Number(summary.arbiter_candidate_rows || summary.arbiter_key_rows || 0).toLocaleString()}</span>
+        <span><strong>기존 Arbiter 반영</strong> ${Number(summary.arbiter_existing_candidate_rows || 0).toLocaleString()}</span>
+        <span><strong>Arbiter 미싱</strong> ${Number(summary.arbiter_missing_rows || summary.arbiter_key_rows || 0).toLocaleString()}</span>
+        <span><strong>최종값 완료</strong> ${Number(summary.final_complete_rows || 0).toLocaleString()}</span>
+        <span><strong>최종값 평균</strong> ${scoreValueLabel(summary.final_avg)}</span>
       </div>
       <div class="button-row judge-comparison-links">
         ${link("report_md", "Markdown 리포트")}
@@ -5113,7 +5169,7 @@ function renderJudgeComparisonResult(payload) {
         ${link("comparison_csv", "전체 비교 CSV")}
         ${link("arbiter_keys_jsonl", "Arbiter 후보 JSONL")}
       </div>
-      <p class="field-help">Arbiter는 실행하지 않았습니다. 후보 파일은 후속 검토나 별도 실행 입력으로만 사용됩니다.</p>
+      <p class="field-help">새 Arbiter는 실행하지 않았습니다. 기존 결과가 없는 후보만 후속 실행 입력으로 남깁니다.</p>
     </div>
   `;
 }

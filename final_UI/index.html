@@ -560,15 +560,24 @@
             <label>기준 Judge
               <select id="judgeCompareBaselineJudge"></select>
             </label>
+            <label>기존 Arbiter 결과
+              <select id="judgeCompareExistingArbiter"></select>
+            </label>
             <label>비교 Judge run
               <select id="judgeCompareCandidateRun"></select>
             </label>
-            <label>점수 차이 기준
-              <input id="judgeCompareScoreGap" type="number" min="0" max="100" step="1" value="30">
+            <label>Arbiter 후보 점수 차이 기준값
+              <input id="judgeCompareScoreGap" type="number" min="0" max="10000" step="1" value="30">
+            </label>
+            <label>점수 차이 기준 방식
+              <select id="judgeCompareScoreGapMode">
+                <option value="points" selected>절대 점수차 / %p</option>
+                <option value="relative_percent">기준 Judge 대비 상대 차이 / %</option>
+              </select>
             </label>
             <label class="check-inline">
-              <input id="judgeCompareErrorType" type="checkbox" checked>
-              fail 유형 불일치 포함
+              <input id="judgeCompareErrorType" type="checkbox">
+              fail 유형 불일치를 Arbiter 후보에 포함
             </label>
             <label class="check-inline">
               <input id="judgeCompareNormalizeErrorType" type="checkbox" checked>
