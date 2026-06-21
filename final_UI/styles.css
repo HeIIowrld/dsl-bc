@@ -1077,8 +1077,16 @@ button.run-submit small {
 }
 
 .judge-comparison-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   justify-content: flex-start;
   margin-top: 10px;
+}
+
+.judge-comparison-links .link-button {
+  min-width: 150px;
+  text-align: center;
 }
 
 .toast-region {

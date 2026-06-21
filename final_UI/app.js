@@ -5163,11 +5163,11 @@ function renderJudgeComparisonResult(payload) {
         <span><strong>최종값 완료</strong> ${Number(summary.final_complete_rows || 0).toLocaleString()}</span>
         <span><strong>최종값 평균</strong> ${scoreValueLabel(summary.final_avg)}</span>
       </div>
-      <div class="button-row judge-comparison-links">
-        ${link("report_md", "Markdown 리포트")}
-        ${link("top_cases_csv", "차이 큰 케이스 CSV")}
+      <div class="judge-comparison-links">
+        ${link("report_md", "리포트 열기")}
+        ${link("top_cases_csv", "상위 케이스 CSV")}
         ${link("comparison_csv", "전체 비교 CSV")}
-        ${link("arbiter_keys_jsonl", "Arbiter 후보 JSONL")}
+        ${link("arbiter_keys_jsonl", "미완료 Arbiter JSONL")}
       </div>
       <p class="field-help">새 Arbiter는 실행하지 않았습니다. 기존 결과가 없는 후보만 후속 실행 입력으로 남깁니다.</p>
     </div>
