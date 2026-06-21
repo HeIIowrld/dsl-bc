@@ -2295,13 +2295,22 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             scores=scores,
             release_gate_config=release_gate_config,
         )
-        question_rows = eval_question_case_rows(
-            cases=cases,
-            configs=configs,
-            outputs=outputs,
-            scores=scores,
-            regression_diff=regression_diff,
-        )
+        if self.uses_sparse_output_projection(config):
+            question_rows = self.sparse_question_case_rows(
+                cases=cases,
+                configs=configs,
+                outputs=outputs,
+                scores=scores,
+                regression_diff=regression_diff,
+            )
+        else:
+            question_rows = eval_question_case_rows(
+                cases=cases,
+                configs=configs,
+                outputs=outputs,
+                scores=scores,
+                regression_diff=regression_diff,
+            )
         return {
             "outputs": outputs,
             "scores": scores,
@@ -2310,6 +2319,56 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "run_release_gates": run_release_gates,
             "question_rows": question_rows,
         }
+
+    def uses_sparse_output_projection(self, config: dict) -> bool:
+        run_type = str(config.get("run_type") or "").lower()
+        scoring_mode = str(config.get("scoring_mode") or "").lower()
+        return "reconciled" in run_type or "arbiter_report" in run_type or "dual_judge_arbiter" in scoring_mode
+
+    def sparse_question_case_rows(
+        self,
+        *,
+        cases: list[dict],
+        configs: list[dict],
+        outputs: list[dict],
+        scores: list[dict],
+        regression_diff: list[dict],
+    ) -> list[dict]:
+        case_by_id = {str(case.get("case_id") or ""): case for case in cases}
+        config_by_id = {str(config.get("config_id") or ""): config for config in configs}
+        score_by_key = {(str(row.get("case_id") or ""), str(row.get("config_id") or "")): row for row in scores}
+        diff_by_key = {
+            (str(row.get("case_id") or ""), str(row.get("candidate_config") or "")): row
+            for row in regression_diff
+        }
+        rows: list[dict] = []
+        for output in outputs:
+            case_id = str(output.get("case_id") or "")
+            config_id = str(output.get("config_id") or "")
+            if not case_id or not config_id:
+                continue
+            case = case_by_id.get(case_id) or {
+                "case_id": case_id,
+                "question": output.get("instruction", ""),
+                "gold_answer": output.get("output", ""),
+                "metadata": {},
+            }
+            config = config_by_id.get(config_id) or {
+                "config_id": config_id,
+                "model": output.get("model") or config_id,
+            }
+            score = score_by_key.get((case_id, config_id), {})
+            diff = diff_by_key.get((case_id, config_id), {})
+            rows.extend(
+                eval_question_case_rows(
+                    cases=[case],
+                    configs=[config],
+                    outputs=[output],
+                    scores=[score],
+                    regression_diff=[diff] if diff else [],
+                )
+            )
+        return rows
 
     def projected_run_cases(self, config: dict) -> list[dict]:
         case_source = str(config.get("case_source") or "").strip()
