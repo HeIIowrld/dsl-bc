@@ -1,8 +1,10 @@
 .env
 .env.*
+.agents/
 *.log
 *.tmp
 *.bak
+*.zip
 *.pyc
 __pycache__/
 .pytest_cache/
