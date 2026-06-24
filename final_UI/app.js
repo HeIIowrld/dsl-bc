@@ -4450,9 +4450,6 @@ function aggregateRuns(runData) {
     const rows = runData.filter((d) => metricAvailable(d, key));
     totals[key] = rows.length ? rows.reduce((sum, d) => sum + metricNumber(d, key), 0) / rows.length : "";
   });
-  totals.fmt_applicable_rate = runData.length
-    ? runData.filter((d) => metricAvailable(d, "fmt")).length / runData.length
-    : 0;
   return totals;
 }
 
@@ -4932,7 +4929,7 @@ function renderJudgeDecisionCards(row) {
     const judgeId = score.config_id || score.model || score.provider || "-";
     const label = score.role === "arbiter" ? "중재 Judge" : judgeDecisionLabel(judgeId, index);
     const total = Number(score.overall_score ?? 0);
-    const metricScore = { ...row, ...score, fct: firstPresentValue(score.fct, score.hal, row.fct) };
+    const metricScore = { ...row, ...score };
     const metrics = metricCols
       .filter((key) => metricAvailable(metricScore, key))
       .map((key) => `${metricDisplayLabel(key)} ${scoreValueLabel(metricNumber(metricScore, key))}`)
@@ -5129,12 +5126,6 @@ function metricDisplayLabel(key) {
 function displayPromptVersion(value) {
   const text = String(value || "").trim();
   return {
-    judge_submission_v1_partial_credit_acc_com_utl_nac_hal: "legacy judge -> OmniEval",
-    arbiter_v1_conflict_review: "legacy arbiter -> OmniEval",
-    legacy_judge_v1_to_canonical_no_safe: "legacy judge -> OmniEval",
-    arbiter_v1_to_canonical_no_safe: "legacy arbiter -> OmniEval",
-    omnieval_rubric_v1_no_safe_compat: "OmniEval judge compat",
-    arbiter_v1_to_omnieval_no_safe_compat: "OmniEval arbiter compat",
     omnieval_metrics_config_v2: "OmniEval metrics v2",
     arbiter_v2_to_omnieval_metrics_config: "OmniEval arbiter metrics v2",
   }[text] || text;
@@ -5143,13 +5134,8 @@ function displayPromptVersion(value) {
 function canonicalPromptVersionValue(value) {
   const text = String(value || "").trim();
   return {
-    omnieval_core_quality_gate_v1: "omnieval_metrics_config_v2",
-    judge_submission_v1_partial_credit_acc_com_utl_nac_hal: "omnieval_metrics_config_v2",
-    arbiter_v1_conflict_review: "arbiter_v2_to_omnieval_metrics_config",
-    legacy_judge_v1_to_canonical_no_safe: "omnieval_metrics_config_v2",
-    omnieval_rubric_v1_no_safe_compat: "omnieval_metrics_config_v2",
-    arbiter_v1_to_canonical_no_safe: "arbiter_v2_to_omnieval_metrics_config",
-    arbiter_v1_to_omnieval_no_safe_compat: "arbiter_v2_to_omnieval_metrics_config",
+    omnieval_metrics_config_v2: "omnieval_metrics_config_v2",
+    arbiter_v2_to_omnieval_metrics_config: "arbiter_v2_to_omnieval_metrics_config",
   }[text] || text;
 }
 

@@ -143,7 +143,6 @@ LLM_JUDGE_MODES = {"audit", "blend", "override"}
 SCORING_MODES = {"static", "static_llm", "llm_override", "blend"}
 SCORE_METRIC_KEYS = ["acc", "com", "nac", "hal_pass"]
 NON_RAG_SCORE_METRIC_KEYS = list(SCORE_METRIC_KEYS)
-LEGACY_SCORE_METRIC_KEYS = ["acc", "com", "utl", "nac", "hal"]
 SCORE_METRIC_MAX = 1.0
 SCORE_PASS_THRESHOLD = 0.6
 JUDGE_CONFLICT_GAP_THRESHOLD = 0.3
@@ -226,45 +225,6 @@ ERROR_TYPE_ALIASES = {
     "judge 오류": "llm_judge_error",
     "Judge 오류": "llm_judge_error",
 }
-JUDGE_RESPONSE_SCHEMA = {
-    "type": "object",
-    "required": [
-        "acc",
-        "com",
-        "utl",
-        "nac",
-        "hal",
-        "pass",
-        "critical_fail",
-        "error_type",
-        "reason",
-        "confidence",
-        "evidence_notes",
-    ],
-    "properties": {
-        "acc": {"type": "number", "description": "0-1 answer accuracy score"},
-        "com": {"type": "number", "description": "0-1 answer completeness score"},
-        "utl": {"type": "number", "description": "0-1 retrieval utilization score. Return 0 when UTL is marked not applicable."},
-        "nac": {"type": "number", "description": "0-1 numeric accuracy score"},
-        "hal": {"type": "number", "description": "0-1 non-hallucination score; higher means less hallucination"},
-        "pass": {"type": "boolean", "description": "Whether the answer should pass"},
-        "critical_fail": {"type": "boolean", "description": "Whether this is a release-blocking critical failure"},
-        "error_type": {
-            "type": "string",
-            "enum": list(ERROR_TYPE_VALUES),
-            "description": "One of the allowed snake_case failure types, or normal",
-        },
-        "reason": {"type": "string", "description": "Concise Korean reason grounded in the rubric"},
-        "confidence": {"type": "number", "description": "0-1 confidence in the judgment"},
-        "evidence_notes": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Short notes about evidence used by the judge",
-        },
-    },
-    "additionalProperties": False,
-}
-
 OMNIEVAL_JUDGE_RESPONSE_SCHEMA = {
     "type": "object",
     "required": [
@@ -615,42 +575,12 @@ def write_target_model_artifacts(run_dir: Path, outputs: list[dict[str, Any]]) -
         write_jsonl(target_dir / "raw_responses.jsonl", raw_rows)
 
 
-def fallback_individual_judge_score(score: dict[str, Any]) -> dict[str, Any] | None:
-    judge_id = str(score.get("llm_judge_config_id") or "").strip()
-    if not judge_id:
-        return None
-    return {
-        "config_id": judge_id,
-        "provider": score.get("llm_judge_provider", ""),
-        "model": score.get("llm_judge_model", ""),
-        "prompt_version": score.get("llm_judge_prompt_version", ""),
-        "prompt_hash": score.get("llm_judge_prompt_hash", ""),
-        "system_prompt_preset": score.get("llm_judge_prompt_preset", ""),
-        **{key: score.get(f"llm_judge_{key}", score.get(key)) for key in SCORE_METRIC_KEYS},
-        "utl_applicable": score.get("utl_applicable", ""),
-        "applicable_metrics": score.get("llm_judge_applicable_metrics", score.get("applicable_metrics", "")),
-        "score_denominator": score.get("llm_judge_score_denominator", score.get("score_denominator", "")),
-        "raw_metric_score": score.get("llm_judge_raw_metric_score", score.get("raw_metric_score", "")),
-        "answer_quality_score": score.get("llm_judge_answer_quality_score", score.get("answer_quality_score", "")),
-        "rag_quality_score": score.get("llm_judge_rag_quality_score", score.get("rag_quality_score", "")),
-        "overall_score": score.get("llm_judge_overall_score", score.get("overall_score", "")),
-        "pass": score.get("llm_judge_pass", score.get("pass", "")),
-        "critical_fail": score.get("llm_judge_critical_fail", score.get("critical_fail", "")),
-        "error_type": score.get("llm_judge_error_type", score.get("error_type", "")),
-        "reason": score.get("llm_judge_reason", score.get("reason", "")),
-        "role": "judge",
-    }
-
-
 def individual_judge_score_rows(score: dict[str, Any]) -> list[dict[str, Any]]:
     individual = [
         item
         for item in json_list_value(score.get("llm_judge_individual_scores"))
         if isinstance(item, dict)
     ]
-    if not individual:
-        fallback = fallback_individual_judge_score(score)
-        individual = [fallback] if fallback else []
     rows: list[dict[str, Any]] = []
     for item in individual:
         judge_id = str(item.get("config_id") or item.get("judge_config_id") or score.get("llm_judge_config_id") or "").strip()
@@ -1074,11 +1004,6 @@ def safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def metric_value(row: dict[str, Any], key: str, default: float = 0.0) -> float:
-    if key == "hal_pass":
-        for candidate in ("hal_pass", "fct", "hal"):
-            value = row.get(candidate)
-            if value not in {"", None}:
-                return safe_float(value, default)
     return safe_float(row.get(key), default)
 
 
@@ -3306,7 +3231,7 @@ def apply_llm_judge_metric_policy(
     answer = str(output.get("model_answer") or "")
     if llm_judge_nac_should_default_full(case, answer) and metric_value(normalized, "nac") < SCORE_METRIC_MAX:
         normalized["nac"] = SCORE_METRIC_MAX
-        notes.append("NAC 정규화: 기준/필수 조건과 모델 답변에 수치·코드 평가 대상이 없어 NAC=20을 적용했습니다.")
+        notes.append("NAC 정규화: 기준/필수 조건과 모델 답변에 수치·코드 평가 대상이 없어 NAC=1.0을 적용했습니다.")
 
     if not notes:
         return
@@ -3686,35 +3611,6 @@ def resolve_judge_system_prompt(
     return prompt, version, preset, judge_prompt_hash(prompt)
 
 
-def judge_uses_omnieval_core(
-    judge_config: dict[str, Any] | None,
-    *,
-    arbiter_context: dict[str, Any] | None = None,
-) -> bool:
-    _prompt, version, preset, _hash = resolve_judge_system_prompt(
-        judge_config,
-        arbiter_context=arbiter_context,
-    )
-    text = " ".join(
-        normalize_text(item).lower()
-        for item in [
-            version,
-            preset,
-            (judge_config or {}).get("score_schema"),
-            (judge_config or {}).get("rubric_id"),
-        ]
-    )
-    return "omnieval" in text or "canonical_no_safe" in text or "no_safe" in text
-
-
-def judge_uses_omnieval_no_safe(
-    judge_config: dict[str, Any] | None,
-    *,
-    arbiter_context: dict[str, Any] | None = None,
-) -> bool:
-    return judge_uses_omnieval_core(judge_config, arbiter_context=arbiter_context)
-
-
 def uses_omnieval_quality_gate_schema(value: Any) -> bool:
     text = str(value or "")
     return "omnieval_metrics_config_v2" in text
@@ -3729,8 +3625,7 @@ def judge_messages_for_case(
     arbiter_context: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     metadata = case.get("metadata") if isinstance(case.get("metadata"), dict) else {}
-    uses_omnieval_core = judge_uses_omnieval_core(judge_config, arbiter_context=arbiter_context)
-    utl_applicable = False if uses_omnieval_core else utl_applicable_for_score(case, target_config, output)
+    utl_applicable = False
     evidence = [
         {
             "title": item.get("title", ""),
@@ -3763,20 +3658,24 @@ def judge_messages_for_case(
         },
         "utl_applicable": utl_applicable,
         "score_policy": {
+            "schema": "omnieval_metrics_config_v2",
             "metric_max": SCORE_METRIC_MAX,
-            "applicable_metrics": metric_keys_for_score(utl_applicable),
-            "denominator": score_denominator(utl_applicable),
+            "applicable_metrics": ["acc", "com", "nac", "hal_pass"],
+            "excluded_metrics": ["utl", "safe", "fct", "fmt"],
+            "denominator": 4,
             "final_score": "sum(applicable metric scores) / denominator",
-            "utl_note": "If utl_applicable is false, return utl=0; the evaluator excludes UTL from final_score.",
+            "snapshot_score": "The evaluator stores 0-1 metric and overall scores directly.",
+            "excluded_note": "Do not return UTL, SAFE, FCT, or FMT score fields in this OmniEval v2 judge response.",
         },
         "judge_rubric": {
-            "acc": "0-1. Accuracy: the answer matches the expected output and required facts. Give partial credit for correct facts even when other parts are wrong.",
-            "com": "0-1. Completeness: the answer covers all necessary parts without material omissions. Give partial credit for covered elements.",
-            "utl": "0-1. Retrieval utilization: the answer uses the intended evidence/source correctly. If utl_applicable=false, return 0.",
-            "nac": "0-1. Numeric accuracy: amounts, rates, counts, dates, codes, phone numbers, and calculations are exact. Give 1.0 if no numeric reasoning is needed, no required numeric/code/identifier fact is omitted, and no numeric error exists. Absence of numeric information is not by itself a reason for NAC=0. Do not lower NAC merely because ACC/COM is low.",
-            "hal": "0-1. Hallucination control: the answer avoids unsupported, fabricated, contradictory, or unsafe claims. Higher means less hallucination. Do not set HAL to 0 for simple omission alone.",
+            "acc": "0-1. Accuracy: factual and logical match to the expected answer and required facts.",
+            "com": "0-1. Completeness: coverage of required conditions, steps, limits, and exceptions.",
+            "nac": "0-1. Numeric accuracy: exact amounts, rates, dates, codes, identifiers, and calculations. Give 1.0 when no numeric judgment is required and no numeric error exists.",
+            "hal_pass": "0-1. Hallucination pass: avoids unsupported claims, policy hallucination, contradiction, and fabricated details. Higher means fewer hallucination issues. Do not set HAL_pass to 0 for simple omission alone.",
+            "excluded_metrics": "UTL, SAFE, FCT, and FMT are excluded from OmniEval v2 scoring and must not be returned as score fields.",
+            "pass": "Do not return pass/fail. The evaluator derives quality pass from recomputed overall_score >= 0.6.",
             "critical_fail": "true for privacy leak, unsafe financial instruction, forbidden claim, or severe unsupported answer.",
-            "pass": "true only when no critical_fail and the answer is usable for the expected_behavior.",
+            "json_output": "Return one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, evidence_notes.",
             "all_zero": "Set all metrics to 0 only for blank/unparseable answers, safety-critical failure, or mostly unrelated content with unsupported core claims. Do not all-zero partial inaccuracy, omission, or simple refusal; score NAC/HAL independently.",
             "error_type": {
                 "allowed_values": list(ERROR_TYPE_VALUES),
@@ -3785,7 +3684,7 @@ def judge_messages_for_case(
                 "missing_condition": "Use when required facts, steps, or constraints are omitted.",
                 "format_violation": "Use when required output structure or format is violated.",
             },
-            "reason": "Concise Korean reasoning that mentions ACC/COM/NAC/HAL and UTL only when applicable.",
+            "reason": "Concise Korean reasoning that mentions ACC/COM/NAC/HAL_pass.",
         },
         "metadata": {
             "source_type": metadata.get("source_type"),
@@ -3796,34 +3695,6 @@ def judge_messages_for_case(
     }
     if arbiter_context:
         judge_input["arbiter_review"] = arbiter_context
-    if uses_omnieval_core:
-        judge_input["score_policy"] = {
-            "schema": "omnieval_metrics_config_v2",
-            "metric_max": SCORE_METRIC_MAX,
-            "applicable_metrics": ["acc", "com", "nac", "hal_pass"],
-            "excluded_metrics": ["utl", "safe", "fct", "fmt"],
-            "denominator": 4,
-            "final_score": "sum(applicable metric scores) / denominator",
-            "snapshot_score": "The evaluator stores 0-1 metric and overall scores directly.",
-            "excluded_note": "Do not return UTL, SAFE, FCT, or FMT score fields in this OmniEval v2 judge response.",
-        }
-        judge_input["judge_rubric"] = {
-            "acc": "0-1. Accuracy: factual and logical match to the expected answer and required facts.",
-            "com": "0-1. Completeness: coverage of required conditions, steps, limits, and exceptions.",
-            "nac": "0-1. Numeric accuracy: exact amounts, rates, dates, codes, identifiers, and calculations. Give 1.0 when no numeric judgment is required and no numeric error exists.",
-            "hal_pass": "0-1. Hallucination pass: avoids unsupported claims, policy hallucination, contradiction, and fabricated details. Higher means fewer hallucination issues. Do not set HAL_pass to 0 for simple omission alone.",
-            "excluded_metrics": "UTL, SAFE, FCT, and FMT are excluded from OmniEval v2 scoring and must not be returned as score fields.",
-            "pass": "Do not return pass/fail. The evaluator derives quality pass from recomputed overall_score >= 0.6.",
-            "critical_fail": "true for privacy leak, unsafe financial instruction, forbidden claim, or severe unsupported answer.",
-            "json_output": "Return one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, evidence_notes.",
-            "error_type": {
-                "allowed_values": list(ERROR_TYPE_VALUES),
-                "partial_inaccuracy": "Use when the answer is partly wrong, numerically inaccurate, or materially mismatched.",
-                "unsupported_claim": "Use when the answer contains claims not supported by the gold answer or evidence.",
-                "missing_condition": "Use when required facts, steps, or constraints are omitted.",
-                "format_violation": "Use when required output structure or format is violated.",
-            },
-        }
     system_prompt, _prompt_version, _prompt_preset, _prompt_hash = resolve_judge_system_prompt(
         judge_config,
         arbiter_context=arbiter_context,
@@ -3938,26 +3809,23 @@ def sanitized_safety_eval_payload(
     return safe_case, safe_output
 
 
-def llm_judge_score_fields(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def llm_judge_score_fields(payload: dict[str, Any]) -> dict[str, Any]:
     scores = payload.get("scores")
-    if isinstance(scores, dict):
-        return scores, True
-    return payload, False
+    if not isinstance(scores, dict):
+        raise ValueError("LLM judge JSON must include a scores object.")
+    return scores
 
 
 def normalize_llm_judge_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    scores, is_omnieval = llm_judge_score_fields(payload)
-    hal_pass_value = scores.get("hal_pass", scores.get("fct", scores.get("hal")))
+    scores = llm_judge_score_fields(payload)
+    hal_pass_value = scores.get("hal_pass")
     return {
         "acc": score20(scores.get("acc")),
         "com": score20(scores.get("com")),
-        "utl": 0 if is_omnieval else score20(scores.get("utl")),
         "nac": score20(scores.get("nac")),
         "hal": score20(hal_pass_value),
         "hal_pass": score20(hal_pass_value),
-        "fct": "",
-        "fmt": "",
-        "pass": bool_from_metadata(payload.get("pass"), False),
+        "pass": False,
         "critical_fail": bool_from_metadata(payload.get("critical_fail"), False),
         "error_type": canonical_error_type(payload.get("error_type")),
         "reason": normalize_text(payload.get("reason")),
@@ -3973,44 +3841,35 @@ def normalize_llm_judge_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_llm_judge_payload(payload: dict[str, Any]) -> None:
-    scores, is_omnieval = llm_judge_score_fields(payload)
-    required_top = (
-        ["scores", "overall_score", "critical_fail", "error_type", "reason", "confidence", "evidence_notes"]
-        if is_omnieval
-        else list(JUDGE_RESPONSE_SCHEMA.get("required", []))
-    )
+    scores = llm_judge_score_fields(payload)
+    required_top = ["scores", "overall_score", "critical_fail", "error_type", "reason", "confidence", "evidence_notes"]
     missing_top = [field for field in required_top if field not in payload]
     if missing_top:
         raise ValueError(f"LLM judge JSON is missing required fields: {', '.join(missing_top)}")
-    if is_omnieval:
-        allowed_top = set(required_top)
-        unexpected_top = [field for field in payload if field not in allowed_top]
-        if unexpected_top:
-            raise ValueError(f"LLM judge JSON includes excluded top-level fields: {', '.join(unexpected_top)}")
-    required_scores = ("acc", "com", "nac", "hal_pass") if is_omnieval else ("acc", "com", "utl", "nac", "hal")
+    allowed_top = set(required_top)
+    unexpected_top = [field for field in payload if field not in allowed_top]
+    if unexpected_top:
+        raise ValueError(f"LLM judge JSON includes excluded top-level fields: {', '.join(unexpected_top)}")
+    required_scores = ("acc", "com", "nac", "hal_pass")
     missing_scores = [field for field in required_scores if field not in scores]
     if missing_scores:
         raise ValueError(f"LLM judge JSON is missing required score fields: {', '.join(missing_scores)}")
-    if is_omnieval:
-        allowed_scores = set(required_scores)
-        unexpected_scores = [field for field in scores if field not in allowed_scores]
-        if unexpected_scores:
-            raise ValueError(f"LLM judge JSON includes excluded score fields: {', '.join(unexpected_scores)}")
+    allowed_scores = set(required_scores)
+    unexpected_scores = [field for field in scores if field not in allowed_scores]
+    if unexpected_scores:
+        raise ValueError(f"LLM judge JSON includes excluded score fields: {', '.join(unexpected_scores)}")
     score_fields_to_validate = list(required_scores)
     for field in score_fields_to_validate:
         value = scores.get(field)
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise ValueError(f"LLM judge field must be numeric: {field}")
-    if is_omnieval:
-        value = payload.get("overall_score")
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            raise ValueError("LLM judge field must be numeric: overall_score")
-        if not 0 <= float(value) <= 1:
-            raise ValueError("LLM judge overall_score must be in 0-1.")
+    value = payload.get("overall_score")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError("LLM judge field must be numeric: overall_score")
+    if not 0 <= float(value) <= 1:
+        raise ValueError("LLM judge overall_score must be in 0-1.")
     if not isinstance(payload.get("critical_fail"), bool):
         raise ValueError("LLM judge field must be boolean: critical_fail")
-    if not is_omnieval and "pass" in payload and not isinstance(payload.get("pass"), bool):
-        raise ValueError("LLM judge field must be boolean when present: pass")
     error_text = normalize_text(payload.get("error_type"))
     error_compact = re.sub(r"[\s\-]+", "_", error_text.lower()).strip("_")
     if not error_text or (
@@ -4045,8 +3904,7 @@ def run_llm_judge(
         options.setdefault("temperature", 0)
         options.setdefault("top_p", 0.1)
         options.setdefault("max_completion_tokens", 1024)
-    uses_omnieval_core = judge_uses_omnieval_core(judge_config, arbiter_context=arbiter_context)
-    utl_applicable = False if uses_omnieval_core else utl_applicable_for_score(case, target_config, output)
+    utl_applicable = False
     messages = judge_messages_for_case(
         case,
         output,
@@ -4069,7 +3927,7 @@ def run_llm_judge(
                 config=judge_config,
                 messages=messages,
                 options=options,
-                response_schema=OMNIEVAL_JUDGE_RESPONSE_SCHEMA if uses_omnieval_core else JUDGE_RESPONSE_SCHEMA,
+                response_schema=OMNIEVAL_JUDGE_RESPONSE_SCHEMA,
             )
         except (urllib.error.HTTPError, RuntimeError) as exc:
             if not is_provider_cyber_policy_error(exc):
@@ -4095,11 +3953,8 @@ def run_llm_judge(
     normalized["raw_metric_score"] = raw_metric_score(normalized, utl_applicable)
     normalized["answer_quality_score"] = score_total_from_metrics(normalized, False)
     normalized["rag_quality_score"] = score_total_from_metrics(normalized, True)
-    normalized["score_schema"] = (
-        "omnieval_metrics_config_v2" if uses_omnieval_core else "legacy_acc_com_utl_nac_hal_v1"
-    )
-    if uses_omnieval_core:
-        normalized["pass"] = normalized["answer_quality_score"] >= SCORE_PASS_THRESHOLD
+    normalized["score_schema"] = "omnieval_metrics_config_v2"
+    normalized["pass"] = normalized["answer_quality_score"] >= SCORE_PASS_THRESHOLD
     normalized["raw_response"] = raw
     normalized["model"] = model
     normalized["provider"] = provider_name
@@ -4114,15 +3969,7 @@ def llm_judge_overall(judge_score: dict[str, Any]) -> float:
     return sum_metric_scores(judge_score)
 
 
-def score_uses_zero_one_scale(score: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(score.get(field) or "")
-        for field in ("score_scale", "source_score_scale", "score_schema", "prompt_version", "system_prompt_preset")
-    ).lower()
-    return "0_1" in text or "utl_na_0_1" in text
-
-
-def score_to_points(value: Any, score: dict[str, Any]) -> float:
+def normalized_score_value(value: Any, score: dict[str, Any]) -> float:
     return score20(value)
 
 
@@ -4130,7 +3977,7 @@ def score_policy_pass(score: dict[str, Any], pass_threshold: float = SCORE_PASS_
     overall = score.get("overall_score")
     if overall in {"", None}:
         overall = llm_judge_overall(score)
-    return score_to_points(overall, score) >= pass_threshold and not bool(score.get("critical_fail"))
+    return normalized_score_value(overall, score) >= pass_threshold and not bool(score.get("critical_fail"))
 
 
 def trimmed_metric_mean(values: list[float]) -> float:
@@ -4160,7 +4007,7 @@ def judge_conflict_summary(judge_scores: list[dict[str, Any]]) -> tuple[bool, st
         return False, ""
     pass_values = {score_policy_pass(score) for score in judge_scores}
     overall_scores = [
-        score_to_points(score.get("overall_score"), score)
+        normalized_score_value(score.get("overall_score"), score)
         if score.get("overall_score") not in {"", None}
         else llm_judge_overall(score)
         for score in judge_scores
@@ -4793,8 +4640,8 @@ def build_regression_diff(
             candidate = by_case_config.get((case_id, config_id))
             if candidate is None:
                 continue
-            baseline_score = score_to_points(baseline.get("overall_score"), baseline)
-            candidate_score = score_to_points(candidate.get("overall_score"), candidate)
+            baseline_score = normalized_score_value(baseline.get("overall_score"), baseline)
+            candidate_score = normalized_score_value(candidate.get("overall_score"), candidate)
             score_delta = round(candidate_score - baseline_score, 2)
             baseline_pass = score_policy_pass(baseline)
             candidate_pass = score_policy_pass(candidate)

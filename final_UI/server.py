@@ -121,9 +121,9 @@ RUN_EXCLUDE_MARKERS = ("SMOKE", "DEBUG", "TEST")
 RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs"}
 MIN_DISPLAY_QUESTIONS = 10
 EMPTY_LATEST_RUN_CSV = {
-    "eval_runs.csv": "run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,utl,utl_applicable_rate,nac,hal,hal_rate,hal_pass,fct,fmt,fmt_applicable_rate,overall_with_safe,safe,safe_pass_rate,safe_review_rate,safe_block_rate,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw,score_schema\n",
-    "question_cases.csv": "question_id,qa_category,question_type,qa_topic,instruction,output,ground_truth_doc,source_type,expected_behavior,selection_mode,regression_suite,metamorphic_relation,dataset_pool_id,dataset_role,gate_eligible,release_gate_eligible,case_status,gold_verified,human_review_required,case_source,dataset_version,qa_matrix_topic,benchmark_group,source_hash,source_title,source_url,priority,task_type,model,version,answer_excerpt,model_answer,acc,com,nac,utl,hal,hal_rate,hal_pass,fct,fmt,fmt_status,fmt_reason,fmt_source,fmt_violations,safe,safe_status,safe_source,safe_risk_tags,safe_review_required,safe_gate,safe_pass,overall_with_safe,applicable_metrics,score_denominator,raw_metric_score,canonical_metric_count,answer_quality_score,rag_quality_score,overall_score,pass_fail,score_schema,score_scale,metric_source_hal,legacy_acc,legacy_com,legacy_utl,legacy_nac,legacy_hal,legacy_utl_applicable,legacy_overall_score,legacy_pass_fail,legacy_error_type,legacy_answer_quality_score,legacy_rag_quality_score,scoring_mode,static_overall_score,static_pass_fail,llm_judge_count,llm_judge_overall_score,llm_judge_pass_fail,llm_judge_status,llm_judge_provider,llm_judge_model,llm_judge_prompt_version,llm_judge_prompt_hash,llm_judge_prompt_preset,llm_judge_hal_pass,llm_judge_individual_scores,llm_judge_conflict,llm_judge_conflict_detected,llm_judge_unresolved_conflict,llm_judge_conflict_reason,llm_judge_conflict_resolution_policy,llm_judge_arbiter_config_id,llm_judge_arbitration_status,llm_judge_provider_refused,llm_judge_provider_refusal_reason,llm_judge_sanitized_eval,llm_judge_score_gap,llm_judge_score_min,llm_judge_score_max,llm_judge_pass_mismatch,llm_judge_base_average_score,llm_judge_arbiter_score,llm_judge_arbiter_override,regression_delta,regression_type,release_gate,error_type,judge_reason,static_reason,llm_judge_reason,metric_source_acc,metric_source_com,metric_source_nac,metric_source_fct,metric_source_fmt,metric_source_safe\n",
-    "qa_slice_scores.csv": "version,model,slice_level,slice_dimension,slice_value,case_count,row_count,min_reliable_cases,reliability_status,pass_rate,overall_score,acc,com,utl,utl_applicable_rate,nac,hal,hal_rate,hal_pass,fct,fmt,fmt_applicable_rate,overall_with_safe,safe,safe_pass_rate,safe_review_rate,safe_block_rate,score_schema\n",
+    "eval_runs.csv": "run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,nac,hal,hal_rate,hal_pass,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw,score_schema\n",
+    "question_cases.csv": "question_id,qa_category,question_type,qa_topic,instruction,output,ground_truth_doc,source_type,expected_behavior,selection_mode,regression_suite,metamorphic_relation,dataset_pool_id,dataset_role,gate_eligible,release_gate_eligible,case_status,gold_verified,human_review_required,case_source,dataset_version,qa_matrix_topic,benchmark_group,source_hash,source_title,source_url,priority,task_type,model,version,answer_excerpt,model_answer,acc,com,nac,hal,hal_rate,hal_pass,applicable_metrics,score_denominator,raw_metric_score,canonical_metric_count,answer_quality_score,rag_quality_score,overall_score,pass_fail,score_schema,score_scale,metric_source_hal,scoring_mode,static_overall_score,static_pass_fail,llm_judge_count,llm_judge_overall_score,llm_judge_pass_fail,llm_judge_status,llm_judge_provider,llm_judge_model,llm_judge_prompt_version,llm_judge_prompt_hash,llm_judge_prompt_preset,llm_judge_hal_pass,llm_judge_individual_scores,llm_judge_conflict,llm_judge_conflict_detected,llm_judge_unresolved_conflict,llm_judge_conflict_reason,llm_judge_conflict_resolution_policy,llm_judge_arbiter_config_id,llm_judge_arbitration_status,llm_judge_provider_refused,llm_judge_provider_refusal_reason,llm_judge_sanitized_eval,llm_judge_score_gap,llm_judge_score_min,llm_judge_score_max,llm_judge_pass_mismatch,llm_judge_base_average_score,llm_judge_arbiter_score,llm_judge_arbiter_override,regression_delta,regression_type,release_gate,error_type,judge_reason,static_reason,llm_judge_reason,metric_source_acc,metric_source_com,metric_source_nac\n",
+    "qa_slice_scores.csv": "version,model,slice_level,slice_dimension,slice_value,case_count,row_count,min_reliable_cases,reliability_status,pass_rate,overall_score,acc,com,nac,hal,hal_rate,hal_pass,score_schema\n",
     "run_release_gates.csv": "run_id,config_id,model,release_gate,total_cases,evaluated_cases,gate_eligible_cases,pass_count,review_count,block_count,critical_fail_count,pass_rate,core_pass_rate,core_pass_rate_min,reason\n",
     "regression_diff.csv": "question_id,version,baseline_version,overall_score,baseline_overall_score,delta,regression_type\n",
 }
@@ -217,32 +217,16 @@ UI_CASE_SUMMARY_FIELDS = (
     "answer_excerpt",
     "acc",
     "com",
-    "utl",
     "nac",
     "hal",
     "hal_rate",
     "hal_pass",
-    "fct",
-    "fmt",
-    "fmt_status",
-    "fmt_reason",
-    "fmt_source",
-    "fmt_violations",
-    "safe",
-    "safe_status",
-    "safe_source",
-    "safe_risk_tags",
-    "safe_review_required",
-    "safe_gate",
-    "safe_pass",
-    "utl_applicable",
     "applicable_metrics",
     "score_denominator",
     "raw_metric_score",
     "answer_quality_score",
     "rag_quality_score",
     "overall_score",
-    "overall_with_safe",
     "pass_fail",
     "score_schema",
     "score_scale",
@@ -284,20 +268,15 @@ UI_CASE_SUMMARY_FIELDS = (
 UI_CASE_SUMMARY_NUMERIC_FIELDS = {
     "acc",
     "com",
-    "utl",
     "nac",
     "hal",
     "hal_rate",
     "hal_pass",
-    "fct",
-    "fmt",
-    "safe",
     "score_denominator",
     "raw_metric_score",
     "answer_quality_score",
     "rag_quality_score",
     "overall_score",
-    "overall_with_safe",
     "static_overall_score",
     "llm_judge_count",
     "llm_judge_overall_score",
@@ -2761,10 +2740,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "judge_aggregation_method": str(resolved.get("judge_aggregation_method") or judge_settings.get("aggregation_method") or "auto").strip(),
             "judge_score_weights": {str(key): self.safe_float(value, default=0.0, minimum=0.0, maximum=100000.0) for key, value in weights.items()},
             "pass_threshold": self.safe_float(
-                resolved.get("pass_threshold", config.get("pass_threshold", matrix.get("pass_threshold", 60))),
-                default=60.0,
+                resolved.get("pass_threshold", config.get("pass_threshold", matrix.get("pass_threshold", 0.6))),
+                default=0.6,
                 minimum=0.0,
-                maximum=100.0,
+                maximum=1.0,
             ),
         }
 
@@ -2811,10 +2790,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "prompt_version": row.get("prompt_version", ""),
             "prompt_hash": row.get("prompt_hash", ""),
             "system_prompt_preset": row.get("system_prompt_preset", ""),
-            **{key: self.safe_float(row.get(key), default=0.0, minimum=0.0, maximum=20.0) for key in SCORE_METRIC_KEYS},
+            **{key: self.safe_float(row.get(key), default=0.0, minimum=0.0, maximum=1.0) for key in SCORE_METRIC_KEYS},
             "utl_applicable": self.judge_bool_value(row.get("utl_applicable", True)),
             "applicable_metrics": row.get("applicable_metrics", ""),
-            "score_denominator": self.safe_float(row.get("score_denominator"), default=80.0, minimum=1.0, maximum=100.0),
+            "score_denominator": self.safe_float(row.get("score_denominator"), default=float(len(SCORE_METRIC_KEYS)), minimum=1.0, maximum=float(len(SCORE_METRIC_KEYS))),
             "raw_metric_score": row.get("raw_metric_score", ""),
             "answer_quality_score": row.get("answer_quality_score", ""),
             "rag_quality_score": row.get("rag_quality_score", ""),
@@ -2825,8 +2804,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "reason": row.get("reason", ""),
         }
         if score["overall_score"] in ("", None):
-            raw = sum(self.safe_float(score.get(key), default=0.0, minimum=0.0, maximum=20.0) for key in SCORE_METRIC_KEYS)
-            score["overall_score"] = round(raw / score["score_denominator"] * 100.0, 2)
+            raw = sum(self.safe_float(score.get(key), default=0.0, minimum=0.0, maximum=1.0) for key in SCORE_METRIC_KEYS)
+            score["overall_score"] = round(raw / score["score_denominator"], 4)
         return score
 
     def write_projected_run_files(self, run_dir: Path) -> bool:
@@ -3977,26 +3956,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
 
     def safe_score(self, value):
-        return self.safe_float(value, default=0.0, minimum=0.0, maximum=100.0)
-
-    def judge_score_uses_zero_one_scale(self, row: dict) -> bool:
-        text = " ".join(
-            str(row.get(field) or "")
-            for field in ("score_scale", "source_score_scale", "score_schema", "prompt_version", "llm_judge_prompt_version")
-        ).lower()
-        return "0_1" in text or "utl_na_0_1" in text
+        return self.safe_float(value, default=0.0, minimum=0.0, maximum=1.0)
 
     def judge_overall_points(self, value, row: dict) -> float:
-        number = self.safe_score(value)
-        if self.judge_score_uses_zero_one_scale(row) and 0 <= number <= 1:
-            return round(number * 100.0, 4)
-        return number
+        return self.safe_score(value)
 
     def judge_metric_points(self, value, row: dict) -> float:
-        number = self.safe_float(value, default=0.0, minimum=0.0, maximum=20.0)
-        if self.judge_score_uses_zero_one_scale(row) and 0 <= number <= 1:
-            return round(number * 20.0, 4)
-        return number
+        return self.safe_float(value, default=0.0, minimum=0.0, maximum=1.0)
 
     def judge_bool_value(self, value):
         if isinstance(value, bool):
@@ -4013,16 +3979,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "provider": row.get("llm_judge_provider") or row.get("judge_provider") or row.get("provider", ""),
                 "model": row.get("llm_judge_model") or row.get("judge_model") or row.get("model", ""),
                 "overall_score": overall,
-                "pass": overall >= 60.0 and not critical_fail,
+                "pass": overall >= 0.6 and not critical_fail,
                 "critical_fail": critical_fail,
                 "error_type": row.get("llm_judge_error_type", row.get("error_type", "")),
                 "reason": row.get("llm_judge_reason", row.get("judge_reason", "")),
             }
         score = row.get("overall_score")
         if score in (None, ""):
-            denominator = self.safe_float(row.get("score_denominator"), default=80.0, minimum=1.0, maximum=100.0)
+            denominator = self.safe_float(row.get("score_denominator"), default=float(len(SCORE_METRIC_KEYS)), minimum=1.0, maximum=float(len(SCORE_METRIC_KEYS)))
             raw = sum(self.judge_metric_points(row.get(key), row) for key in SCORE_METRIC_KEYS)
-            score = round(raw / denominator * 100, 2)
+            score = round(raw / denominator, 4)
         overall = self.judge_overall_points(score, row)
         critical_fail = self.judge_bool_value(row.get("critical_fail"))
         return {
@@ -4030,7 +3996,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "provider": row.get("provider", ""),
             "model": row.get("model", ""),
             "overall_score": overall,
-            "pass": overall >= 60.0 and not critical_fail,
+            "pass": overall >= 0.6 and not critical_fail,
             "critical_fail": critical_fail,
             "error_type": row.get("error_type", ""),
             "reason": row.get("reason", ""),
@@ -6143,9 +6109,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         matrix = source_config.get("matrix") if isinstance(source_config.get("matrix"), dict) else {}
         pass_threshold = self.safe_float(
             payload.get("pass_threshold"),
-            default=self.safe_float(matrix.get("pass_threshold"), default=60.0, minimum=0.0, maximum=100.0),
+            default=self.safe_float(matrix.get("pass_threshold"), default=0.6, minimum=0.0, maximum=1.0),
             minimum=0.0,
-            maximum=100.0,
+            maximum=1.0,
         )
         blend_weight = self.safe_float(payload.get("blend_weight"), default=0.5, minimum=0.0, maximum=1.0)
         run_id = self.safe_run_id(
@@ -6416,7 +6382,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         deterministic["reason"] = score.get("static_reason") or score.get("reason") or ""
         deterministic["utl_applicable"] = self.bool_value(score.get("utl_applicable"), True)
         deterministic["applicable_metrics"] = ",".join(SCORE_METRIC_KEYS)
-        deterministic["score_denominator"] = len(SCORE_METRIC_KEYS) * 20
+        deterministic["score_denominator"] = len(SCORE_METRIC_KEYS)
         deterministic["raw_metric_score"] = sum(deterministic[key] for key in SCORE_METRIC_KEYS)
         answer_quality_value = score.get("answer_quality_score")
         if answer_quality_value in {"", None}:

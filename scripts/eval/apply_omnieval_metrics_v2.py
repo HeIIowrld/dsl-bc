@@ -22,11 +22,10 @@ MANIFEST_PATH = EVAL_SNAPSHOT / "manifest.json"
 KST = timezone(timedelta(hours=9))
 SNAPSHOT_RUN_ID = "eval_snapshot_20260624_094927"
 SNAPSHOT_RUN_TYPE = "omnieval_metrics_v2_snapshot"
-SCHEMA_VERSION = "omnieval_metrics_config_v2_utl_na_0_1"
 RUBRIC_VERSION = "omnieval_metrics_config.v2"
-PASS_POLICY = "mean_acc_com_nac_hal_pass_gte_0_60_utl_na"
+SCHEMA_VERSION = "omnieval_metrics_config_v2"
+PASS_POLICY = "mean_acc_com_nac_hal_pass_gte_0_60"
 PASS_THRESHOLD = 0.60
-METRIC_MAX_OLD = 20.0
 ACTIVE_METRICS = ("acc", "com", "nac", "hal_pass")
 SCORE_DERIVATION_POLICY = "ui_exported_llm_judge_individual_scores"
 
@@ -187,18 +186,12 @@ def normalized_judge_item(item: dict[str, Any], row: dict[str, Any], index: int)
     acc = score01(first_present(item, "acc", "accuracy"))
     com = score01(first_present(item, "com", "completeness"))
     nac = score01(first_present(item, "nac", "numeric_accuracy"))
-    hal_pass = score01(first_present(item, "hal_pass", "fct", "factuality"))
-    if hal_pass is None:
-        hal_source = first_present(item, "hal")
-        if str(item.get("source_score_scale") or "").strip() == "0_20" or (safe_float(hal_source) or 0) > 1:
-            hal_pass = score01(hal_source)
-    hal_rate = score01(first_present(item, "hal_rate"))
-    if hal_rate is None and item.get("hal") not in (None, "") and hal_pass is None:
-        hal_rate = score01(item.get("hal"))
-    if hal_rate is None and hal_pass is not None:
-        hal_rate = round(1.0 - hal_pass, 6)
-    if hal_pass is None and hal_rate is not None:
-        hal_pass = round(1.0 - hal_rate, 6)
+    hal_pass = score01(item.get("hal_pass"))
+    if any(value is None for value in (acc, com, nac, hal_pass)):
+        question = row.get("question_id") or row.get("case_id") or "-"
+        target = row.get("version") or row.get("target_config_id") or "-"
+        raise RuntimeError(f"Missing OmniEval judge score for {target}/{question}")
+    hal_rate = round(1.0 - hal_pass, 6)
     values = [acc, com, nac, hal_pass]
     overall = score01(item.get("overall_score"))
     if overall is None:
@@ -217,60 +210,15 @@ def normalized_judge_item(item: dict[str, Any], row: dict[str, Any], index: int)
         "question_id": row.get("question_id") or row.get("case_id") or "",
         "acc": acc,
         "com": com,
-        "utl": None,
-        "utl_applicable": False,
-        "nac": nac,
-        "hal": hal_rate,
-        "hal_rate": hal_rate,
-        "hal_pass": hal_pass,
-        "overall_score": overall,
-        "pass": bool_value(item.get("pass")) if item.get("pass") not in (None, "") else overall >= PASS_THRESHOLD,
-        "critical_fail": bool_value(item.get("critical_fail")),
-        "error_type": canonical_error_type(item.get("error_type")),
-        "reason": item.get("reason", ""),
-        "source_score_scale": str(item.get("source_score_scale") or "0_1"),
-        "score_schema": SCHEMA_VERSION,
-    }
-
-
-def normalized_row_score(row: dict[str, Any]) -> dict[str, Any] | None:
-    acc = score01(row.get("acc"))
-    com = score01(row.get("com"))
-    nac = score01(row.get("nac"))
-    hal_pass = score01(first_present(row, "hal_pass", "fct"))
-    hal_rate = score01(row.get("hal_rate"))
-    if hal_rate is None:
-        hal_rate = score01(row.get("hal"))
-    if hal_rate is None and hal_pass is not None:
-        hal_rate = round(1.0 - hal_pass, 6)
-    if hal_pass is None and hal_rate is not None:
-        hal_pass = round(1.0 - hal_rate, 6)
-    if all(value is None for value in (acc, com, nac, hal_pass)):
-        return None
-    overall = score01(row.get("overall_score")) or mean([acc, com, nac, hal_pass]) or 0.0
-    return {
-        "schema": "omnieval_metrics_v2_judge_score",
-        "config_id": str(row.get("llm_judge_config_id") or "pipeline_final_score"),
-        "label": str(row.get("llm_judge_config_id") or "pipeline_final_score"),
-        "provider": str(row.get("llm_judge_provider") or ""),
-        "model": str(row.get("llm_judge_model") or ""),
-        "role": "pipeline_final",
-        "target_config_id": row.get("version") or row.get("target_config_id") or "",
-        "question_id": row.get("question_id") or row.get("case_id") or "",
-        "acc": acc,
-        "com": com,
-        "utl": None,
-        "utl_applicable": False,
         "nac": nac,
         "hal": hal_rate,
         "hal_rate": hal_rate,
         "hal_pass": hal_pass,
         "overall_score": overall,
         "pass": overall >= PASS_THRESHOLD,
-        "critical_fail": bool_value(row.get("critical_fail")),
-        "error_type": canonical_error_type(row.get("error_type")),
-        "reason": row.get("judge_reason") or row.get("llm_judge_reason") or "",
-        "source_score_scale": str(row.get("score_scale") or "0_1"),
+        "critical_fail": bool_value(item.get("critical_fail")),
+        "error_type": canonical_error_type(item.get("error_type")),
+        "reason": item.get("reason", ""),
         "score_schema": SCHEMA_VERSION,
     }
 
@@ -289,10 +237,6 @@ def load_judge_scores_from_question_rows(
         for index, item in enumerate(json_list_value(row.get("llm_judge_individual_scores"))):
             if isinstance(item, dict):
                 scores.append(normalized_judge_item(item, row, index))
-        if not scores:
-            fallback = normalized_row_score(row)
-            if fallback:
-                scores = [fallback]
         if scores:
             by_case[(target, question)] = scores
             all_rows.extend(scores)
@@ -325,8 +269,6 @@ def consensus_for(key: tuple[str, str], judge_scores: dict[tuple[str, str], list
     return {
         "acc": acc,
         "com": com,
-        "utl": None,
-        "utl_applicable": False,
         "nac": nac,
         "hal": hal_rate,
         "hal_rate": hal_rate,
