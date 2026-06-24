@@ -1,0 +1,16 @@
+﻿run_id,config_id,model,release_gate,total_cases,evaluated_cases,gate_eligible_cases,pass_count,review_count,block_count,critical_fail_count,pass_rate,core_pass_rate,core_pass_rate_min,reason
+eval_snapshot_20260624_094927_base_gemma2_27b_it_q4,base_gemma2_27b_it_q4,gemma2:27b,not_applicable,0,800,0,,0,0,0,,0.5613,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_reference_qwen3_14b_q4,reference_qwen3_14b_q4,qwen3:14b,not_applicable,0,800,0,,0,0,0,,0.57,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_gemma_27b_korean_q4,bc_gemma_27b_korean_q4,bc-gemma-27b-korean:q4,not_applicable,0,800,0,,0,0,0,,0.545,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_reference_exaone35_78b_instruct_q4,reference_exaone35_78b_instruct_q4,exaone3.5:7.8b,not_applicable,0,800,0,,0,0,0,,0.53,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_base_gemma2_9b_it_q4,base_gemma2_9b_it_q4,gemma2:9b,not_applicable,0,800,0,,0,0,0,,0.495,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_base_deepseek_r1_distill_llama_8b_q4,base_deepseek_r1_distill_llama_8b_q4,deepseek-r1:8b,not_applicable,0,800,0,,0,0,0,,0.4688,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_gemma_27b_bcgpt_q4,bc_gemma_27b_bcgpt_q4,bc-gemma-27b-bcgpt:q4,not_applicable,0,800,0,,0,0,0,,0.4788,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_gemma_9b_bcgpt_q4,bc_gemma_9b_bcgpt_q4,bc-gemma-9b-bcgpt:q4,not_applicable,0,800,0,,0,0,0,,0.4313,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_base_sh2orc_llama31_korean_8b_instruct_q4,base_sh2orc_llama31_korean_8b_instruct_q4,sh2orc-llama31-korean-8b-instruct:q4,not_applicable,0,800,0,,0,0,0,,0.3025,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_llama31_finance_8b_q4,bc_llama31_finance_8b_q4,bc-llama31-finance-8b:q4,not_applicable,0,800,0,,0,0,0,,0.2637,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_deepseek_8b_bcgpt_chat_q4,bc_deepseek_8b_bcgpt_chat_q4,bc-deepseek-8b-bcgpt-chat:q4,not_applicable,0,800,0,,0,0,0,,0.2712,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_llama3_finance_8b_q4,bc_llama3_finance_8b_q4,bc-llama3-finance-8b:q4,not_applicable,0,800,0,,0,0,0,,0.2425,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_base_sh2orc_llama3_korean_8b_q4,base_sh2orc_llama3_korean_8b_q4,sh2orc-llama3-korean-8b:q4,not_applicable,0,800,0,,0,0,0,,0.1638,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_llama3_finance_12b_q4,bc_llama3_finance_12b_q4,bc-llama3-finance-12b:q4,not_applicable,0,800,0,,0,0,0,,0.1725,,utl_na_metrics_v2; no gate-eligible release set in final benchmark
+eval_snapshot_20260624_094927_bc_llama3_finance_20b_q4,bc_llama3_finance_20b_q4,bc-llama3-finance-20b:q4,not_applicable,0,800,0,,0,0,0,,0.12,,utl_na_metrics_v2; no gate-eligible release set in final benchmark

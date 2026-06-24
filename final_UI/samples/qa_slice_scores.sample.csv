@@ -1,2 +1,0 @@
-version,model,slice_level,slice_dimension,slice_value,case_count,row_count,min_reliable_cases,reliability_status,pass_rate,overall_score,acc,com,utl,nac,hal,utl_applicable_rate
-sample_ollama_qwen3_14b,qwen3:14b,1d,QA category,BC FAQ,2,2,30,low_count,1.0,86.5,17,18,16,18,17,1.0

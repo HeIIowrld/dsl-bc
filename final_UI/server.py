@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import base64
+import gzip
 import hashlib
 import ipaddress
 import io
@@ -14,6 +15,7 @@ import sys
 import threading
 import uuid
 from collections import Counter, defaultdict
+from email.utils import formatdate
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from datetime import datetime
@@ -74,8 +76,9 @@ EVAL_DATASET_CATALOG_PATH = PROJECT_ROOT / "config" / "eval_dataset_catalog.yaml
 EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
 EVAL_ARCHIVE_ROOT = EVAL_RUNS_ROOT / "archive"
 WEB_JOBS_ROOT = EVAL_ARCHIVE_ROOT / "web_jobs"
-FINAL_UI_DATA_RUN_ID = "__final_ui_data__"
-FINAL_UI_DATA_LABEL = "현재 내보낸 전체 결과"
+CURRENT_UI_DATA_RUN_ID = "__ui_runtime_data__"
+CURRENT_UI_DATA_RUN_ALIASES = {CURRENT_UI_DATA_RUN_ID, "__final_ui_data__"}
+CURRENT_UI_DATA_LABEL = "현재 내보낸 전체 결과"
 BENCHMARK_CSV_ROOT = PROJECT_ROOT / "questionlist" / "benchmark"
 REGRESSION_CSV_ROOT = PROJECT_ROOT / "questionlist" / "regression"
 USER_UPLOAD_CSV_ROOT = PROJECT_ROOT / "questionlist" / "user_uploads"
@@ -92,6 +95,10 @@ QUESTIONLIST_CSV_DIRS = [
     USER_UPLOAD_CSV_ROOT / "benchmark",
     USER_UPLOAD_CSV_ROOT / "regression",
 ]
+
+
+def is_current_ui_data_run_id(run_id: str) -> bool:
+    return str(run_id or "").strip() in CURRENT_UI_DATA_RUN_ALIASES
 EXCLUDED_DATASET_PATH_MARKERS = (
     "_unused_files",
     "archive",
@@ -113,9 +120,9 @@ RUN_EXCLUDE_MARKERS = ("SMOKE", "DEBUG", "TEST")
 RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs"}
 MIN_DISPLAY_QUESTIONS = 10
 EMPTY_LATEST_RUN_CSV = {
-    "eval_runs.csv": "run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,utl,nac,hal,scored_acc,scored_com,scored_utl,scored_nac,scored_hal,utl_applicable,utl_applicable_rate,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw\n",
-    "question_cases.csv": "question_id,qa_category,question_type,qa_topic,instruction,output,ground_truth_doc,source_type,expected_behavior,selection_mode,regression_suite,metamorphic_relation,dataset_pool_id,dataset_role,gate_eligible,release_gate_eligible,case_status,gold_verified,human_review_required,case_source,dataset_version,qa_matrix_topic,benchmark_group,source_hash,source_title,source_url,priority,task_type,model,version,answer_excerpt,model_answer,acc,com,utl,nac,hal,utl_applicable,applicable_metrics,score_denominator,raw_metric_score,answer_quality_score,rag_quality_score,overall_score,pass_fail,scoring_mode,static_overall_score,static_pass_fail,llm_judge_count,llm_judge_overall_score,llm_judge_pass_fail,llm_judge_status,llm_judge_provider,llm_judge_model,llm_judge_prompt_version,llm_judge_prompt_hash,llm_judge_prompt_preset,llm_judge_individual_scores,llm_judge_conflict,llm_judge_conflict_detected,llm_judge_unresolved_conflict,llm_judge_conflict_reason,llm_judge_conflict_resolution_policy,llm_judge_arbiter_config_id,llm_judge_arbitration_status,llm_judge_provider_refused,llm_judge_provider_refusal_reason,llm_judge_sanitized_eval,llm_judge_score_gap,llm_judge_score_min,llm_judge_score_max,llm_judge_pass_mismatch,llm_judge_base_average_score,llm_judge_arbiter_score,llm_judge_arbiter_override,regression_delta,regression_type,release_gate,error_type,judge_reason,static_reason,llm_judge_reason\n",
-    "qa_slice_scores.csv": "version,model,slice_level,slice_dimension,slice_value,case_count,row_count,min_reliable_cases,reliability_status,pass_rate,overall_score,acc,com,utl,nac,hal,utl_applicable_rate\n",
+    "eval_runs.csv": "run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,utl,utl_applicable_rate,nac,hal,hal_rate,hal_pass,fct,fmt,fmt_applicable_rate,overall_with_safe,safe,safe_pass_rate,safe_review_rate,safe_block_rate,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw,score_schema\n",
+    "question_cases.csv": "question_id,qa_category,question_type,qa_topic,instruction,output,ground_truth_doc,source_type,expected_behavior,selection_mode,regression_suite,metamorphic_relation,dataset_pool_id,dataset_role,gate_eligible,release_gate_eligible,case_status,gold_verified,human_review_required,case_source,dataset_version,qa_matrix_topic,benchmark_group,source_hash,source_title,source_url,priority,task_type,model,version,answer_excerpt,model_answer,acc,com,nac,utl,hal,hal_rate,hal_pass,fct,fmt,fmt_status,fmt_reason,fmt_source,fmt_violations,safe,safe_status,safe_source,safe_risk_tags,safe_review_required,safe_gate,safe_pass,overall_with_safe,applicable_metrics,score_denominator,raw_metric_score,canonical_metric_count,answer_quality_score,rag_quality_score,overall_score,pass_fail,score_schema,score_scale,metric_source_hal,legacy_acc,legacy_com,legacy_utl,legacy_nac,legacy_hal,legacy_utl_applicable,legacy_overall_score,legacy_pass_fail,legacy_error_type,legacy_answer_quality_score,legacy_rag_quality_score,scoring_mode,static_overall_score,static_pass_fail,llm_judge_count,llm_judge_overall_score,llm_judge_pass_fail,llm_judge_status,llm_judge_provider,llm_judge_model,llm_judge_prompt_version,llm_judge_prompt_hash,llm_judge_prompt_preset,llm_judge_hal_pass,llm_judge_individual_scores,llm_judge_conflict,llm_judge_conflict_detected,llm_judge_unresolved_conflict,llm_judge_conflict_reason,llm_judge_conflict_resolution_policy,llm_judge_arbiter_config_id,llm_judge_arbitration_status,llm_judge_provider_refused,llm_judge_provider_refusal_reason,llm_judge_sanitized_eval,llm_judge_score_gap,llm_judge_score_min,llm_judge_score_max,llm_judge_pass_mismatch,llm_judge_base_average_score,llm_judge_arbiter_score,llm_judge_arbiter_override,regression_delta,regression_type,release_gate,error_type,judge_reason,static_reason,llm_judge_reason,metric_source_acc,metric_source_com,metric_source_nac,metric_source_fct,metric_source_fmt,metric_source_safe\n",
+    "qa_slice_scores.csv": "version,model,slice_level,slice_dimension,slice_value,case_count,row_count,min_reliable_cases,reliability_status,pass_rate,overall_score,acc,com,utl,utl_applicable_rate,nac,hal,hal_rate,hal_pass,fct,fmt,fmt_applicable_rate,overall_with_safe,safe,safe_pass_rate,safe_review_rate,safe_block_rate,score_schema\n",
     "run_release_gates.csv": "run_id,config_id,model,release_gate,total_cases,evaluated_cases,gate_eligible_cases,pass_count,review_count,block_count,critical_fail_count,pass_rate,core_pass_rate,core_pass_rate_min,reason\n",
     "regression_diff.csv": "question_id,version,baseline_version,overall_score,baseline_overall_score,delta,regression_type\n",
 }
@@ -167,6 +174,150 @@ EVAL_JOBS: dict[str, dict] = {}
 EVAL_JOBS_LOCK = threading.Lock()
 CASE_SUMMARY_CACHE: dict[tuple[str, str, int, int], dict] = {}
 CASE_SUMMARY_CACHE_LOCK = threading.Lock()
+PROJECTED_RUN_TABLES_CACHE: dict[tuple, dict] = {}
+PROJECTED_RUN_TABLES_CACHE_LOCK = threading.Lock()
+PROJECTED_RUN_TABLES_CACHE_MAX = 4
+JUDGE_SCORE_RUN_SUMMARY_CACHE: dict[tuple, dict] = {}
+JUDGE_SCORE_RUN_SUMMARY_CACHE_LOCK = threading.Lock()
+JUDGE_SCORE_RUN_SUMMARY_CACHE_MAX = 16
+QUESTION_CASES_JUDGE_COUNTS_CACHE: dict[tuple, tuple[Counter, int]] = {}
+QUESTION_CASES_JUDGE_COUNTS_CACHE_LOCK = threading.Lock()
+QUESTION_CASES_JUDGE_COUNTS_CACHE_MAX = 8
+UI_CASE_SUMMARY_CACHE_VERSION = 8
+UI_CASE_SUMMARY_CACHE_ROOT = PROJECT_ROOT / "out" / "final_ui_cache" / "case_summary"
+UI_CASE_SUMMARY_MEMORY_CACHE: dict[str, dict] = {}
+UI_CASE_SUMMARY_CACHE_LOCK = threading.Lock()
+UI_CASE_SUMMARY_MEMORY_CACHE_MAX = 4
+UI_CASE_SUMMARY_FIELDS = (
+    "question_id",
+    "source_type",
+    "question_type",
+    "qa_matrix_topic",
+    "instruction",
+    "output",
+    "ground_truth_doc",
+    "source_title",
+    "scenario_tag",
+    "difficulty",
+    "regression_suite",
+    "dataset_pool_id",
+    "dataset_role",
+    "gate_eligible",
+    "release_gate_eligible",
+    "case_status",
+    "gold_verified",
+    "human_review_required",
+    "case_source",
+    "dataset_version",
+    "benchmark_group",
+    "task_type",
+    "model",
+    "version",
+    "answer_excerpt",
+    "acc",
+    "com",
+    "utl",
+    "nac",
+    "hal",
+    "hal_rate",
+    "hal_pass",
+    "fct",
+    "fmt",
+    "fmt_status",
+    "fmt_reason",
+    "fmt_source",
+    "fmt_violations",
+    "safe",
+    "safe_status",
+    "safe_source",
+    "safe_risk_tags",
+    "safe_review_required",
+    "safe_gate",
+    "safe_pass",
+    "utl_applicable",
+    "applicable_metrics",
+    "score_denominator",
+    "raw_metric_score",
+    "answer_quality_score",
+    "rag_quality_score",
+    "overall_score",
+    "overall_with_safe",
+    "pass_fail",
+    "score_schema",
+    "score_scale",
+    "scoring_mode",
+    "static_overall_score",
+    "llm_judge_count",
+    "llm_judge_overall_score",
+    "llm_judge_hal_pass",
+    "llm_judge_pass_fail",
+    "llm_judge_status",
+    "llm_judge_config_id",
+    "llm_judge_provider",
+    "llm_judge_model",
+    "judge_config_id",
+    "judge_provider",
+    "judge_model",
+    "llm_judge_conflict",
+    "llm_judge_conflict_detected",
+    "llm_judge_unresolved_conflict",
+    "llm_judge_conflict_reason",
+    "llm_judge_conflict_resolution_policy",
+    "llm_judge_arbiter_config_id",
+    "llm_judge_score_gap",
+    "llm_judge_score_min",
+    "llm_judge_score_max",
+    "llm_judge_pass_mismatch",
+    "llm_judge_arbiter_score",
+    "llm_judge_arbiter_override",
+    "regression_delta",
+    "regression_type",
+    "release_gate",
+    "error_type",
+    "static_error_type",
+    "llm_judge_error_type",
+    "judge_reason",
+    "static_reason",
+    "llm_judge_reason",
+)
+UI_CASE_SUMMARY_NUMERIC_FIELDS = {
+    "acc",
+    "com",
+    "utl",
+    "nac",
+    "hal",
+    "hal_rate",
+    "hal_pass",
+    "fct",
+    "fmt",
+    "safe",
+    "score_denominator",
+    "raw_metric_score",
+    "answer_quality_score",
+    "rag_quality_score",
+    "overall_score",
+    "overall_with_safe",
+    "static_overall_score",
+    "llm_judge_count",
+    "llm_judge_overall_score",
+    "llm_judge_hal_pass",
+    "llm_judge_score_gap",
+    "llm_judge_score_min",
+    "llm_judge_score_max",
+    "llm_judge_arbiter_score",
+    "regression_delta",
+}
+UI_CASE_SUMMARY_TEXT_LIMITS = {
+    "instruction": 260,
+    "output": 260,
+    "ground_truth_doc": 180,
+    "source_title": 180,
+    "answer_excerpt": 320,
+    "judge_reason": 320,
+    "static_reason": 320,
+    "llm_judge_reason": 420,
+    "llm_judge_conflict_reason": 260,
+}
 PROVIDER_ENV_ALIASES = {
     "ollama": {"base_url": ["OLLAMA_BASE_URL"]},
     "clova_studio": {
@@ -232,11 +383,19 @@ def parse_auth_users(raw: str) -> dict[str, dict[str, str]]:
     return users
 
 
+DEFAULT_FINAL_UI_AUTH_USERS_RAW = "admin:admin:admin,user:user:user"
+
 FINAL_UI_AUTH_TOKEN = (
     os.environ.get("FINAL_UI_AUTH_TOKEN", "").strip()
     or os.environ.get("FINAL_UI_ADMIN_TOKEN", "").strip()
 )
-FINAL_UI_AUTH_USERS = parse_auth_users(os.environ.get("FINAL_UI_AUTH_USERS", ""))
+FINAL_UI_AUTH_USERS_RAW = os.environ.get("FINAL_UI_AUTH_USERS")
+FINAL_UI_AUTH_USERS = parse_auth_users(
+    FINAL_UI_AUTH_USERS_RAW
+    if FINAL_UI_AUTH_USERS_RAW is not None and FINAL_UI_AUTH_USERS_RAW.strip()
+    else DEFAULT_FINAL_UI_AUTH_USERS_RAW
+)
+FINAL_UI_AUTH_USERS_SOURCE = "env" if FINAL_UI_AUTH_USERS_RAW is not None and FINAL_UI_AUTH_USERS_RAW.strip() else "default"
 FINAL_UI_AUTH_DISABLED = env_flag("FINAL_UI_AUTH_DISABLED", default=False)
 PUBLIC_BIND_HOSTS = {"", "0.0.0.0", "::", "[::]"}
 AUTH_ROLE_RANK = {"user": 1, "admin": 2}
@@ -614,6 +773,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/eval/runs":
             self.handle_eval_runs()
             return
+        if parsed.path == "/api/eval/case-summary":
+            self.handle_eval_case_summary(parsed.query)
+            return
+        if parsed.path == "/api/eval/case-detail":
+            self.handle_eval_case_detail(parsed.query)
+            return
         if parsed.path == "/api/eval/judge-comparison/options":
             self.handle_judge_comparison_options()
             return
@@ -665,6 +830,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "/api/eval/catalog",
             "/api/eval/latest-run",
             "/api/eval/runs",
+            "/api/eval/case-summary",
+            "/api/eval/case-detail",
             "/api/eval/judge-comparison/options",
             "/api/eval/judge-comparison/artifact",
             "/api/eval/jobs",
@@ -817,7 +984,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def authenticate_request(self, minimum_role: str) -> bool:
         identity = self.auth_identity_from_headers()
         if not identity:
-            self.send_auth_required("Final UI login is required.")
+            self.send_auth_required("User ID login is required.")
             return False
         username, role, scheme = identity
         self.current_actor = username
@@ -862,7 +1029,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.send_response(401)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("WWW-Authenticate", 'Basic realm="Final UI"')
+        self.send_header("WWW-Authenticate", 'Basic realm="User ID"')
         self.send_cors_headers()
         self.end_headers()
         if not getattr(self, "_head_only", False):
@@ -1025,7 +1192,18 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 return
             keep_lines = max(0, ACCESS_LOG_KEEP_LINES)
             lines = ACCESS_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
-            retained = lines[-keep_lines:] if keep_lines else []
+            retained_reversed = []
+            retained_bytes = 0
+            if keep_lines:
+                for line in reversed(lines):
+                    line_bytes = len((line + "\n").encode("utf-8", errors="replace"))
+                    if len(retained_reversed) >= keep_lines:
+                        break
+                    if retained_reversed and retained_bytes + line_bytes > ACCESS_LOG_MAX_BYTES:
+                        break
+                    retained_reversed.append(line)
+                    retained_bytes += line_bytes
+            retained = list(reversed(retained_reversed))
             archive_path = ACCESS_LOG_PATH.with_name(
                 f"access_log.{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
             )
@@ -1693,7 +1871,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "experiment_tag": source_spec.get("experiment_tag") or "",
             "rag_config": source_spec.get("rag_config") or "none",
             "safety_policy": "hidden_by_user",
-            "role_notes": "Hidden from the Final UI model registry by user request.",
+            "role_notes": "Hidden from the model registry by user request.",
             "model_group": source_spec.get("model_group") or "",
             "model_family": source_spec.get("model_family") or "",
             "model_family_color": source_spec.get("model_family_color") or "",
@@ -1779,7 +1957,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "model": model,
                     "message": f"Local path {'exists' if exists else 'does not exist'}: {local_path}",
                 },
-                status=200 if exists else 503,
+                status=200,
             )
             return
         if provider in {"openai_native", "openai_compatible", "generic_api", "clova_studio", "anthropic", "gemini"}:
@@ -1813,7 +1991,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "model": model,
                     "message": f"Ollama is not reachable at {base_url}: {exc}",
                 },
-                status=503,
+                status=200,
             )
             return
 
@@ -1841,7 +2019,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         "message": "Eval job is running, so live load/unload healthcheck was skipped.",
                         "health_check_mode": "load_unload",
                     },
-                    status=409,
+                    status=200,
                 )
                 return
 
@@ -1877,7 +2055,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         "loaded_before_health": loaded_before,
                         "loaded_after_probe": loaded_after_probe,
                     },
-                    status=503,
+                    status=200,
                 )
                 return
 
@@ -1932,7 +2110,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "model": model,
                 "message": f"Model is not installed in Ollama at {base_url}.",
             },
-            status=503,
+            status=200,
         )
 
     def query_bool(self, params: dict[str, list[str]], name: str, default: bool = False) -> bool:
@@ -2008,7 +2186,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "model": model_spec.get("model"),
                     "message": env_error or f"Environment variable or stored server API key is not set: {model_spec.get('api_key_env')}",
                 },
-                status=503,
+                status=200,
             )
             return
         is_live_probe = not bool(health_url)
@@ -2027,7 +2205,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "message": "chat_url, base_url, or health_url is required for API health checks.",
                     "health_check_mode": "live_probe",
                 },
-                status=503,
+                status=200,
             )
             return
         try:
@@ -2081,7 +2259,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "upstream_error": body_preview,
                     "health_check_mode": "live_probe" if is_live_probe else "health_endpoint",
                 },
-                status=200 if status == "connected" else 503,
+                status=200,
             )
         except (urlerror.URLError, TimeoutError, ValueError) as exc:
             self.send_json(
@@ -2093,7 +2271,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     "message": f"API is not reachable: {exc}",
                     "health_check_mode": "live_probe" if is_live_probe else "health_endpoint",
                 },
-                status=503,
+                status=200,
             )
 
     def auth_headers(self, model_spec: dict):
@@ -2196,7 +2374,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_latest_run_file(self, filename: str, query: str = ""):
         requested_run_id = self.requested_run_id(query)
-        if requested_run_id == FINAL_UI_DATA_RUN_ID:
+        if is_current_ui_data_run_id(requested_run_id) or (
+            not requested_run_id and not self.explicit_run_id() and self.current_ui_data_run_summary(selected=False)
+        ):
             exported_path = ROOT / "data" / filename
             if exported_path.exists():
                 self.serve_path(exported_path, content_type="text/csv; charset=utf-8")
@@ -2205,13 +2385,17 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             if empty_csv is not None:
                 self.send_text(empty_csv, content_type="text/csv; charset=utf-8")
                 return
-            self.send_json({"error": "exported UI file not found", "run_id": requested_run_id, "file": filename}, status=404)
+            self.send_json({"error": "exported UI file not found", "file": filename}, status=404)
             return
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
             self.send_json({"error": "unknown eval run", "run_id": requested_run_id}, status=404)
             return
         if latest:
+            current_path = latest / filename
+            if self.has_partitioned_run_source(latest) and self.projected_file_is_current(latest, filename):
+                self.serve_path(current_path, content_type="text/csv; charset=utf-8")
+                return
             projected = self.projected_run_csv(latest, filename)
             if projected is not None:
                 self.send_text(projected, content_type="text/csv; charset=utf-8")
@@ -2268,6 +2452,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not self.has_partitioned_run_source(run_dir):
             return None
         config = self.run_config(run_dir)
+        cache_key = self.projected_run_cache_key(run_dir, config)
+        with PROJECTED_RUN_TABLES_CACHE_LOCK:
+            cached = PROJECTED_RUN_TABLES_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        tables = self.build_projected_run_tables(run_dir, config)
+        if tables:
+            with PROJECTED_RUN_TABLES_CACHE_LOCK:
+                PROJECTED_RUN_TABLES_CACHE[cache_key] = tables
+                while len(PROJECTED_RUN_TABLES_CACHE) > PROJECTED_RUN_TABLES_CACHE_MAX:
+                    PROJECTED_RUN_TABLES_CACHE.pop(next(iter(PROJECTED_RUN_TABLES_CACHE)))
+        return tables
+
+    def build_projected_run_tables(self, run_dir: Path, config: dict) -> dict | None:
         cases = self.projected_run_cases(config)
         outputs = self.load_partitioned_outputs(run_dir)
         if not cases or not outputs:
@@ -2319,6 +2517,80 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "run_release_gates": run_release_gates,
             "question_rows": question_rows,
         }
+
+    def projected_run_cache_key(self, run_dir: Path, config: dict) -> tuple:
+        return (
+            str(run_dir.resolve(strict=False)),
+            self.projected_run_source_signatures(run_dir, config),
+        )
+
+    def projected_run_source_signatures(self, run_dir: Path, config: dict | None = None) -> tuple:
+        config = config if isinstance(config, dict) else self.run_config(run_dir)
+        paths: list[Path] = [self.run_config_path(run_dir), REGISTERED_TARGET_MODELS_PATH]
+        case_source = str(config.get("case_source") or "").strip()
+        if case_source:
+            try:
+                paths.append(self.resolve_project_path(case_source))
+            except (OSError, ValueError):
+                pass
+        for pattern in (
+            "by_target_model/*/model_outputs.jsonl",
+            "by_target_model/*/normalized_answers.jsonl",
+            "by_target_model/*/raw_responses.jsonl",
+            "by_judge/*/judge_scores.jsonl",
+            "by_judge/*/judge_scores.csv",
+        ):
+            paths.extend(sorted(run_dir.glob(pattern)))
+        fallback_sources = [
+            ("by_target_model", "model_outputs.jsonl"),
+            ("by_judge", "judge_scores.jsonl"),
+            ("by_judge", "judge_scores.csv"),
+        ]
+        for partition_dir, fallback_name in fallback_sources:
+            path = run_dir / fallback_name
+            if path.exists() and not (run_dir / partition_dir).is_dir():
+                paths.append(path)
+        return tuple(self.file_signature(path) for path in paths)
+
+    def file_signature(self, path: Path) -> tuple[str, int, int]:
+        resolved = str(path.resolve(strict=False))
+        try:
+            stat = path.stat()
+        except OSError:
+            return (resolved, 0, 0)
+        return (resolved, stat.st_mtime_ns, stat.st_size)
+
+    def projected_sources_mtime_ns(self, run_dir: Path, config: dict | None = None) -> int:
+        signatures = self.projected_run_source_signatures(run_dir, config)
+        return max((int(item[1]) for item in signatures), default=0)
+
+    def projected_file_is_current(self, run_dir: Path, filename: str, config: dict | None = None) -> bool:
+        path = run_dir / filename
+        if not path.exists():
+            return False
+        try:
+            return path.stat().st_mtime_ns >= self.projected_sources_mtime_ns(run_dir, config)
+        except OSError:
+            return False
+
+    def projected_csv_rows_if_current(self, run_dir: Path, filename: str) -> list[dict] | None:
+        if not self.has_partitioned_run_source(run_dir) or not self.projected_file_is_current(run_dir, filename):
+            return None
+        path = run_dir / filename
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                return list(csv.DictReader(handle))
+        except (OSError, csv.Error, UnicodeDecodeError):
+            return None
+
+    def first_projected_question_row_if_current(self, run_dir: Path) -> dict | None:
+        if not self.has_partitioned_run_source(run_dir) or not self.projected_file_is_current(run_dir, "question_cases.csv"):
+            return None
+        try:
+            with (run_dir / "question_cases.csv").open("r", encoding="utf-8-sig", newline="") as handle:
+                return next(csv.DictReader(handle), None)
+        except (OSError, csv.Error, UnicodeDecodeError):
+            return None
 
     def uses_sparse_output_projection(self, config: dict, *, cases: list[dict], configs: list[dict], outputs: list[dict]) -> bool:
         run_type = str(config.get("run_type") or "").lower()
@@ -2409,8 +2681,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         judge_root = run_dir / "by_judge"
         rows: list[dict] = []
         if judge_root.is_dir():
-            for path in sorted(judge_root.glob("*/judge_scores.jsonl")):
-                rows.extend(eval_read_jsonl(path))
+            for judge_dir in sorted(path for path in judge_root.iterdir() if path.is_dir()):
+                jsonl_path = judge_dir / "judge_scores.jsonl"
+                csv_path = judge_dir / "judge_scores.csv"
+                if jsonl_path.exists():
+                    rows.extend(eval_read_jsonl(jsonl_path))
+                elif csv_path.exists():
+                    rows.extend(self.read_csv_rows(csv_path))
         return rows
 
     def projected_run_scores(self, run_dir: Path, config: dict, cases: list[dict], configs: list[dict], outputs: list[dict]) -> list[dict]:
@@ -2423,8 +2700,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             case_id = str(row.get("case_id") or "").strip()
             if target_config_id and case_id:
                 judge_rows_by_key[(target_config_id, case_id)].append(row)
-        fallback_score_path = run_dir / "judge_scores.jsonl"
-        fallback_rows = eval_read_jsonl(fallback_score_path) if fallback_score_path.exists() else []
+        fallback_jsonl_path = run_dir / "judge_scores.jsonl"
+        fallback_csv_path = run_dir / "judge_scores.csv"
+        if fallback_jsonl_path.exists():
+            fallback_rows = eval_read_jsonl(fallback_jsonl_path)
+        elif fallback_csv_path.exists():
+            fallback_rows = self.read_csv_rows(fallback_csv_path)
+        else:
+            fallback_rows = []
         fallback_scores = {
             (str(row.get("config_id") or ""), str(row.get("case_id") or "")): row
             for row in fallback_rows
@@ -2563,32 +2846,56 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_latest_run(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
-        if requested_run_id == FINAL_UI_DATA_RUN_ID:
-            summary = self.final_ui_data_run_summary(selected=True)
+        if is_current_ui_data_run_id(requested_run_id):
+            summary = self.current_ui_data_run_summary(selected=True)
             if not summary:
-                self.send_json({"status": "missing", "message": "No exported Final UI data found."}, status=404)
+                self.send_json({"status": "missing", "message": "No exported UI data found."}, status=404)
                 return
             self.send_json(
                 {
                     "status": "ok",
                     **summary,
                     "path": str(ROOT / "data"),
-                    "case_source": "final_ui_export",
+                    "case_source": "ui_runtime_export",
                     "uses_final_question_sets": True,
                     "baseline_config": "",
                     "judge_config_ids": [],
                     "files": {
-                        "eval_runs": f"/data/eval_runs.csv?run_id={FINAL_UI_DATA_RUN_ID}",
-                        "question_cases": f"/data/question_cases.csv?run_id={FINAL_UI_DATA_RUN_ID}",
-                        "run_release_gates": f"/data/run_release_gates.csv?run_id={FINAL_UI_DATA_RUN_ID}",
-                        "regression_diff": f"/data/regression_diff.csv?run_id={FINAL_UI_DATA_RUN_ID}",
+                        "eval_runs": "/data/eval_runs.csv",
+                        "question_cases": "/data/question_cases.csv",
+                        "run_release_gates": "/data/run_release_gates.csv",
+                        "regression_diff": "/data/regression_diff.csv",
                         "report_html": "/report/regression_report.html",
-                        "report_raw_html": "/report/raw_regression_report.html",
-                        "report_ui": f"/?run_id={FINAL_UI_DATA_RUN_ID}#overview",
+                        "report_raw_html": "",
+                        "report_ui": "/#overview",
                     },
                 }
             )
             return
+        if not requested_run_id and not self.explicit_run_id():
+            summary = self.current_ui_data_run_summary(selected=True)
+            if summary:
+                self.send_json(
+                    {
+                        "status": "ok",
+                        **summary,
+                        "path": str(ROOT / "data"),
+                        "case_source": "ui_runtime_export",
+                        "uses_final_question_sets": True,
+                        "baseline_config": "",
+                        "judge_config_ids": [],
+                        "files": {
+                            "eval_runs": "/data/eval_runs.csv",
+                            "question_cases": "/data/question_cases.csv",
+                            "run_release_gates": "/data/run_release_gates.csv",
+                            "regression_diff": "/data/regression_diff.csv",
+                            "report_html": "/report/regression_report.html",
+                            "report_raw_html": "",
+                            "report_ui": "/#overview",
+                        },
+                    }
+                )
+                return
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
             self.send_json({"status": "missing", "error": "unknown eval run", "run_id": requested_run_id}, status=404)
@@ -2630,12 +2937,335 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def handle_eval_runs(self):
         self.send_json({"status": "ok", "runs": self.eval_run_summaries()})
 
+    def handle_eval_case_summary(self, query: str = ""):
+        run_id = self.requested_run_id(query) or self.default_selected_run_id()
+        if not run_id:
+            self.send_json({"status": "missing", "message": "No eval run found."}, status=404)
+            return
+        try:
+            cache_path = self.ensure_eval_case_summary_cache_path(run_id)
+        except FileNotFoundError:
+            self.send_json({"status": "missing", "error": "question_cases source not found", "run_id": run_id}, status=404)
+            return
+        except (OSError, csv.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self.send_json({"status": "error", "error": str(exc), "run_id": run_id}, status=500)
+            return
+        self.serve_path(cache_path, content_type="application/json; charset=utf-8")
+
+    def handle_eval_case_detail(self, query: str = ""):
+        params = parse_qs(query or "")
+        run_id = self.requested_run_id(query) or self.default_selected_run_id()
+        question_id = str((params.get("question_id") or params.get("case_id") or [""])[0]).strip()
+        version = str((params.get("version") or params.get("model") or [""])[0]).strip()
+        if not question_id or not version:
+            self.send_json({"status": "error", "error": "question_id and version are required"}, status=400)
+            return
+        source = self.eval_case_summary_source(run_id)
+        if not source:
+            self.send_json({"status": "missing", "error": "question_cases source not found", "run_id": run_id}, status=404)
+            return
+        try:
+            row = self.find_eval_case_detail_row(source, question_id, version)
+        except (OSError, csv.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self.send_json({"status": "error", "error": str(exc), "run_id": run_id}, status=500)
+            return
+        if row is None:
+            self.send_json(
+                {"status": "missing", "error": "case detail not found", "run_id": source["run_id"], "question_id": question_id, "version": version},
+                status=404,
+            )
+            return
+        self.send_json({"status": "ok", "run_id": source["run_id"], "question_id": question_id, "version": version, "row": row})
+
+    def find_eval_case_detail_row(self, source: dict, question_id: str, version: str) -> dict | None:
+        for row in self.iter_eval_case_summary_rows(source):
+            row_case_id = str(row.get("question_id") or row.get("case_id") or "").strip()
+            row_version = str(row.get("version") or row.get("model") or "").strip()
+            if row_case_id == question_id and row_version == version:
+                return dict(row)
+        return None
+
+    def ensure_eval_case_summary_cache_path(self, run_id: str) -> Path:
+        source = self.eval_case_summary_source(run_id)
+        if not source:
+            raise FileNotFoundError(run_id)
+        cache_key, _ = self.eval_case_summary_cache_key(source)
+        cache_path = self.ui_case_summary_cache_path(cache_key)
+        if cache_path.exists():
+            self.ensure_gzip_sidecar(cache_path)
+            return cache_path
+        with UI_CASE_SUMMARY_CACHE_LOCK:
+            if cache_path.exists():
+                self.ensure_gzip_sidecar(cache_path)
+                return cache_path
+            payload = self.build_eval_case_summary_payload(source, cache_key)
+            self.write_ui_case_summary_cache(cache_key, payload)
+        if not cache_path.exists():
+            raise OSError(f"failed to write UI case summary cache: {cache_path}")
+        return cache_path
+
+    def eval_case_summary_cache_key(self, source: dict) -> tuple[str, dict]:
+        source_key = {
+            "version": UI_CASE_SUMMARY_CACHE_VERSION,
+            "run_id": source["run_id"],
+            "source_kind": source["source_kind"],
+            "source_signature": source["source_signature"],
+        }
+        key_text = json.dumps(source_key, ensure_ascii=False, sort_keys=True, default=str)
+        return hashlib.sha256(key_text.encode("utf-8")).hexdigest(), source_key
+
+    def eval_case_summary_payload(self, run_id: str) -> dict:
+        source = self.eval_case_summary_source(run_id)
+        if not source:
+            raise FileNotFoundError(run_id)
+        cache_key, _ = self.eval_case_summary_cache_key(source)
+
+        with UI_CASE_SUMMARY_CACHE_LOCK:
+            cached = UI_CASE_SUMMARY_MEMORY_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
+        disk_payload = self.read_ui_case_summary_cache(cache_key)
+        if disk_payload is not None:
+            with UI_CASE_SUMMARY_CACHE_LOCK:
+                UI_CASE_SUMMARY_MEMORY_CACHE[cache_key] = disk_payload
+                self.trim_ui_case_summary_memory_cache()
+            return disk_payload
+
+        payload = self.build_eval_case_summary_payload(source, cache_key)
+        self.write_ui_case_summary_cache(cache_key, payload)
+        with UI_CASE_SUMMARY_CACHE_LOCK:
+            UI_CASE_SUMMARY_MEMORY_CACHE[cache_key] = payload
+            self.trim_ui_case_summary_memory_cache()
+        return payload
+
+    def build_eval_case_summary_payload(self, source: dict, cache_key: str) -> dict:
+        compact_rows = [self.compact_ui_case_row(row) for row in self.iter_eval_case_summary_rows(source)]
+        columns = [
+            field
+            for field in UI_CASE_SUMMARY_FIELDS
+            if any(field in row for row in compact_rows)
+        ]
+        rows = [[row.get(column, "") for column in columns] for row in compact_rows]
+        dictionaries = self.dictionary_encode_case_summary_rows(columns, rows)
+        question_ids = {
+            row.get("question_id") or row.get("case_id")
+            for row in compact_rows
+            if row.get("question_id") or row.get("case_id")
+        }
+        model_ids = {row.get("version") for row in compact_rows if row.get("version")}
+        payload = {
+            "status": "ok",
+            "format": "compact_case_summary_table_dict",
+            "version": UI_CASE_SUMMARY_CACHE_VERSION,
+            "run_id": source["run_id"],
+            "source_kind": source["source_kind"],
+            "source_label": source.get("source_label", ""),
+            "cache_key": cache_key,
+            "source_signature": source["source_signature"],
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "row_count": len(rows),
+            "unique_question_count": len(question_ids),
+            "model_count": len(model_ids),
+            "columns": columns,
+            "dictionaries": dictionaries,
+            "rows": rows,
+        }
+        return payload
+
+    def dictionary_encode_case_summary_rows(self, columns: list[str], rows: list[list]) -> dict:
+        dictionaries: dict[str, list[str]] = {}
+        for column_index, column in enumerate(columns):
+            if column in UI_CASE_SUMMARY_NUMERIC_FIELDS:
+                continue
+            values = [
+                row[column_index]
+                for row in rows
+                if column_index < len(row) and isinstance(row[column_index], str) and row[column_index] != ""
+            ]
+            if len(values) < 100:
+                continue
+            unique_values = list(dict.fromkeys(values))
+            raw_chars = sum(len(value) for value in values)
+            dict_chars = sum(len(value) for value in unique_values)
+            repeated_enough = len(unique_values) <= max(32, int(len(values) * 0.75))
+            saves_enough = raw_chars - dict_chars >= len(values) * 2
+            if not repeated_enough or not saves_enough:
+                continue
+            value_to_index = {value: index + 1 for index, value in enumerate(unique_values)}
+            for row in rows:
+                value = row[column_index] if column_index < len(row) else ""
+                row[column_index] = value_to_index.get(value, 0) if value else 0
+            dictionaries[column] = unique_values
+        return dictionaries
+
+    def eval_case_summary_source(self, run_id: str) -> dict | None:
+        run_id = str(run_id or "").strip() or self.default_selected_run_id()
+        if is_current_ui_data_run_id(run_id):
+            path = ROOT / "data" / "question_cases.csv"
+            if not path.exists():
+                return None
+            return {
+                "run_id": CURRENT_UI_DATA_RUN_ID,
+                "source_kind": "file",
+                "source_label": "ui_runtime_data/question_cases.csv",
+                "path": path,
+                "source_signature": self.file_signature(path),
+            }
+        run_dir = self.run_dir_by_id(run_id)
+        if not run_dir:
+            return None
+        current_path = run_dir / "question_cases.csv"
+        if self.has_partitioned_run_source(run_dir) and not self.projected_file_is_current(run_dir, "question_cases.csv"):
+            config = self.run_config(run_dir)
+            return {
+                "run_id": run_dir.name,
+                "source_kind": "projected",
+                "source_label": f"{run_dir.name}/projected question_cases",
+                "run_dir": run_dir,
+                "config": config,
+                "source_signature": self.projected_run_cache_key(run_dir, config),
+            }
+        if current_path.exists():
+            return {
+                "run_id": run_dir.name,
+                "source_kind": "file",
+                "source_label": f"{run_dir.name}/question_cases.csv",
+                "path": current_path,
+                "source_signature": self.file_signature(current_path),
+            }
+        return None
+
+    def iter_eval_case_summary_rows(self, source: dict):
+        if source.get("source_kind") == "projected":
+            tables = self.projected_run_tables(source["run_dir"])
+            for row in (tables or {}).get("question_rows", []):
+                yield row
+            return
+        path = source.get("path")
+        if not path:
+            return
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            yield from csv.DictReader(handle)
+
+    def compact_ui_case_row(self, row: dict) -> dict:
+        compact: dict = {}
+        aliases = {
+            "case_id": row.get("case_id") or row.get("question_id"),
+            "question_id": row.get("question_id") or row.get("case_id"),
+            "question": row.get("question") or row.get("instruction"),
+            "instruction": row.get("instruction") or row.get("question"),
+            "source_type": row.get("source_type") or row.get("qa_category"),
+            "qa_category": row.get("qa_category") or row.get("source_type"),
+            "qa_matrix_topic": row.get("qa_matrix_topic") or row.get("qa_topic"),
+            "qa_topic": row.get("qa_topic") or row.get("qa_matrix_topic"),
+        }
+        for field in UI_CASE_SUMMARY_FIELDS:
+            value = aliases.get(field, row.get(field))
+            if value is None or value == "":
+                continue
+            if field in UI_CASE_SUMMARY_NUMERIC_FIELDS:
+                compact[field] = self.compact_number(value)
+                continue
+            text = str(value)
+            limit = UI_CASE_SUMMARY_TEXT_LIMITS.get(field)
+            if limit and len(text) > limit:
+                text = text[:limit].rstrip() + "..."
+            compact[field] = text
+        return compact
+
+    def compact_number(self, value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 0
+        if number.is_integer():
+            return int(number)
+        return round(number, 4)
+
+    def ui_case_summary_cache_path(self, cache_key: str) -> Path:
+        safe_key = re.sub(r"[^a-f0-9]", "", str(cache_key).lower())[:64]
+        return UI_CASE_SUMMARY_CACHE_ROOT / f"{safe_key}.json"
+
+    def read_ui_case_summary_cache(self, cache_key: str) -> dict | None:
+        path = self.ui_case_summary_cache_path(cache_key)
+        if not path.exists():
+            return None
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if payload.get("cache_key") != cache_key or payload.get("version") != UI_CASE_SUMMARY_CACHE_VERSION:
+            return None
+        if not isinstance(payload.get("rows"), list):
+            return None
+        return payload
+
+    def write_ui_case_summary_cache(self, cache_key: str, payload: dict) -> None:
+        path = self.ui_case_summary_cache_path(cache_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(".tmp")
+        cache_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        try:
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                handle.write(cache_text)
+            tmp_path.replace(path)
+            self.ensure_gzip_sidecar(path)
+        except OSError:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                path.write_text(cache_text, encoding="utf-8")
+                self.ensure_gzip_sidecar(path)
+            except OSError:
+                pass
+
+    def gzip_sidecar_path(self, path: Path) -> Path:
+        return path.with_name(f"{path.name}.gz")
+
+    def gzip_sidecar_is_current(self, path: Path, gzip_path: Path) -> bool:
+        try:
+            return gzip_path.exists() and gzip_path.stat().st_mtime_ns >= path.stat().st_mtime_ns
+        except OSError:
+            return False
+
+    def ensure_gzip_sidecar(self, path: Path) -> Path | None:
+        if not path.exists():
+            return None
+        gzip_path = self.gzip_sidecar_path(path)
+        if self.gzip_sidecar_is_current(path, gzip_path):
+            return gzip_path
+        tmp_path = gzip_path.with_name(f"{gzip_path.name}.tmp")
+        try:
+            with path.open("rb") as source, tmp_path.open("wb") as raw_target, gzip.GzipFile(fileobj=raw_target, mode="wb", compresslevel=6, mtime=0) as target:
+                while True:
+                    chunk = source.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    target.write(chunk)
+            tmp_path.replace(gzip_path)
+            return gzip_path
+        except OSError:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+
+    def trim_ui_case_summary_memory_cache(self) -> None:
+        while len(UI_CASE_SUMMARY_MEMORY_CACHE) > UI_CASE_SUMMARY_MEMORY_CACHE_MAX:
+            UI_CASE_SUMMARY_MEMORY_CACHE.pop(next(iter(UI_CASE_SUMMARY_MEMORY_CACHE)))
+
     def handle_judge_comparison_options(self):
         self.send_json(
             {
                 "status": "ok",
                 "baseline_sources": self.judge_comparison_baseline_sources(),
                 "judge_runs": self.judge_comparison_run_sources(),
+                "comparison_reports": self.judge_comparison_report_sources(),
             }
         )
 
@@ -2667,6 +3297,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         baseline_source_id = str(payload.get("baseline_source_id") or "").strip()
         baseline_judge_config_id = str(payload.get("baseline_judge_config_id") or "").strip()
         candidate_run_id = str(payload.get("candidate_run_id") or "").strip()
+        candidate_judge_config_id = str(payload.get("candidate_judge_config_id") or "").strip()
         if not baseline_source_id or not baseline_judge_config_id or not candidate_run_id:
             self.send_json(
                 {"error": "baseline_source_id, baseline_judge_config_id, candidate_run_id are required"},
@@ -2681,6 +3312,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not candidate_dir:
             self.send_json({"error": f"candidate judge run not found: {candidate_run_id}"}, status=404)
             return
+        candidate_judges = self.judge_score_run_summary(candidate_dir).get("judge_configs", [])
+        candidate_judge_ids = [str(item.get("config_id") or "").strip() for item in candidate_judges if item.get("config_id")]
+        if not candidate_judge_config_id and len(candidate_judge_ids) == 1:
+            candidate_judge_config_id = candidate_judge_ids[0]
+        if not candidate_judge_config_id:
+            self.send_json({"error": "candidate_judge_config_id is required when a candidate run has multiple judges"}, status=400)
+            return
+        if candidate_judge_config_id not in candidate_judge_ids:
+            self.send_json({"error": f"candidate judge not found in run: {candidate_judge_config_id}"}, status=404)
+            return
         threshold = self.safe_float(payload.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=10000.0)
         score_gap_mode = str(payload.get("score_gap_mode") or "points").strip().lower()
         if score_gap_mode not in {"points", "relative_percent"}:
@@ -2692,6 +3333,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         arbiter_judge_config_id = str(payload.get("arbiter_judge_config_id") or "").strip()
         default_comparison_id = self.default_judge_comparison_id(
             baseline_judge_config_id=baseline_judge_config_id,
+            candidate_judge_config_id=candidate_judge_config_id,
             candidate_run_id=candidate_dir.name,
         )
         comparison_id = self.safe_run_id(payload.get("comparison_id") or default_comparison_id)
@@ -2702,6 +3344,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 baseline_label=baseline_label,
                 baseline_judge_config_id=baseline_judge_config_id,
                 candidate_dir=candidate_dir,
+                candidate_judge_config_id=candidate_judge_config_id,
                 out_dir=out_dir,
                 score_gap_threshold=threshold,
                 score_gap_mode=score_gap_mode,
@@ -2714,11 +3357,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         self.send_json({"status": "ok", **result})
 
-    def default_judge_comparison_id(self, *, baseline_judge_config_id: str, candidate_run_id: str) -> str:
+    def default_judge_comparison_id(self, *, baseline_judge_config_id: str, candidate_judge_config_id: str, candidate_run_id: str) -> str:
         judge_key = self.safe_run_id(baseline_judge_config_id).replace("_judge", "")
+        candidate_judge_key = self.safe_run_id(candidate_judge_config_id).replace("_judge", "")
         candidate_key = hashlib.sha1(candidate_run_id.encode("utf-8")).hexdigest()[:8]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"cmp_{judge_key[:32]}_{candidate_key}_{timestamp}"
+        return f"cmp_{judge_key[:24]}_vs_{candidate_judge_key[:24]}_{candidate_key}_{timestamp}"
 
     def judge_comparison_baseline_sources(self):
         sources = []
@@ -2726,8 +3370,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if exported.exists():
             sources.append(
                 self.judge_comparison_baseline_summary(
-                    "__final_ui_data__",
-                    "현재 UI 내보내기 데이터",
+                    CURRENT_UI_DATA_RUN_ID,
+                    "현재 UI 데이터",
                     exported,
                     selected=True,
                 )
@@ -2736,16 +3380,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             candidates = [path for path in EVAL_RUNS_ROOT.iterdir() if self.is_eval_run_dir(path)]
             candidates.sort(key=self.run_sort_key, reverse=True)
             for path in candidates:
-                if self.has_partitioned_run_source(path):
-                    self.write_projected_run_files(path)
-                sources.append(
-                    self.judge_comparison_baseline_summary(
-                        path.name,
-                        path.name,
-                        path / "question_cases.csv",
-                        selected=False,
-                    )
-                )
+                sources.append(self.judge_comparison_baseline_summary_for_run(path, selected=False))
         return [source for source in sources if source.get("judge_configs")]
 
     def judge_comparison_run_sources(self):
@@ -2755,7 +3390,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         candidates = [
             path
             for path in EVAL_RUNS_ROOT.iterdir()
-            if path.is_dir() and ((path / "judge_scores.jsonl").exists() or (path / "by_judge").is_dir())
+            if path.is_dir()
+            and (
+                (path / "judge_scores.jsonl").exists()
+                or (path / "judge_scores.csv").exists()
+                or (path / "by_judge").is_dir()
+            )
         ]
         candidates.sort(key=self.run_sort_key, reverse=True)
         for path in candidates:
@@ -2765,6 +3405,39 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             key=lambda source: (int(source.get("ok_rows") or 0), float(source.get("updated_at") or 0)),
             reverse=True,
         )
+
+    def judge_comparison_report_sources(self):
+        reports = []
+        if not EVAL_RUNS_ROOT.exists():
+            return reports
+        for summary_path in sorted(EVAL_RUNS_ROOT.glob("*/judge_comparisons/*/judge_comparison_summary.json")):
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8-sig"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            report_dir = summary_path.parent
+            report_path = report_dir / "judge_score_diff_report.md"
+            if not report_path.exists():
+                report_path = report_dir / "judge_comparison_report.md"
+            reports.append(
+                {
+                    "id": f"{summary_path.parents[2].name}/{report_dir.name}",
+                    "run_id": summary_path.parents[2].name,
+                    "comparison_id": report_dir.name,
+                    "updated_at": summary_path.stat().st_mtime,
+                    "matched_rows": self.safe_int(summary.get("matched_rows"), default=0, minimum=0, maximum=1000000),
+                    "arbiter_candidate_rows": self.safe_int(summary.get("arbiter_candidate_rows"), default=0, minimum=0, maximum=1000000),
+                    "arbiter_existing_candidate_rows": self.safe_int(summary.get("arbiter_existing_candidate_rows"), default=0, minimum=0, maximum=1000000),
+                    "arbiter_missing_rows": self.safe_int(summary.get("arbiter_missing_rows"), default=0, minimum=0, maximum=1000000),
+                    "score_gap_threshold": summary.get("score_gap_threshold", ""),
+                    "score_gap_mode": summary.get("score_gap_mode", ""),
+                    "include_error_type_mismatch": bool(summary.get("include_error_type_mismatch")),
+                    "summary_url": "/api/eval/judge-comparison/artifact?path=" + self.display_path(summary_path).replace("\\", "/"),
+                    "report_url": "/api/eval/judge-comparison/artifact?path=" + self.display_path(report_path).replace("\\", "/") if report_path.exists() else "",
+                }
+            )
+        reports.sort(key=lambda item: float(item.get("updated_at") or 0), reverse=True)
+        return reports
 
     def judge_comparison_baseline_summary(self, source_id: str, label: str, path: Path, *, selected: bool):
         judge_counts, rows = self.question_cases_judge_counts(path)
@@ -2780,19 +3453,122 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             ],
         }
 
+    def judge_comparison_baseline_summary_for_run(self, path: Path, *, selected: bool):
+        if self.has_partitioned_run_source(path):
+            judge_counts, rows = self.partitioned_run_judge_counts(path)
+            if judge_counts:
+                return {
+                    "source_id": path.name,
+                    "label": path.name,
+                    "path": self.display_path(path / "question_cases.csv"),
+                    "selected": selected,
+                    "rows": rows,
+                    "judge_configs": [
+                        {"config_id": config_id, "rows": count}
+                        for config_id, count in judge_counts.most_common()
+                    ],
+                }
+        return self.judge_comparison_baseline_summary(
+            path.name,
+            path.name,
+            path / "question_cases.csv",
+            selected=selected,
+        )
+
+    def partitioned_run_judge_counts(self, path: Path):
+        counts = Counter()
+        judge_root = path / "by_judge"
+        if judge_root.is_dir():
+            for judge_dir in sorted(item for item in judge_root.iterdir() if item.is_dir()):
+                jsonl_path = judge_dir / "judge_scores.jsonl"
+                csv_path = judge_dir / "judge_scores.csv"
+                config_id = judge_dir.name
+                count = self.count_jsonl_rows(jsonl_path) if jsonl_path.exists() else self.count_csv_rows(csv_path)
+                if config_id and count:
+                    counts[config_id] += count
+        rows = self.partitioned_output_row_count(path) or (max(counts.values()) if counts else 0)
+        return counts, rows
+
+    def partitioned_output_row_count(self, path: Path) -> int:
+        target_root = path / "by_target_model"
+        if not target_root.is_dir():
+            fallback = path / "model_outputs.jsonl"
+            return self.count_jsonl_rows(fallback) if fallback.exists() else 0
+        return sum(self.count_jsonl_rows(output_path) for output_path in sorted(target_root.glob("*/model_outputs.jsonl")))
+
+    def count_jsonl_rows(self, path: Path) -> int:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                return sum(1 for line in handle if line.strip())
+        except OSError:
+            return 0
+
+    def count_csv_rows(self, path: Path) -> int:
+        if not path.exists():
+            return 0
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.reader(handle)
+                try:
+                    next(reader)
+                except StopIteration:
+                    return 0
+                return sum(1 for _ in reader)
+        except (OSError, csv.Error, UnicodeDecodeError):
+            return 0
+
+    def read_csv_rows(self, path: Path) -> list[dict]:
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                return list(csv.DictReader(handle))
+        except (OSError, csv.Error, UnicodeDecodeError):
+            return []
+
     def judge_score_run_summary(self, path: Path):
+        cache_key = (
+            str(path.resolve(strict=False)),
+            self.judge_score_source_signatures(path),
+        )
+        with JUDGE_SCORE_RUN_SUMMARY_CACHE_LOCK:
+            cached = JUDGE_SCORE_RUN_SUMMARY_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+        summary = self.build_judge_score_run_summary(path)
+        with JUDGE_SCORE_RUN_SUMMARY_CACHE_LOCK:
+            JUDGE_SCORE_RUN_SUMMARY_CACHE[cache_key] = dict(summary)
+            while len(JUDGE_SCORE_RUN_SUMMARY_CACHE) > JUDGE_SCORE_RUN_SUMMARY_CACHE_MAX:
+                JUDGE_SCORE_RUN_SUMMARY_CACHE.pop(next(iter(JUDGE_SCORE_RUN_SUMMARY_CACHE)))
+        return summary
+
+    def judge_score_source_signatures(self, path: Path) -> tuple:
+        paths = []
+        judge_root = path / "by_judge"
+        if judge_root.is_dir():
+            for judge_dir in sorted(item for item in judge_root.iterdir() if item.is_dir()):
+                jsonl_path = judge_dir / "judge_scores.jsonl"
+                csv_path = judge_dir / "judge_scores.csv"
+                if jsonl_path.exists():
+                    paths.append(jsonl_path)
+                elif csv_path.exists():
+                    paths.append(csv_path)
+        fallback_jsonl = path / "judge_scores.jsonl"
+        fallback_csv = path / "judge_scores.csv"
+        if fallback_jsonl.exists():
+            paths.append(fallback_jsonl)
+        elif fallback_csv.exists():
+            paths.append(fallback_csv)
+        return tuple(self.file_signature(item) for item in paths)
+
+    def build_judge_score_run_summary(self, path: Path):
         config_counts = Counter()
         status_counts = Counter()
         row_count = 0
         ok_rows = 0
-        source_rows = self.load_partitioned_judge_rows(path)
-        if not source_rows and (path / "judge_scores.jsonl").exists():
-            source_rows = eval_read_jsonl(path / "judge_scores.jsonl")
-        for row in source_rows:
+        for row in self.iter_judge_score_rows(path):
             row_count += 1
             status = str(row.get("source_llm_judge_status") or row.get("llm_judge_status") or "ok").strip().lower()
             status_counts[status or "unknown"] += 1
-            if status == "ok":
+            if status == "ok" or self.judge_score_row_has_usable_score(row):
                 ok_rows += 1
                 config_id = str(row.get("llm_judge_config_id") or row.get("judge_config_id") or "").strip()
                 if config_id:
@@ -2811,12 +3587,60 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             ],
         }
 
+    def iter_judge_score_rows(self, path: Path):
+        source_paths = []
+        judge_root = path / "by_judge"
+        if judge_root.is_dir():
+            for judge_dir in sorted(item for item in judge_root.iterdir() if item.is_dir()):
+                jsonl_path = judge_dir / "judge_scores.jsonl"
+                csv_path = judge_dir / "judge_scores.csv"
+                if jsonl_path.exists():
+                    source_paths.append(jsonl_path)
+                elif csv_path.exists():
+                    source_paths.append(csv_path)
+        if not source_paths:
+            fallback_jsonl = path / "judge_scores.jsonl"
+            fallback_csv = path / "judge_scores.csv"
+            if fallback_jsonl.exists():
+                source_paths.append(fallback_jsonl)
+            elif fallback_csv.exists():
+                source_paths.append(fallback_csv)
+        for source_path in source_paths:
+            if source_path.suffix.lower() == ".csv":
+                yield from self.read_csv_rows(source_path)
+                continue
+            try:
+                with source_path.open("r", encoding="utf-8") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            yield json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+            except OSError:
+                continue
+
+    def judge_score_row_has_usable_score(self, row: dict) -> bool:
+        score = row.get("llm_judge_overall_score", row.get("overall_score"))
+        if score not in (None, ""):
+            try:
+                float(score)
+                return True
+            except (TypeError, ValueError):
+                pass
+        for key in SCORE_METRIC_KEYS:
+            if row.get(key) not in (None, ""):
+                return True
+        return False
+
     def resolve_judge_comparison_baseline(self, source_id: str):
-        if source_id == "__final_ui_data__":
-            return ROOT / "data" / "question_cases.csv", "현재 UI 내보내기 데이터"
+        if is_current_ui_data_run_id(source_id):
+            return ROOT / "data" / "question_cases.csv", "현재 UI 데이터"
         run_dir = self.run_dir_by_id(source_id)
         if run_dir:
-            if self.has_partitioned_run_source(run_dir):
+            if self.has_partitioned_run_source(run_dir) and not self.projected_file_is_current(run_dir, "question_cases.csv"):
                 self.write_projected_run_files(run_dir)
             return run_dir / "question_cases.csv", run_dir.name
         return None, ""
@@ -2826,7 +3650,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if not safe:
             return None
         candidate = EVAL_RUNS_ROOT / safe
-        if candidate.is_dir() and ((candidate / "judge_scores.jsonl").exists() or (candidate / "by_judge").is_dir()):
+        if candidate.is_dir() and (
+            (candidate / "judge_scores.jsonl").exists()
+            or (candidate / "judge_scores.csv").exists()
+            or (candidate / "by_judge").is_dir()
+        ):
             return candidate
         return None
 
@@ -2835,6 +3663,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         rows = 0
         if not path.exists():
             return counts, rows
+        cache_key = (str(path.resolve(strict=False)), self.file_signature(path))
+        with QUESTION_CASES_JUDGE_COUNTS_CACHE_LOCK:
+            cached = QUESTION_CASES_JUDGE_COUNTS_CACHE.get(cache_key)
+        if cached is not None:
+            cached_counts, cached_rows = cached
+            return Counter(cached_counts), cached_rows
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
                 for row in csv.DictReader(handle):
@@ -2845,6 +3679,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                             counts[config_id] += 1
         except (OSError, csv.Error):
             return Counter(), 0
+        with QUESTION_CASES_JUDGE_COUNTS_CACHE_LOCK:
+            QUESTION_CASES_JUDGE_COUNTS_CACHE[cache_key] = (Counter(counts), rows)
+            while len(QUESTION_CASES_JUDGE_COUNTS_CACHE) > QUESTION_CASES_JUDGE_COUNTS_CACHE_MAX:
+                QUESTION_CASES_JUDGE_COUNTS_CACHE.pop(next(iter(QUESTION_CASES_JUDGE_COUNTS_CACHE)))
         return counts, rows
 
     def load_baseline_judge_scores(self, path: Path, judge_config_id: str):
@@ -2874,14 +3712,19 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         break
         return scores, metadata
 
-    def load_candidate_judge_scores(self, run_dir: Path):
+    def load_candidate_judge_scores(self, run_dir: Path, judge_config_id: str = ""):
         scores = {}
         rows = self.load_partitioned_judge_rows(run_dir)
         if not rows and (run_dir / "judge_scores.jsonl").exists():
             rows = eval_read_jsonl(run_dir / "judge_scores.jsonl")
+        if not rows and (run_dir / "judge_scores.csv").exists():
+            rows = self.read_csv_rows(run_dir / "judge_scores.csv")
         for row in rows:
+            row_judge_id = str(row.get("llm_judge_config_id") or row.get("judge_config_id") or "").strip()
+            if judge_config_id and row_judge_id != judge_config_id:
+                continue
             status = str(row.get("source_llm_judge_status") or row.get("llm_judge_status") or "ok").strip().lower()
-            if status != "ok":
+            if status != "ok" and not self.judge_score_row_has_usable_score(row):
                 continue
             config_id = str(row.get("target_config_id") or row.get("config_id") or "").strip()
             case_id = str(row.get("case_id") or row.get("question_id") or "").strip()
@@ -2896,6 +3739,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         baseline_label: str,
         baseline_judge_config_id: str,
         candidate_dir: Path,
+        candidate_judge_config_id: str,
         out_dir: Path,
         score_gap_threshold: float,
         score_gap_mode: str,
@@ -2904,10 +3748,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         arbiter_judge_config_id: str,
     ):
         baseline_scores, case_meta = self.load_baseline_judge_scores(baseline_path, baseline_judge_config_id)
+        arbiter_requested = bool(arbiter_judge_config_id)
         arbiter_scores = {}
-        if arbiter_judge_config_id:
+        if arbiter_requested:
             arbiter_scores, _ = self.load_baseline_judge_scores(baseline_path, arbiter_judge_config_id)
-        candidate_scores = self.load_candidate_judge_scores(candidate_dir)
+        candidate_scores = self.load_candidate_judge_scores(candidate_dir, candidate_judge_config_id)
         if not baseline_scores:
             raise RuntimeError(f"No baseline rows found for judge config: {baseline_judge_config_id}")
         if not candidate_scores:
@@ -2930,11 +3775,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             cand_error = str(cand.get("error_type") or "")
             compare_base_error = eval_canonical_error_type(base_error) if normalize_error_type else base_error
             compare_cand_error = eval_canonical_error_type(cand_error) if normalize_error_type else cand_error
-            pass_mismatch = bool(base.get("pass")) != bool(cand.get("pass"))
+            base_pass = base_score >= 60.0
+            cand_pass = cand_score >= 60.0
+            pass_mismatch = base_pass != cand_pass
             error_mismatch = bool(include_error_type_mismatch and compare_base_error != compare_cand_error)
             reasons = []
             if pass_mismatch:
-                reasons.append("judge pass/fail disagreement")
+                reasons.append("judge pass decision disagreement")
             if score_gap_threshold_met:
                 if score_gap_mode == "relative_percent":
                     reasons.append(f"judge relative score gap {relative_gap:.2f}%")
@@ -2943,13 +3790,25 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             if error_mismatch:
                 reasons.append(f"judge error-type disagreement: {compare_base_error}, {compare_cand_error}")
             meta = case_meta.get((config_id, case_id), {})
+            conflict_detected = bool(reasons)
+            conflict_for_arbiter = conflict_detected
             arbiter = arbiter_scores.get((config_id, case_id), {}) if arbiter_scores else {}
             has_arbiter = bool(arbiter)
             arbiter_score = self.safe_score(arbiter.get("overall_score")) if has_arbiter else ""
-            arbiter_pass = bool(arbiter.get("pass")) if has_arbiter else ""
+            arbiter_pass = (arbiter_score >= 60.0) if has_arbiter else ""
             arbiter_error = str(arbiter.get("error_type") or "") if has_arbiter else ""
-            arbiter_status = "existing_arbiter_applied" if has_arbiter else ("missing_arbiter" if reasons else "not_required")
-            final_status = "complete" if has_arbiter else ("missing_arbiter" if reasons else "not_required")
+            if not conflict_detected:
+                arbiter_status = "not_required"
+                final_status = "not_required"
+            elif not arbiter_requested:
+                arbiter_status = "not_configured"
+                final_status = "comparison_only"
+            elif has_arbiter:
+                arbiter_status = "existing_arbiter_applied"
+                final_status = "complete"
+            else:
+                arbiter_status = "missing_arbiter"
+                final_status = "missing_arbiter"
             row = {
                 "config_id": config_id,
                 "case_id": case_id,
@@ -2966,15 +3825,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "score_gap_mode": score_gap_mode,
                 "selected_score_gap_value": selected_gap,
                 "score_gap_threshold_met": score_gap_threshold_met,
-                "baseline_pass": bool(base.get("pass")),
-                "candidate_pass": bool(cand.get("pass")),
+                "baseline_pass": base_pass,
+                "candidate_pass": cand_pass,
                 "pass_mismatch": pass_mismatch,
                 "baseline_error_type": base_error,
                 "candidate_error_type": cand_error,
                 "baseline_canonical_error_type": compare_base_error,
                 "candidate_canonical_error_type": compare_cand_error,
                 "error_type_mismatch": error_mismatch,
-                "conflict_for_arbiter": bool(reasons),
+                "conflict_detected": conflict_detected,
+                "conflict_for_arbiter": conflict_for_arbiter,
                 "conflict_reason": "; ".join(reasons),
                 "existing_arbiter_available": has_arbiter,
                 "existing_arbiter_judge": arbiter_judge_config_id if has_arbiter else "",
@@ -2983,17 +3843,17 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "existing_arbiter_error_type": arbiter_error,
                 "existing_arbiter_reason": arbiter.get("reason", "") if has_arbiter else "",
                 "arbiter_status": arbiter_status,
-                "resolved_judge": arbiter_judge_config_id if has_arbiter else "",
-                "resolved_score": arbiter_score,
-                "resolved_pass": arbiter_pass,
-                "resolved_error_type": arbiter_error,
-                "resolved_reason": arbiter.get("reason", "") if has_arbiter else "",
+                "resolved_judge": arbiter_judge_config_id if conflict_for_arbiter and has_arbiter else "",
+                "resolved_score": arbiter_score if conflict_for_arbiter and has_arbiter else "",
+                "resolved_pass": arbiter_pass if conflict_for_arbiter and has_arbiter else "",
+                "resolved_error_type": arbiter_error if conflict_for_arbiter and has_arbiter else "",
+                "resolved_reason": arbiter.get("reason", "") if conflict_for_arbiter and has_arbiter else "",
                 "final_status": final_status,
-                "final_judge": arbiter_judge_config_id if has_arbiter else "",
-                "final_score": arbiter_score,
-                "final_pass": arbiter_pass,
-                "final_error_type": arbiter_error,
-                "final_reason": arbiter.get("reason", "") if has_arbiter else "",
+                "final_judge": arbiter_judge_config_id if conflict_for_arbiter and has_arbiter else "",
+                "final_score": arbiter_score if conflict_for_arbiter and has_arbiter else "",
+                "final_pass": arbiter_pass if conflict_for_arbiter and has_arbiter else "",
+                "final_error_type": arbiter_error if conflict_for_arbiter and has_arbiter else "",
+                "final_reason": arbiter.get("reason", "") if conflict_for_arbiter and has_arbiter else "",
                 "topic_key": " / ".join(
                     item
                     for item in [
@@ -3010,7 +3870,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "candidate_reason": cand.get("reason", ""),
             }
             rows.append(row)
-            if reasons and not has_arbiter:
+            if conflict_for_arbiter and not has_arbiter:
                 arbiter_keys.append(
                     {
                         "config_id": config_id,
@@ -3039,6 +3899,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             candidate_scores=candidate_scores,
             baseline_label=baseline_label,
             baseline_judge_config_id=baseline_judge_config_id,
+            candidate_judge_config_id=candidate_judge_config_id,
             candidate_run_id=candidate_dir.name,
             score_gap_threshold=score_gap_threshold,
             score_gap_mode=score_gap_mode,
@@ -3104,6 +3965,25 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def safe_score(self, value):
         return self.safe_float(value, default=0.0, minimum=0.0, maximum=100.0)
 
+    def judge_score_uses_zero_one_scale(self, row: dict) -> bool:
+        text = " ".join(
+            str(row.get(field) or "")
+            for field in ("score_scale", "source_score_scale", "score_schema", "prompt_version", "llm_judge_prompt_version")
+        ).lower()
+        return "0_1" in text or "utl_na_0_1" in text
+
+    def judge_overall_points(self, value, row: dict) -> float:
+        number = self.safe_score(value)
+        if self.judge_score_uses_zero_one_scale(row) and 0 <= number <= 1:
+            return round(number * 100.0, 4)
+        return number
+
+    def judge_metric_points(self, value, row: dict) -> float:
+        number = self.safe_float(value, default=0.0, minimum=0.0, maximum=20.0)
+        if self.judge_score_uses_zero_one_scale(row) and 0 <= number <= 1:
+            return round(number * 20.0, 4)
+        return number
+
     def judge_bool_value(self, value):
         if isinstance(value, bool):
             return value
@@ -3112,28 +3992,32 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def normalized_judge_score(self, row: dict, *, source: str):
         if source == "candidate":
             score = row.get("llm_judge_overall_score", row.get("overall_score"))
+            overall = self.judge_overall_points(score, row)
+            critical_fail = self.judge_bool_value(row.get("llm_judge_critical_fail", row.get("critical_fail")))
             return {
                 "config_id": row.get("llm_judge_config_id") or row.get("judge_config_id") or row.get("config_id", ""),
                 "provider": row.get("llm_judge_provider") or row.get("judge_provider") or row.get("provider", ""),
                 "model": row.get("llm_judge_model") or row.get("judge_model") or row.get("model", ""),
-                "overall_score": self.safe_score(score),
-                "pass": self.judge_bool_value(row.get("llm_judge_pass", row.get("pass"))),
-                "critical_fail": self.judge_bool_value(row.get("llm_judge_critical_fail", row.get("critical_fail"))),
+                "overall_score": overall,
+                "pass": overall >= 60.0 and not critical_fail,
+                "critical_fail": critical_fail,
                 "error_type": row.get("llm_judge_error_type", row.get("error_type", "")),
                 "reason": row.get("llm_judge_reason", row.get("judge_reason", "")),
             }
         score = row.get("overall_score")
         if score in (None, ""):
             denominator = self.safe_float(row.get("score_denominator"), default=80.0, minimum=1.0, maximum=100.0)
-            raw = sum(self.safe_float(row.get(key), default=0.0, minimum=0.0, maximum=20.0) for key in SCORE_METRIC_KEYS)
+            raw = sum(self.judge_metric_points(row.get(key), row) for key in SCORE_METRIC_KEYS)
             score = round(raw / denominator * 100, 2)
+        overall = self.judge_overall_points(score, row)
+        critical_fail = self.judge_bool_value(row.get("critical_fail"))
         return {
             "config_id": row.get("config_id", ""),
             "provider": row.get("provider", ""),
             "model": row.get("model", ""),
-            "overall_score": self.safe_score(score),
-            "pass": self.judge_bool_value(row.get("pass")),
-            "critical_fail": self.judge_bool_value(row.get("critical_fail")),
+            "overall_score": overall,
+            "pass": overall >= 60.0 and not critical_fail,
+            "critical_fail": critical_fail,
             "error_type": row.get("error_type", ""),
             "reason": row.get("reason", ""),
         }
@@ -3146,6 +4030,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         candidate_scores: dict,
         baseline_label: str,
         baseline_judge_config_id: str,
+        candidate_judge_config_id: str,
         candidate_run_id: str,
         score_gap_threshold: float,
         score_gap_mode: str,
@@ -3163,6 +4048,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         ]
         baseline_values = [self.safe_score(row.get("baseline_score")) for row in rows]
         candidate_values = [self.safe_score(row.get("candidate_score")) for row in rows]
+        conflict_rows = sum(1 for row in rows if row.get("conflict_detected", row.get("conflict_for_arbiter")))
         arbiter_candidate_rows = sum(1 for row in rows if row.get("conflict_for_arbiter"))
         arbiter_existing_rows = sum(1 for row in rows if row.get("existing_arbiter_available"))
         arbiter_existing_candidate_rows = sum(
@@ -3178,6 +4064,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return {
             "baseline_label": baseline_label,
             "baseline_judge_config_id": baseline_judge_config_id,
+            "candidate_judge_config_id": candidate_judge_config_id,
             "candidate_run_id": candidate_run_id,
             "score_gap_threshold": score_gap_threshold,
             "score_gap_mode": score_gap_mode,
@@ -3186,6 +4073,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "include_error_type_mismatch": include_error_type_mismatch,
             "normalize_error_type": normalize_error_type,
             "arbiter_judge_config_id": arbiter_judge_config_id,
+            "arbiter_configured": bool(arbiter_judge_config_id),
             "arbiter_source_rows": len(arbiter_scores),
             "baseline_source_rows": len(baseline_scores),
             "candidate_source_rows": len(candidate_scores),
@@ -3208,11 +4096,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "pass_mismatch_rows": sum(1 for row in rows if row.get("pass_mismatch")),
             "error_type_total_mismatch_rows": error_type_total_mismatch_rows,
             "error_type_mismatch_rows": sum(1 for row in rows if row.get("error_type_mismatch")),
+            "conflict_rows": conflict_rows,
+            "comparison_only_conflict_rows": conflict_rows - arbiter_candidate_rows,
             "arbiter_candidate_rows": arbiter_candidate_rows,
             "arbiter_existing_rows": arbiter_existing_rows,
             "arbiter_existing_candidate_rows": arbiter_existing_candidate_rows,
             "arbiter_missing_rows": arbiter_candidate_rows - arbiter_existing_candidate_rows,
-            "arbiter_not_required_rows": sum(1 for row in rows if not row.get("conflict_for_arbiter")),
+            "arbiter_not_required_rows": sum(
+                1 for row in rows if not row.get("conflict_detected", row.get("conflict_for_arbiter"))
+            ),
             "arbiter_key_rows": arbiter_key_rows,
             "final_complete_rows": len(final_rows),
             "final_complete_candidate_rows": len(final_candidate_rows),
@@ -3389,7 +4281,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         ]
         positive = [row for row in top_rows if row.get("direction") == "candidate_higher"][:10]
         negative = [row for row in top_rows if row.get("direction") == "baseline_higher"][:10]
-        top_headers_with_final = ["모델", "문항", "분류", "유형", "Baseline", "Candidate", "Final", "차이", "질문"]
+        top_headers_with_final = ["모델", "문항", "분류", "유형", "기준 점수", "비교 점수", "반영 점수", "차이", "질문"]
         positive_rows = [
             [
                 row.get("config_id", ""),
@@ -3418,17 +4310,54 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             ]
             for row in negative
         ]
+        if arbiter_judge:
+            threshold_scope_label = "중재 Judge 후보 점수 차이 기준"
+            arbiter_run_note = "- 새 중재 Judge는 실행하지 않았고, 기존 결과가 없는 후보 행만 후속 입력으로 산출했습니다."
+            arbiter_summary_lines = [
+                f"- 중재 Judge 대상 후보: {summary.get('arbiter_candidate_rows', 0):,}건",
+                f"- 기존 중재 Judge 반영 가능 후보: {summary.get('arbiter_existing_candidate_rows', 0):,}건",
+                f"- 기존 중재 Judge가 없는 후보: {summary.get('arbiter_missing_rows', 0):,}건",
+                f"- 후속 중재 Judge 입력 JSONL 행: {summary.get('arbiter_key_rows', 0):,}건",
+                f"- 부분 반영값 완료 행: {summary.get('final_complete_rows', 0):,}건",
+                f"- 부분 반영값 평균: {summary.get('final_avg')}",
+            ]
+            arbiter_detail_lines = [
+                "## 기존 중재 Judge 부분 반영",
+                "",
+                f"- 기존 중재 Judge 원본 행: {summary.get('arbiter_source_rows', 0):,}건",
+                f"- 비교 전체 중 기존 중재 Judge 결과가 있는 행: {summary.get('arbiter_existing_rows', 0):,}건",
+                f"- 중재 Judge 후보 중 반영값 완료 행: {summary.get('final_complete_candidate_rows', 0):,}건",
+                f"- 중재 Judge 후보 중 반영값 미완료 행: {summary.get('final_missing_candidate_rows', 0):,}건",
+                f"- 반영값 완료 행 중 통과: {summary.get('final_pass_rows', 0):,}건",
+                f"- 후보가 아니어서 중재 Judge가 필요 없는 행: {summary.get('arbiter_not_required_rows', 0):,}건",
+                f"- 기존 결과가 없는 후보는 새 호출 없이 `judge_comparison_arbiter_keys.jsonl`에만 남겼습니다.",
+            ]
+        else:
+            threshold_scope_label = "충돌 후보 점수 차이 기준"
+            arbiter_run_note = "- 중재 Judge를 선택하지 않아 기존 중재 Judge 조회와 후속 중재 Judge 입력 생성을 모두 건너뛰었습니다."
+            arbiter_summary_lines = [
+                f"- 충돌 행: {summary.get('conflict_rows', 0):,}건",
+                f"- 중재 Judge 대상 후보: {summary.get('arbiter_candidate_rows', 0):,}건",
+                f"- 후속 중재 Judge 입력 JSONL 행: {summary.get('arbiter_key_rows', 0):,}건",
+                "- 부분 반영값: 중재 Judge를 선택하지 않은 비교 전용 리포트",
+            ]
+            arbiter_detail_lines = [
+                "## 중재 Judge 미사용 비교",
+                "",
+                f"- 비교 전용 충돌 행: {summary.get('comparison_only_conflict_rows', 0):,}건",
+                "- 중재 Judge를 선택하지 않아 기존 결과를 조회하지 않았고, 후속 중재 Judge 입력도 만들지 않았습니다.",
+            ]
         lines = [
             "# Judge-vs-Judge 점수 차이 리포트",
             "",
             "## 범위",
             "",
             f"- 기준 Judge: {summary.get('baseline_judge_config_id')} ({summary.get('baseline_label')})",
-            f"- 비교 Judge run: {summary.get('candidate_run_id')}",
+            f"- 비교 Judge 실행: {summary.get('candidate_run_id')}",
             "- 기준 점수 차이: `비교 Judge 점수 - 기준 Judge 점수`",
-            f"- Arbiter 점수차 후보 기준: {threshold_label} ({'기준 Judge 대비 상대 차이' if score_gap_mode == 'relative_percent' else '절대 점수차/%p'})",
-            f"- 기존 Arbiter 결과: {arbiter_judge or '선택 안 함'}",
-            "- 새 Arbiter는 실행하지 않았고, 기존 결과가 없는 후보 행만 후속 입력으로 산출했습니다.",
+            f"- {threshold_scope_label}: {threshold_label} ({'기준 Judge 대비 상대 차이' if score_gap_mode == 'relative_percent' else '절대 점수차/%p'})",
+            f"- 기존 중재 Judge 결과: {arbiter_judge or '선택 안 함'}",
+            arbiter_run_note,
             "",
             "## 핵심 요약",
             "",
@@ -3439,25 +4368,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             f"- 평균 절대 차이: {summary.get('avg_abs_gap')}",
             f"- P90 절대 차이: {summary.get('p90_abs_gap')}",
             f"- {threshold_label} 차이: {summary.get('gap_threshold_rows', 0):,}건",
-            f"- pass/fail 불일치: {summary.get('pass_mismatch_rows', 0):,}건",
-            f"- fail 유형 불일치 전체: {summary.get('error_type_total_mismatch_rows', 0):,}건",
-            f"- fail 유형 불일치 후보 포함: {'예' if summary.get('include_error_type_mismatch') else '아니오'}",
-            f"- Arbiter 대상 후보: {summary.get('arbiter_candidate_rows', 0):,}건",
-            f"- 기존 Arbiter 반영 가능 후보: {summary.get('arbiter_existing_candidate_rows', 0):,}건",
-            f"- 기존 Arbiter 없는 후보: {summary.get('arbiter_missing_rows', 0):,}건",
-            f"- 후속 Arbiter 입력 JSONL 행: {summary.get('arbiter_key_rows', 0):,}건",
-            f"- 부분 최종값 완료 행: {summary.get('final_complete_rows', 0):,}건",
-            f"- 부분 최종값 평균: {summary.get('final_avg')}",
+            f"- 통과 판정 불일치: {summary.get('pass_mismatch_rows', 0):,}건",
+            f"- 실패 유형 불일치 전체: {summary.get('error_type_total_mismatch_rows', 0):,}건",
+            f"- 실패 유형 불일치 후보 포함: {'예' if summary.get('include_error_type_mismatch') else '아니오'}",
+            *arbiter_summary_lines,
             "",
-            "## 기존 Arbiter 부분 반영",
-            "",
-            f"- 기존 Arbiter source rows: {summary.get('arbiter_source_rows', 0):,}건",
-            f"- 비교 전체 중 기존 Arbiter 결과가 있는 행: {summary.get('arbiter_existing_rows', 0):,}건",
-            f"- Arbiter 후보 중 최종값 완료 행: {summary.get('final_complete_candidate_rows', 0):,}건",
-            f"- Arbiter 후보 중 최종값 미완료 행: {summary.get('final_missing_candidate_rows', 0):,}건",
-            f"- 최종값 완료 행 중 pass: {summary.get('final_pass_rows', 0):,}건",
-            f"- 후보가 아니어서 Arbiter가 필요 없는 행: {summary.get('arbiter_not_required_rows', 0):,}건",
-            f"- 기존 결과가 없는 후보는 새 호출 없이 `judge_comparison_arbiter_keys.jsonl`에만 남겼습니다.",
+            *arbiter_detail_lines,
             "",
             "## 절대 점수 차이 구간",
             "",
@@ -3465,15 +4381,15 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "",
             "## 모델별 차이",
             "",
-            table(["모델", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", "P90 절대차", threshold_label, "Pass 불일치"], model_rows),
+            table(["모델", "행", "기준 평균", "비교 평균", "평균 차이", "평균 절대차", "P90 절대차", threshold_label, "통과 판정 불일치"], model_rows),
             "",
             "## 대분류별 차이",
             "",
-            table(["대분류", "행", "Baseline 평균", "Candidate 평균", "평균 차이", "평균 절대차", threshold_label, "Pass 불일치"], category_rows),
+            table(["대분류", "행", "기준 평균", "비교 평균", "평균 차이", "평균 절대차", threshold_label, "통과 판정 불일치"], category_rows),
             "",
             "## 세부 주제별 변동이 큰 영역",
             "",
-            table(["분류 / 유형 / 토픽", "행", "평균 차이", "평균 절대차", "P90 절대차", threshold_label, "Pass 불일치"], topic_rows),
+            table(["분류 / 유형 / 토픽", "행", "평균 차이", "평균 절대차", "P90 절대차", threshold_label, "통과 판정 불일치"], topic_rows),
             "",
             "## 비교 Judge가 더 높게 준 대표 케이스",
             "",
@@ -3486,9 +4402,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "## 해석 메모",
             "",
             "- 평균 차이는 전반적인 채점 성향을, 평균 절대 차이는 행 단위 판단 흔들림을 보여줍니다.",
-            "- Arbiter 후보는 pass/fail 불일치, 점수 차이 기준, 선택 시 fail 유형 불일치의 합집합입니다.",
-            "- fail 유형 불일치는 기본적으로 Arbiter 후보에서 제외하고, 별도 선택 시에만 포함합니다.",
-            "- fail 유형 비교는 canonical error_type 기준으로 계산할 수 있습니다.",
+            "- 중재 Judge 후보는 통과 판정 불일치, 점수 차이 기준, 선택 시 실패 유형 불일치의 합집합입니다.",
+            "- 실패 유형 불일치는 기본적으로 중재 Judge 후보에서 제외하고, 별도 선택 시에만 포함합니다.",
+            "- 실패 유형 비교는 정규화된 error_type 기준으로 계산할 수 있습니다.",
             "",
         ]
         return "\n".join(lines)
@@ -3508,10 +4424,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "llm_judge_provider": "",
             "llm_judge_model": "",
         }
-        projected = self.projected_run_tables(latest)
-        projected_rows = projected.get("question_rows", []) if projected else []
-        if projected_rows:
-            row = projected_rows[0]
+        row = self.first_projected_question_row_if_current(latest)
+        if row is None:
+            projected = self.projected_run_tables(latest) if self.has_partitioned_run_source(latest) else None
+            projected_rows = projected.get("question_rows", []) if projected else []
+            row = projected_rows[0] if projected_rows else None
+        if row:
             row_scoring_mode = str(row.get("scoring_mode") or "").strip()
             if row_scoring_mode:
                 summary["scoring_mode"] = row_scoring_mode
@@ -3559,8 +4477,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_latest_report(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
-        if requested_run_id == FINAL_UI_DATA_RUN_ID:
-            self.send_text(self.ui_report_html(FINAL_UI_DATA_RUN_ID), content_type="text/html; charset=utf-8")
+        if is_current_ui_data_run_id(requested_run_id) or (
+            not requested_run_id and not self.explicit_run_id() and self.current_ui_data_run_summary(selected=False)
+        ):
+            self.send_text(self.ui_report_html(CURRENT_UI_DATA_RUN_ID), content_type="text/html; charset=utf-8")
             return
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
@@ -3573,7 +4493,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def handle_raw_report(self, query: str = ""):
         requested_run_id = self.requested_run_id(query)
-        if requested_run_id == FINAL_UI_DATA_RUN_ID:
+        if is_current_ui_data_run_id(requested_run_id):
             requested_run_id = ""
         latest = self.run_dir_by_id(requested_run_id) if requested_run_id else self.latest_run_dir()
         if requested_run_id and not latest:
@@ -3585,18 +4505,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.send_json({"error": "not found", "path": "regression_report.html"}, status=404)
 
     def ui_report_html(self, run_id: str):
-        target = f"/?run_id={run_id}#overview"
+        is_current = is_current_ui_data_run_id(run_id)
+        target = "/#overview" if is_current else f"/?run_id={run_id}#overview"
+        display = CURRENT_UI_DATA_LABEL if is_current else run_id
         return f"""<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="0; url={target}">
-  <title>Eval UI Report · {run_id}</title>
+  <title>Eval UI Report · {display}</title>
   <script>window.location.replace({json.dumps(target)});</script>
 </head>
 <body>
-  <p>Opening UI report for <a href="{target}">{run_id}</a>.</p>
+  <p>Opening UI report for <a href="{target}">{display}</a>.</p>
 </body>
 </html>
 """
@@ -3615,7 +4537,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def eval_run_summaries(self):
         summaries = []
-        exported = self.final_ui_data_run_summary(selected=False)
+        selected_id = self.default_selected_run_id()
+        exported = self.current_ui_data_run_summary(selected=is_current_ui_data_run_id(selected_id))
         if exported:
             summaries.append(exported)
         if not EVAL_RUNS_ROOT.exists():
@@ -3626,14 +4549,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             if self.is_eval_run_dir(path)
         ]
         candidates.sort(key=self.run_sort_key, reverse=True)
-        latest = self.latest_run_dir()
         summaries.extend(
-            self.eval_run_summary(path, selected=bool(latest and path.resolve() == latest.resolve()))
+            self.eval_run_summary(path, selected=path.name == selected_id)
             for path in candidates
         )
         return summaries
 
-    def final_ui_data_run_summary(self, selected: bool = False):
+    def current_ui_data_run_summary(self, selected: bool = False):
         eval_path = ROOT / "data" / "eval_runs.csv"
         case_path = ROOT / "data" / "question_cases.csv"
         if not eval_path.exists() or not case_path.exists():
@@ -3645,9 +4567,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         except (OSError, csv.Error):
             rows = []
         models = [row.get("model") or row.get("version") or "" for row in rows if row.get("model") or row.get("version")]
-        scores = [self.safe_float(row.get("overall_score"), default=0.0, minimum=0.0, maximum=100.0) for row in rows]
+        scores = [
+            self.safe_float(row.get("overall_score"), default=0.0, minimum=0.0, maximum=1.0)
+            for row in rows
+        ]
         scored_scores = [
-            self.safe_float(row.get("scored_average"), default=0.0, minimum=0.0, maximum=100.0)
+            self.safe_float(row.get("scored_average"), default=0.0, minimum=0.0, maximum=1.0)
             for row in rows
             if row.get("scored_average") not in {None, ""}
         ]
@@ -3662,32 +4587,41 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             for row in rows
             if row.get("review_pending_count") not in {None, ""}
         ]
+        total_questions = max(
+            [
+                self.safe_int(row.get("total_questions"), default=0, minimum=0, maximum=1000000)
+                for row in rows
+            ]
+            or [0]
+        )
         case_ids = set()
         case_count = 0
-        try:
-            with case_path.open("r", encoding="utf-8-sig", newline="") as handle:
-                for row in csv.DictReader(handle):
-                    case_count += 1
-                    case_id = row.get("question_id") or row.get("case_id") or ""
-                    if case_id:
-                        case_ids.add(case_id)
-        except (OSError, csv.Error):
-            case_count = 0
+        if not total_questions:
+            try:
+                with case_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                    for row in csv.DictReader(handle):
+                        case_count += 1
+                        case_id = row.get("question_id") or row.get("case_id") or ""
+                        if case_id:
+                            case_ids.add(case_id)
+            except (OSError, csv.Error):
+                case_count = 0
         updated_at = max(eval_path.stat().st_mtime, case_path.stat().st_mtime)
         scoring_mode = next((row.get("scoring_mode") for row in rows if row.get("scoring_mode")), "static")
         return {
-            "run_id": FINAL_UI_DATA_RUN_ID,
-            "label": FINAL_UI_DATA_LABEL,
+            "run_id": CURRENT_UI_DATA_RUN_ID,
+            "label": CURRENT_UI_DATA_LABEL,
             "selected": selected,
             "updated_at": updated_at,
             "eval_started_at": datetime.fromtimestamp(updated_at).isoformat(timespec="seconds"),
-            "run_type": "final_ui_export",
+            "run_type": "ui_runtime_export",
+            "case_source": "ui_runtime_data",
             "case_source_status": "exported",
-            "total_questions": len(case_ids) or case_count,
+            "total_questions": total_questions or len(case_ids) or case_count,
             "model_count": len(rows),
             "models": models,
-            "avg_score": round(sum(scores) / len(scores), 2) if scores else 0.0,
-            "avg_scored_score": round(sum(scored_scores) / len(scored_scores), 2) if scored_scores else 0.0,
+            "avg_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+            "avg_scored_score": round(sum(scored_scores) / len(scored_scores), 4) if scored_scores else 0.0,
             "avg_pass_rate": round(sum(pass_rates) / len(pass_rates), 4) if pass_rates else 0.0,
             "avg_scored_pass_rate": round(sum(scored_pass_rates) / len(scored_pass_rates), 4) if scored_pass_rates else 0.0,
             "review_pending_count": int(max(review_pending_counts)) if review_pending_counts else 0,
@@ -3695,29 +4629,30 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "sanitized_eval_count": 0,
             "unresolved_conflict_count": 0,
             "scoring_mode": scoring_mode,
+            "reblend_eligible": False,
             "llm_judge_provider": next((row.get("llm_judge_provider") for row in rows if row.get("llm_judge_provider")), ""),
             "llm_judge_model": next((row.get("llm_judge_model") for row in rows if row.get("llm_judge_model")), ""),
             "report_html": "/report/regression_report.html",
-            "report_raw_html": "/report/raw_regression_report.html",
-            "report_ui": f"/?run_id={FINAL_UI_DATA_RUN_ID}#overview",
+            "report_raw_html": "",
+            "report_ui": "/#overview",
         }
 
     def eval_run_summary(self, path: Path, selected: bool = False):
         config = self.run_config(path)
-        projected = self.projected_run_tables(path)
-        if projected:
-            rows = projected.get("summary", [])
-        else:
-            rows = []
-            try:
-                with (path / "eval_runs.csv").open("r", encoding="utf-8-sig", newline="") as handle:
-                    rows = list(csv.DictReader(handle))
-            except (OSError, csv.Error):
-                rows = []
+        rows = self.projected_csv_rows_if_current(path, "eval_runs.csv")
+        if rows is None:
+            if self.has_partitioned_run_source(path):
+                projected = self.projected_run_tables(path)
+                rows = projected.get("summary", []) if projected else self.read_csv_rows(path / "eval_runs.csv")
+            else:
+                rows = self.read_csv_rows(path / "eval_runs.csv")
         models = [row.get("model") or row.get("version") or "" for row in rows if row.get("model") or row.get("version")]
-        scores = [self.safe_float(row.get("overall_score"), default=0.0, minimum=0.0, maximum=100.0) for row in rows]
+        scores = [
+            self.safe_float(row.get("overall_score"), default=0.0, minimum=0.0, maximum=1.0)
+            for row in rows
+        ]
         scored_scores = [
-            self.safe_float(row.get("scored_average"), default=0.0, minimum=0.0, maximum=100.0)
+            self.safe_float(row.get("scored_average"), default=0.0, minimum=0.0, maximum=1.0)
             for row in rows
             if row.get("scored_average") not in {None, ""}
         ]
@@ -3755,8 +4690,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "total_questions": self.run_question_count(path),
             "model_count": len(rows),
             "models": models,
-            "avg_score": round(sum(scores) / len(scores), 2) if scores else 0.0,
-            "avg_scored_score": round(sum(scored_scores) / len(scored_scores), 2) if scored_scores else 0.0,
+            "avg_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+            "avg_scored_score": round(sum(scored_scores) / len(scored_scores), 4) if scored_scores else 0.0,
             "avg_pass_rate": round(sum(pass_rates) / len(pass_rates), 4) if pass_rates else 0.0,
             "avg_scored_pass_rate": round(sum(scored_pass_rates) / len(scored_pass_rates), 4) if scored_pass_rates else 0.0,
             "review_pending_count": review_pending_count,
@@ -3779,6 +4714,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 maximum=1000000,
             ),
             "scoring_mode": judge_summary.get("scoring_mode", ""),
+            "reblend_eligible": self.is_reblend_source_dir(path),
             "llm_judge_provider": judge_summary.get("llm_judge_provider", ""),
             "llm_judge_model": judge_summary.get("llm_judge_model", ""),
             "report_html": f"/report/regression_report.html?run_id={path.name}",
@@ -3817,7 +4753,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return non_smoke_candidates[0]
         return preferred_candidates[0]
 
-    def explicit_run_dir(self):
+    def default_selected_run_id(self) -> str:
+        explicit_id = self.explicit_run_id()
+        if explicit_id:
+            return explicit_id
+        if self.current_ui_data_run_summary(selected=False):
+            return CURRENT_UI_DATA_RUN_ID
+        latest = self.latest_run_dir()
+        return latest.name if latest else ""
+
+    def explicit_run_id(self) -> str:
         run_id = os.environ.get("FINAL_UI_RUN_ID")
         for path in ACTIVE_RUN_PATHS:
             if run_id:
@@ -3830,6 +4775,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 run_id = payload.get("run_id") if isinstance(payload, dict) else str(payload)
             except json.JSONDecodeError:
                 run_id = raw
+        return str(run_id or "").strip()
+
+    def explicit_run_dir(self):
+        run_id = self.explicit_run_id()
         if not run_id:
             return None
         candidate = EVAL_RUNS_ROOT / run_id
@@ -3849,6 +4798,33 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 or self.has_partitioned_run_source(path)
             )
         )
+
+    def is_reblend_source_dir(self, path: Path) -> bool:
+        if not self.is_eval_run_dir(path):
+            return False
+        has_outputs = (path / "model_outputs.jsonl").exists() or self.partitioned_output_row_count(path) > 0
+        has_scores = (path / "judge_scores.jsonl").exists() or (path / "judge_scores.csv").exists() or (path / "by_judge").is_dir()
+        return bool(has_outputs and has_scores)
+
+    def latest_reblend_run_dir(self):
+        explicit = self.explicit_run_dir()
+        if explicit and self.is_reblend_source_dir(explicit):
+            return explicit
+        if not EVAL_RUNS_ROOT.exists():
+            return None
+        candidates = sorted(
+            [
+                path
+                for path in EVAL_RUNS_ROOT.iterdir()
+                if self.is_reblend_source_dir(path)
+            ],
+            key=self.run_sort_key,
+            reverse=True,
+        )
+        if not candidates:
+            return None
+        non_smoke_candidates = [path for path in candidates if not self.is_smoke_run(path)]
+        return (non_smoke_candidates or candidates)[0]
 
     def is_smoke_run(self, path: Path) -> bool:
         upper_name = path.name.upper()
@@ -4960,7 +5936,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 if weight_error:
                     self.send_json({"error": weight_error}, status=400)
                     return
-            if conflict_policy in {"review", "arbiter_override", "three_judge"} and len(judge_config_ids) > 1:
+            if conflict_policy in {"arbiter_override", "three_judge"} and len(judge_config_ids) > 1:
                 if not arbiter_config_id:
                     arbiter_config_id = "openai_gpt55_judge"
                 if arbiter_config_id not in registry:
@@ -5105,8 +6081,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def saved_answer_config_ids(self, *, source_run_id: str, answers_csv: str, default_config_id: str | None):
         if source_run_id:
             source_dir = self.resolve_eval_run_dir(source_run_id)
-            if source_dir and (source_dir / "model_outputs.jsonl").exists():
-                rows = eval_read_jsonl(source_dir / "model_outputs.jsonl")
+            if source_dir:
+                rows = self.load_partitioned_outputs(source_dir)
                 ids = sorted({str(row.get("config_id") or "") for row in rows if row.get("config_id")})
                 if ids:
                     return ids
@@ -5181,13 +6157,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def resolve_eval_run_dir(self, run_id: str):
         if run_id:
             candidate = EVAL_RUNS_ROOT / run_id
-            if not self.is_reserved_eval_run_name(candidate.name) and candidate.is_dir() and (candidate / "model_outputs.jsonl").exists():
+            if not self.is_reserved_eval_run_name(candidate.name) and candidate.is_dir() and self.is_reblend_source_dir(candidate):
                 return candidate
             return None
-        latest = self.latest_run_dir()
-        if latest and (latest / "model_outputs.jsonl").exists():
-            return latest
-        return None
+        return self.latest_reblend_run_dir()
 
     def load_eval_run_config(self, run_dir: Path):
         config_path = self.run_config_path(run_dir)
@@ -5224,10 +6197,17 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return {"error": str(exc)}
         if not cases_path.exists():
             return {"error": f"case source not found: {self.display_path(cases_path)}"}
-        outputs = eval_read_jsonl(source_dir / "model_outputs.jsonl")
-        source_scores = eval_read_jsonl(source_dir / "judge_scores.jsonl")
+        if self.has_partitioned_run_source(source_dir):
+            projected = self.projected_run_tables(source_dir)
+            outputs = list(projected.get("outputs", [])) if projected else self.load_partitioned_outputs(source_dir)
+            source_scores = list(projected.get("scores", [])) if projected else []
+        else:
+            outputs = eval_read_jsonl(source_dir / "model_outputs.jsonl")
+            source_scores = eval_read_jsonl(source_dir / "judge_scores.jsonl")
+        if not source_scores and (source_dir / "judge_scores.jsonl").exists():
+            source_scores = eval_read_jsonl(source_dir / "judge_scores.jsonl")
         if not outputs or not source_scores:
-            return {"error": "source run must contain model_outputs.jsonl and judge_scores.jsonl."}
+            return {"error": "source run must contain target outputs and judge scores."}
         try:
             cases = eval_read_cases_path(cases_path)
         except (OSError, csv.Error, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -5404,26 +6384,34 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         score["run_id"] = run_id
         deterministic = dict(score)
         for key in SCORE_METRIC_KEYS:
-            deterministic[key] = self.safe_float(score.get(f"static_{key}", score.get(key)), default=0.0, minimum=0.0, maximum=20.0)
-        deterministic["overall_score"] = self.safe_float(
+            value = score.get(f"static_{key}", score.get(key))
+            if key == "hal_pass" and value in {"", None}:
+                value = score.get("static_hal", score.get("hal"))
+            deterministic[key] = self.judge_metric_points(value, score)
+        deterministic["hal"] = deterministic.get("hal", deterministic.get("hal_pass"))
+        deterministic["overall_score"] = self.judge_overall_points(
             score.get("static_overall_score", score.get("overall_score")),
-            default=0.0,
-            minimum=0.0,
-            maximum=100.0,
+            score,
         )
-        deterministic["pass"] = self.bool_value(score.get("static_pass"), self.bool_value(score.get("pass"), False))
         deterministic["critical_fail"] = self.bool_value(
             score.get("static_critical_fail"),
             self.bool_value(score.get("critical_fail"), False),
         )
+        deterministic["pass"] = deterministic["overall_score"] >= pass_threshold and not deterministic["critical_fail"]
         deterministic["error_type"] = eval_canonical_error_type(score.get("static_error_type") or score.get("error_type"))
         deterministic["reason"] = score.get("static_reason") or score.get("reason") or ""
         deterministic["utl_applicable"] = self.bool_value(score.get("utl_applicable"), True)
-        deterministic["applicable_metrics"] = score.get("applicable_metrics", "")
-        deterministic["score_denominator"] = self.safe_float(score.get("static_score_denominator", score.get("score_denominator")), default=100.0, minimum=1.0, maximum=100.0)
-        deterministic["raw_metric_score"] = self.safe_float(score.get("static_raw_metric_score", score.get("raw_metric_score")), default=deterministic["overall_score"], minimum=0.0, maximum=100.0)
-        deterministic["answer_quality_score"] = self.safe_float(score.get("answer_quality_score"), default=deterministic["overall_score"], minimum=0.0, maximum=100.0)
-        deterministic["rag_quality_score"] = self.safe_float(score.get("rag_quality_score"), default=deterministic["overall_score"], minimum=0.0, maximum=100.0)
+        deterministic["applicable_metrics"] = ",".join(SCORE_METRIC_KEYS)
+        deterministic["score_denominator"] = len(SCORE_METRIC_KEYS) * 20
+        deterministic["raw_metric_score"] = sum(deterministic[key] for key in SCORE_METRIC_KEYS)
+        answer_quality_value = score.get("answer_quality_score")
+        if answer_quality_value in {"", None}:
+            answer_quality_value = deterministic["overall_score"]
+        rag_quality_value = score.get("rag_quality_score")
+        if rag_quality_value in {"", None}:
+            rag_quality_value = deterministic["overall_score"]
+        deterministic["answer_quality_score"] = self.judge_overall_points(answer_quality_value, score)
+        deterministic["rag_quality_score"] = self.judge_overall_points(rag_quality_value, score)
         if scoring_mode == "static":
             deterministic["scoring_mode"] = "static"
             for key in SCORE_METRIC_KEYS:
@@ -5435,16 +6423,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             deterministic["static_reason"] = deterministic["reason"]
             return deterministic
 
-        if not any(score.get(f"llm_judge_{key}") not in {"", None} for key in SCORE_METRIC_KEYS):
+        if not any(self.reblend_judge_metric_value(score, key) not in {"", None} for key in SCORE_METRIC_KEYS):
             raise ValueError("원본 실행에 LLM Judge 점수가 없습니다. 규칙 기반 채점을 사용하거나 LLM Judge 평가를 먼저 실행하세요.")
         judge_score = {
-            key: self.safe_float(score.get(f"llm_judge_{key}"), default=0.0, minimum=0.0, maximum=20.0)
+            key: self.judge_metric_points(self.reblend_judge_metric_value(score, key), score)
             for key in SCORE_METRIC_KEYS
         }
+        judge_score["hal"] = judge_score.get("hal", judge_score.get("hal_pass"))
+        judge_overall = self.judge_overall_points(score.get("llm_judge_overall_score", score.get("overall_score")), score)
+        judge_critical_fail = self.bool_value(score.get("llm_judge_critical_fail"), False)
         judge_score.update(
             {
-                "pass": self.bool_value(score.get("llm_judge_pass"), False),
-                "critical_fail": self.bool_value(score.get("llm_judge_critical_fail"), False),
+                "overall_score": judge_overall,
+                "pass": judge_overall >= pass_threshold and not judge_critical_fail,
+                "critical_fail": judge_critical_fail,
                 "error_type": eval_canonical_error_type(score.get("llm_judge_error_type")),
                 "reason": score.get("llm_judge_reason") or score.get("reason") or "",
                 "confidence": self.safe_float(score.get("llm_judge_confidence"), default=0.0, minimum=0.0, maximum=1.0),
@@ -5456,6 +6448,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "judge_count": self.safe_int(score.get("llm_judge_count"), default=1, minimum=1, maximum=100),
                 "individual_scores": self.json_list_value(score.get("llm_judge_individual_scores")),
                 "utl_applicable": deterministic["utl_applicable"],
+                "score_schema": score.get("score_schema") or "omnieval_metrics_config_v2",
             }
         )
         mode = {
@@ -5477,6 +6470,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             scoring_mode=scoring_mode,
         )
 
+    def reblend_judge_metric_value(self, score: dict, key: str):
+        value = score.get(f"llm_judge_{key}")
+        if key == "hal_pass" and value in {"", None}:
+            value = score.get("llm_judge_hal", score.get("hal_pass", score.get("hal")))
+        if value in {"", None}:
+            value = score.get(key)
+        return value
+
     def bool_value(self, value, default: bool):
         parsed = optional_bool(value)
         return default if parsed is None else parsed
@@ -5494,6 +6495,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def wait_for_eval_job(self, job_id: str, process: subprocess.Popen):
         returncode = process.wait()
+        finished_job = None
         with EVAL_JOBS_LOCK:
             job = EVAL_JOBS.get(job_id)
             if not job:
@@ -5507,6 +6509,42 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 job["status"] = "failed"
             job["finished_at"] = datetime.now().isoformat(timespec="seconds")
             self.persist_eval_job(job)
+            finished_job = job
+        if finished_job and finished_job.get("status") == "finished":
+            self.maybe_build_eval_snapshot(finished_job)
+
+    def maybe_build_eval_snapshot(self, job: dict) -> bool:
+        if job.get("status") != "finished":
+            return False
+        if not bool(job.get("export_final_ui")):
+            return False
+        if bool(job.get("dry_run")) or bool(job.get("skip_scoring")):
+            return False
+        if job.get("snapshot_status") in {"running", "finished", "failed"}:
+            return False
+        script_path = PROJECT_ROOT / "scripts" / "eval" / "apply_omnieval_metrics_v2.py"
+        job["snapshot_status"] = "running"
+        job["snapshot_started_at"] = datetime.now().isoformat(timespec="seconds")
+        self.persist_eval_job(job)
+        try:
+            completed = subprocess.run(
+                [str(job.get("python_executable") or sys.executable), str(script_path)],
+                cwd=str(PROJECT_ROOT),
+                text=True,
+                capture_output=True,
+                timeout=600,
+            )
+            combined_output = "\n".join(part for part in [completed.stdout, completed.stderr] if part)
+            job["snapshot_returncode"] = completed.returncode
+            job["snapshot_status"] = "finished" if completed.returncode == 0 else "failed"
+            job["snapshot_output_tail"] = combined_output[-8000:]
+        except Exception as exc:
+            job["snapshot_returncode"] = -1
+            job["snapshot_status"] = "failed"
+            job["snapshot_output_tail"] = str(exc)
+        job["snapshot_finished_at"] = datetime.now().isoformat(timespec="seconds")
+        self.persist_eval_job(job)
+        return True
 
     def persist_eval_job(self, job: dict):
         log_path = Path(str(job.get("log_path") or ""))
@@ -5557,6 +6595,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
 
     def refresh_persisted_job_status(self, job: dict):
         before = self.job_status_snapshot(job)
+        if job.get("status") == "finished":
+            return self.maybe_build_eval_snapshot(job)
         if job.get("status") not in {"running", "paused", "canceling", "unknown"}:
             return False
         pid = job.get("pid")
@@ -5589,7 +6629,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             job["returncode"] = job.get("returncode") if job.get("returncode") is not None else -1
         if not job.get("finished_at") and job.get("status") != "running":
             job["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        return self.job_status_snapshot(job) != before
+        changed = self.job_status_snapshot(job) != before
+        if job.get("status") == "finished":
+            changed = self.maybe_build_eval_snapshot(job) or changed
+        return changed
 
     def job_status_snapshot(self, job: dict):
         return {
@@ -5597,6 +6640,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "returncode": job.get("returncode"),
             "pid": job.get("pid"),
             "finished_at": job.get("finished_at"),
+            "snapshot_status": job.get("snapshot_status"),
         }
 
     def process_is_running(self, pid):
@@ -6003,6 +7047,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     qa_category,
                     csv_row_value(row, *CSV_QA_TOPIC_FIELD_ALIASES),
                 )
+                suite = csv_row_value(row, "suite", "split_type", "regression_suite") or role or "question_source_csv"
+                regression_suite = csv_row_value(row, "regression_suite", "split_type", "suite")
                 stable_case_id = csv_row_value(row, *CSV_CASE_ID_FIELD_ALIASES)
                 ordinal_case_id = csv_row_value(row, *CSV_ORDINAL_FIELD_ALIASES)
                 case_id = stable_case_id or (f"{dataset_id}-{ordinal_case_id}" if ordinal_case_id else f"{dataset_id}-{index:05d}")
@@ -6011,7 +7057,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 yield {
                     "case_id": case_id,
                     "question_id": case_id,
-                    "suite": role or "question_source_csv",
+                    "suite": suite,
                     "severity": "",
                     "priority": "",
                     "question": question,
@@ -6050,6 +7096,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                         "selection_mode": "question_source_csv",
                         "dataset_pool_id": dataset_id,
                         "dataset_role": role or "benchmark",
+                        **({"regression_suite": regression_suite} if is_regression and regression_suite else {}),
                     },
                 }
 
@@ -6399,11 +7446,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "base_url": base_url,
                 "chat_url": str(judge_payload.get("chat_url") or "").strip(),
                 "api_key_env": api_key_env,
-                "prompt_version": str(judge_payload.get("prompt_version") or "judge_submission_v1_partial_credit_acc_com_utl_nac_hal").strip(),
+                "prompt_version": str(judge_payload.get("prompt_version") or "omnieval_metrics_config_v2").strip(),
                 "system_prompt_preset": str(judge_payload.get("system_prompt_preset") or "judge_default_v1").strip(),
                 "system_prompt": str(judge_payload.get("system_prompt") or "").strip(),
                 "rag_config": "none",
-                "safety_policy": "qwen2_5_7b_hal_lora",
+                "safety_policy": "llm_judge_prompt_preset",
                 "evaluation_role": "llm_judge",
                 "judge_role": "judge",
                 "eval_target": False,
@@ -6554,15 +7601,16 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             summary[field] = dict(sorted(summary[field].items(), key=lambda item: item[1], reverse=True))
         return summary
 
-    def send_json(self, payload, status=200):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def send_json(self, payload, status=200, headers: dict[str, str] | None = None):
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.send_cors_headers()
         self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        self.write_response_body(body)
 
     def send_text(self, payload: str, content_type: str, status=200):
         body = payload.encode("utf-8")
@@ -6571,8 +7619,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_cors_headers()
         self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        self.write_response_body(body)
 
     def send_no_content(self):
         self.send_response(204)
@@ -6588,52 +7635,129 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_cors_headers()
         self.end_headers()
-        if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+        self.write_response_body(body)
 
     def serve_path(self, path: Path, content_type: str):
         if not path.exists():
             self.send_json({"error": "not found", "path": str(path)}, status=404)
             return
-        body = path.read_bytes()
+        served_path = path
+        content_encoding = ""
+        vary_header = ""
+        if self.client_accepts_gzip() and self.path_is_precompressed_candidate(path, content_type):
+            gzip_path = self.gzip_sidecar_path(path)
+            if self.gzip_sidecar_is_current(path, gzip_path):
+                served_path = gzip_path
+                content_encoding = "gzip"
+                vary_header = "Accept-Encoding"
+        try:
+            stat = served_path.stat()
+        except OSError:
+            self.send_json({"error": "not found", "path": str(path)}, status=404)
+            return
+        etag = f'W/"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        last_modified = formatdate(stat.st_mtime, usegmt=True)
+        if etag in {value.strip() for value in str(self.headers.get("If-None-Match") or "").split(",")}:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", last_modified)
+            self.send_header("Cache-Control", "private, max-age=0")
+            if content_encoding:
+                self.send_header("Content-Encoding", content_encoding)
+            if vary_header:
+                self.send_header("Vary", vary_header)
+            self.send_cors_headers()
+            self.end_headers()
+            return
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(stat.st_size))
+        self.send_header("ETag", etag)
+        self.send_header("Last-Modified", last_modified)
+        self.send_header("Cache-Control", "private, max-age=0")
+        if content_encoding:
+            self.send_header("Content-Encoding", content_encoding)
+        if vary_header:
+            self.send_header("Vary", vary_header)
         self.send_cors_headers()
         self.end_headers()
+        self.write_file_response_body(served_path)
+
+    def client_accepts_gzip(self) -> bool:
+        return "gzip" in str(self.headers.get("Accept-Encoding") or "").lower()
+
+    def path_is_precompressed_candidate(self, path: Path, content_type: str) -> bool:
+        return path.suffix.lower() == ".json" and content_type.startswith("application/json")
+
+    def write_response_body(self, body: bytes):
         if not getattr(self, "_head_only", False):
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                self.close_connection = True
+
+    def write_file_response_body(self, path: Path):
+        if getattr(self, "_head_only", False):
+            return
+        try:
+            with path.open("rb") as file:
+                while True:
+                    chunk = file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            self.close_connection = True
+        except OSError:
+            self.close_connection = True
+
+
+def start_ui_case_summary_cache_prewarm():
+    disabled = str(os.environ.get("FINAL_UI_PREWARM_CASE_SUMMARY", "1")).strip().lower()
+    if disabled in {"0", "false", "no", "off"}:
+        return
+
+    def worker():
+        handler = object.__new__(FinalUiHandler)
+        run_ids: list[str] = []
+        for run_id in (CURRENT_UI_DATA_RUN_ID, handler.default_selected_run_id()):
+            if run_id and run_id not in run_ids:
+                run_ids.append(run_id)
+        latest = handler.latest_run_dir()
+        if latest and latest.name not in run_ids:
+            run_ids.append(latest.name)
+
+        for run_id in run_ids:
+            try:
+                cache_path = handler.ensure_eval_case_summary_cache_path(run_id)
+                print(f"Prewarmed UI case summary cache for {run_id}: {cache_path.name}", flush=True)
+            except Exception as exc:
+                print(f"UI case summary cache prewarm skipped for {run_id}: {exc}", flush=True)
+
+    thread = threading.Thread(target=worker, name="final-ui-case-summary-prewarm", daemon=True)
+    thread.start()
 
 
 def main():
-    global FINAL_UI_AUTH_TOKEN, FINAL_UI_AUTH_USERS
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8512
     host = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("FINAL_UI_HOST", "localhost")
     requires_public_auth = host.strip().lower() in PUBLIC_BIND_HOSTS and not FINAL_UI_AUTH_DISABLED
-    generated_users: dict[str, str] = {}
     if requires_public_auth and not FINAL_UI_AUTH_USERS and not FINAL_UI_AUTH_TOKEN:
-        generated_users = {
-            "admin": secrets.token_urlsafe(12),
-            "user": secrets.token_urlsafe(12),
-        }
-        FINAL_UI_AUTH_USERS = {
-            "admin": {"password": generated_users["admin"], "role": "admin"},
-            "user": {"password": generated_users["user"], "role": "user"},
-        }
+        raise SystemExit("Public bind requires FINAL_UI_AUTH_USERS, FINAL_UI_AUTH_TOKEN, or FINAL_UI_AUTH_DISABLED=1.")
     server = ThreadingHTTPServer((host, port), FinalUiHandler)
     display_host = "127.0.0.1" if host in {"", "0.0.0.0", "::"} else host
-    print(f"Final UI server running at http://{display_host}:{port} (bind={host})", flush=True)
+    print(f"UI server running at http://{display_host}:{port} (bind={host})", flush=True)
     if FINAL_UI_AUTH_DISABLED:
         print("Authentication disabled by FINAL_UI_AUTH_DISABLED=1.", flush=True)
     elif FINAL_UI_AUTH_USERS:
-        print("ID auth enabled. Admin can write; user is read-only.", flush=True)
-        if generated_users:
-            print(f"Generated admin login: admin / {generated_users['admin']}", flush=True)
-            print(f"Generated user login: user / {generated_users['user']}", flush=True)
+        print("User ID auth enabled. Admin can write; user is read-only.", flush=True)
+        if FINAL_UI_AUTH_USERS_SOURCE == "default":
+            print("Using default credentials: admin/admin and user/user.", flush=True)
         else:
             print("Using FINAL_UI_AUTH_USERS credentials.", flush=True)
     elif FINAL_UI_AUTH_TOKEN:
         print("Write API token enabled. Pass it in X-Final-UI-Token or Authorization: Bearer headers.", flush=True)
+    start_ui_case_summary_cache_prewarm()
     server.serve_forever()
 
 

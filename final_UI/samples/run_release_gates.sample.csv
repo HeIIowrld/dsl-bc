@@ -1,2 +1,0 @@
-run_id,config_id,model,release_gate,total_cases,evaluated_cases,gate_eligible_cases,pass_count,review_count,block_count,critical_fail_count,pass_rate,core_pass_rate,core_pass_rate_min,reason
-SAMPLE_RUN_QWEN3,sample_ollama_qwen3_14b,qwen3:14b,not_applicable,2,2,0,2,0,0,0,1.0,,0.98,sample data is not gate-eligible

@@ -50,7 +50,7 @@ Start-Process `
 
 Start-Sleep -Seconds 1
 $DisplayHost = if ($HostName -in @("", "0.0.0.0", "::")) { "127.0.0.1" } else { $HostName }
-Write-Host "Final UI: http://$DisplayHost`:$Port/"
+Write-Host "UI: http://$DisplayHost`:$Port/"
 if (Test-Path $LogPath) {
   Get-Content $LogPath | ForEach-Object { Write-Host $_ }
 }

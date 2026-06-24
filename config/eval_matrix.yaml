@@ -21,3 +21,9 @@ eval_run:
   release_gates:
     critical_fail_max: 0
     core_pass_rate_min: 0.8
+    core_pass_rate_suites:
+    - core
+    - regression
+    - general
+    - hard_negative
+    - edge_case

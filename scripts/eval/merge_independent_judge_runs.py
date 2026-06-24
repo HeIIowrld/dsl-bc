@@ -111,6 +111,75 @@ def truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
 
+def score_uses_zero_one_scale(score: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(score.get(field) or "")
+        for field in (
+            "score_scale",
+            "source_score_scale",
+            "score_schema",
+            "prompt_version",
+            "llm_judge_prompt_version",
+            "system_prompt_preset",
+        )
+    ).lower()
+    return "0_1" in text or "utl_na_0_1" in text
+
+
+def score_to_points(value: Any, score: dict[str, Any]) -> float:
+    number = safe_float(value)
+    if score_uses_zero_one_scale(score) and 0 <= number <= 1:
+        return round(number * 100.0, 4)
+    return number
+
+
+def metric_to_points(value: Any, score: dict[str, Any]) -> float:
+    number = safe_float(value)
+    if score_uses_zero_one_scale(score) and 0 <= number <= 1:
+        return round(number * 20.0, 4)
+    return number
+
+
+def normalize_judge_score_scale(score: dict[str, Any], source_row: dict[str, Any] | None = None) -> dict[str, Any]:
+    source_row = source_row or {}
+    merged = {**source_row, **score}
+    normalized = dict(score)
+    for key in SCORE_METRIC_KEYS:
+        normalized[key] = metric_to_points(normalized.get(key), merged)
+    normalized.setdefault("score_denominator", len(SCORE_METRIC_KEYS) * 20)
+    normalized["raw_metric_score"] = sum(safe_float(normalized.get(key)) for key in SCORE_METRIC_KEYS)
+    if normalized.get("overall_score") in {"", None}:
+        denominator = safe_float(normalized.get("score_denominator")) or len(SCORE_METRIC_KEYS) * 20
+        normalized["overall_score"] = round(normalized["raw_metric_score"] / denominator * 100.0, 4)
+    else:
+        normalized["overall_score"] = score_to_points(normalized.get("overall_score"), merged)
+    if normalized.get("answer_quality_score") not in {"", None}:
+        normalized["answer_quality_score"] = score_to_points(normalized.get("answer_quality_score"), merged)
+    if normalized.get("rag_quality_score") not in {"", None}:
+        normalized["rag_quality_score"] = score_to_points(normalized.get("rag_quality_score"), merged)
+    normalized["pass"] = score_policy_pass(normalized)
+    return normalized
+
+
+def score_policy_pass(score: dict[str, Any], pass_threshold: float = 60.0) -> bool:
+    overall = score.get("overall_score")
+    if overall in {"", None}:
+        raw = safe_float(score.get("raw_metric_score"))
+        denominator = safe_float(score.get("score_denominator"))
+        overall = round((raw / denominator) * 100, 4) if denominator else 0.0
+    else:
+        overall = score_to_points(overall, score)
+    return safe_float(overall) >= pass_threshold and not truthy(score.get("critical_fail"))
+
+
+def uses_omnieval_quality_gate(score: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(score.get(field) or "")
+        for field in ("score_schema", "prompt_version", "llm_judge_prompt_version", "system_prompt_preset")
+    ).lower()
+    return "omnieval" in text or "core_quality_gate" in text or "core_safe_proxy" in text
+
+
 def row_policy_text(row: dict[str, Any]) -> str:
     fields = [
         "llm_judge_status",
@@ -187,7 +256,7 @@ def individual_scores_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
             item.setdefault("score_denominator", row.get("llm_judge_score_denominator", row.get("score_denominator")))
             item.setdefault("raw_metric_score", sum(safe_float(item.get(key)) for key in SCORE_METRIC_KEYS))
             item.setdefault("confidence", row.get("llm_judge_confidence", 0))
-            scores.append(item)
+            scores.append(normalize_judge_score_scale(item, row))
         return scores
 
     item = {
@@ -212,7 +281,7 @@ def individual_scores_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
             "score_denominator": row.get("llm_judge_score_denominator", row.get("score_denominator")),
         }
     )
-    return [item]
+    return [normalize_judge_score_scale(item, row)]
 
 
 def judge_identity(score: dict[str, Any]) -> str:
@@ -263,14 +332,10 @@ def judge_gap_summary(
     arbiter_config_id: str,
     resolved_policy: str,
 ) -> dict[str, Any]:
-    totals = [safe_float(score.get("overall_score")) for score in judge_scores]
-    pass_values = [
-        bool(score.get("pass"))
-        for score in judge_scores
-        if score.get("pass") is not None
-    ]
-    base_totals = [safe_float(score.get("overall_score")) for score in base_judge_scores]
-    arbiter_totals = [safe_float(score.get("overall_score")) for score in arbiter_scores]
+    totals = [score_to_points(score.get("overall_score"), score) for score in judge_scores]
+    pass_values = [score_policy_pass(score) for score in judge_scores]
+    base_totals = [score_to_points(score.get("overall_score"), score) for score in base_judge_scores]
+    arbiter_totals = [score_to_points(score.get("overall_score"), score) for score in arbiter_scores]
     score_min = min(totals) if totals else 0.0
     score_max = max(totals) if totals else 0.0
     return {
@@ -525,6 +590,9 @@ def main() -> None:
             score_weights=judge_score_weights,
             aggregation_method=args.judge_aggregation_method,
         )
+        if any(uses_omnieval_quality_gate(score) for score in judge_scores):
+            aggregate["score_schema"] = "omnieval_metrics_config_v2"
+            aggregate["pass"] = score_policy_pass(aggregate, pass_threshold)
         judge_config = {
             "config_id": aggregate.get("config_id", ""),
             "model": aggregate.get("model", ""),

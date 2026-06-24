@@ -1,0 +1,25 @@
+{
+  "models": [
+    {
+      "judge_config_id": "gemini_2_5_flash_judge",
+      "judge_model": "gemini-2.5-flash",
+      "judge_provider": "gemini",
+      "label": "gemini",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED"
+    },
+    {
+      "judge_config_id": "openai_gpt54_mini_judge",
+      "judge_model": "gpt-5.4-mini",
+      "judge_provider": "openai_native",
+      "label": "gpt54_mini",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED"
+    },
+    {
+      "judge_config_id": "clova_hcx007_judge",
+      "judge_model": "HCX-007",
+      "judge_provider": "clova_studio",
+      "label": "clova_hcx007",
+      "source_run_id": "JUDGE_SOURCE_CLOVA_HCX007_FROM_FINAL_UI_20260621"
+    }
+  ]
+}

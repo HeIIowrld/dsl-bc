@@ -1,175 +1,219 @@
-﻿# Regression Scoring Logic
+﻿# Scoring Logic
 
-이 문서는 BC카드/금융 QA eval의 현재 채점 계약을 정리합니다. 대상은 `scripts/eval/run_multi_model_eval.py`, Final UI export, LLM-as-a-judge 결과입니다.
+This document defines the active score contract for the retained BC finance QA
+evaluation package.
 
-## Final Score Contract
+## Active Schema
 
-최종 점수는 100점 만점입니다. 각 지표 원점수는 20점 만점으로 저장하고, 최종 점수는 평가 대상 지표의 합을 100점 기준으로 정규화합니다.
-
-| Field | Label | Max | Description |
-| --- | --- | ---: | --- |
-| `acc` | 정확성(ACC) | 20 | 기준 답변, 필수 조건, 사실 관계와 일치하는지 평가 |
-| `com` | 완결성(COM) | 20 | 질문이 요구한 범위와 필요한 조건을 충분히 답했는지 평가 |
-| `utl` | 검색 활용도(UTL) | 20 | 검색/근거 문서를 적절히 활용하고 답변에 반영했는지 평가 |
-| `nac` | 수치 정확성(NAC) | 20 | 금액, 날짜, 비율, 계산 결과가 정확한지 평가 |
-| `hal` | 환각(HAL) | 20 | 근거 없는 주장, 출처에 없는 사실, 민감 정보 조작 여부 평가 |
+The active runtime CSV columns use the OmniEval consensus metric set recorded
+in the submission manifest:
 
 ```text
-RAG/evidence 대상:
-  overall_score = acc + com + utl + nac + hal
-
-비 RAG 대상:
-  overall_score = (acc + com + nac + hal) / 80 * 100
+data/eval_snapshot_20260624_094927/manifest.json
 ```
 
-`pass_fail`은 profile별 threshold 또는 배포 판정 정책을 따릅니다. UI에서는 지표별 점수와 최종 점수를 모두 표시합니다.
-
-## QA Set Dimensions
-
-최종 QA 세트는 아래 3개 차원으로 구성됩니다.
-
-| Dimension | Values |
-| --- | --- |
-| 대분류 / `qa_category` | `BC FAQ`, `금융정보`, `카드상품` |
-| 질문유형 / `question_type` | `단일추론(사실추출)`, `비교대조`, `복합추론`, `수치추론/계산`, `민감` |
-| 금융토픽 / `qa_topic` | `카드/결제`, `대출/여신`, `예적금`, `투자/펀드`, `일반 금융` |
-
-입출력 필드는 `instruction`, `output`을 기준으로 둡니다.
-
-과거 export 호환을 위해 UI와 서버는 아래 필드를 정규화합니다.
-
-| Legacy | Canonical |
-| --- | --- |
-| `source_type` | `qa_category` |
-| `qa_matrix_topic` | `qa_topic` |
-| `difficulty` | `question_type` |
-
-## Aggregation Reliability
-
-현재 QA matrix는 `3 x 5 x 5` 구조입니다. 아직 각 셀 표본 수가 충분하지 않기 때문에 공식 점수는 1차원 집계를 우선합니다.
-
-| Slice | Current policy |
-| --- | --- |
-| 1D aggregate | 기본 보고 지표 |
-| 2D aggregate | 구현은 유지하되, 표본 수 부족 시 `신뢰도 부족` 표시 |
-| 3D cell | 구현은 유지하되, 표본 수 부족 시 `신뢰도 부족` 표시 |
-
-기본 최소 표본 수는 slice별 30건입니다. QA 세트가 늘어나면 2D/3D 점수도 신뢰 가능한 지표로 승격할 수 있습니다.
-
-## LLM-as-a-Judge
-
-LLM judge는 사용자가 등록한 judge model/API를 사용합니다. target 모델과 judge 모델은 registry에서 분리합니다.
-
-| Role | Registry meaning |
-| --- | --- |
-| Target model | 평가 대상 모델, `eval_target=true` |
-| Judge model | 채점 모델, `eval_target=false` |
-
-여러 Judge를 사용할 경우 최종 Judge 점수는 실행 설정의 합산 정책을 따릅니다.
-
-| Aggregation | Behavior |
-| --- | --- |
-| `weighted_mean` | Judge별 가중 평균. 가중치 총합이 1.0일 때만 적용 |
-| `trimmed_mean` | Judge가 3개 이상이면 최고점과 최저점을 제외한 평균 |
-| `mean` | 모든 Judge 점수의 단순 평균 |
-| `max` | 가장 높은 Judge 점수 채택 |
-| `min` | 가장 낮은 Judge 점수 채택 |
-| `auto` | 가중치가 있으면 `weighted_mean`, 3개 이상이면 `trimmed_mean`, 그 외에는 `mean` |
-
-합산은 각 지표별로 적용합니다. 예를 들어 ACC는 ACC끼리 합산하고, COM/NAC/HAL도 각각 같은 방식으로 합산합니다. UTL은 RAG/evidence 대상일 때만 최종 점수 계산에 포함합니다.
-
-## HAL Judge
-
-환각(HAL)은 5대 지표 중 하나로 관리합니다. 기본적으로 선택한 Judge가 `hal` 점수를 함께 반환하며, 운영 목적에 따라 HAL 특화 Judge를 별도로 둘 수도 있습니다.
-
-- 역할: 근거 없는 사실 추가, 출처 불일치, 민감 정보 조작, unsupported claim 탐지
-- 기본 운영: ACC/COM/NAC/HAL을 같은 Judge 묶음에서 평가
-- 선택 운영: 환각 탐지를 강화해야 하는 run에서 전용 HAL Judge 추가
-
-HAL Judge 결과는 `hal` 20점으로 환산됩니다. 여러 Judge가 HAL을 평가하면 위의 Judge 합산 정책을 동일하게 적용합니다.
-
-## Static Scoring
-
-정적 scorer는 빠른 회귀 탐지와 smoke check용입니다. 일반적으로 아래 신호를 사용합니다.
-
-- `output`, `gold_answer`, `required_conditions` 일치 여부
-- `ground_truth_doc`, `gold_evidence`와 답변 overlap
-- 금지 주장, 민감정보, unsupported claim 포함 여부
-- JSON/format requirement 준수 여부
-- 수치/날짜/금액 토큰 일치 여부
-
-정적 scorer는 최종 judge를 대체하지 않습니다. Final UI에서는 static, LLM judge, final score를 구분해 표시합니다.
-
-## Scoring Modes
-
-| Mode | Behavior |
-| --- | --- |
-| `static` | 정적 scorer만 실행 |
-| `static_llm` | 정적 점수를 최종 점수로 유지하고, LLM judge 결과는 audit 필드로 기록 |
-| `llm_override` | LLM judge 점수를 최종 점수로 사용 |
-| `blend` | 정적 점수와 LLM judge 점수를 지정 비율로 혼합 |
-
-주요 output 필드:
+The manifest score-schema version is `omnieval_metrics_config_v2_utl_na_0_1`.
+The active score config is packaged as:
 
 ```text
-overall_score
-pass_fail
-static_overall_score
-static_pass_fail
-llm_judge_count
-llm_judge_overall_score
-llm_judge_pass_fail
-llm_judge_status
-llm_judge_provider
-llm_judge_model
-llm_judge_individual_scores
-judge_reason
-static_reason
-llm_judge_reason
+data/eval_snapshot_20260624_094927/scores/omnieval_metrics_config_v2.json
 ```
 
-## 배포 판정
+`overall_score` and `pass_fail` are computed from 0-1 OmniEval v2 components.
+The current source of truth is the UI runtime export in
+`final_UI/data/question_cases.csv`, including each row's
+`llm_judge_individual_scores`.
 
-UI에서는 사용자가 이해하기 쉽도록 배포 판정 또는 배포 차단 현황으로 표시합니다. 내부 필드명은 기존 호환성을 위해 `release_gate_*`를 유지하며, active gold case만 blocking 판단에 사용합니다.
+| Field | Name | Scale | Source |
+| --- | --- | --- | --- |
+| `acc` | Accuracy | 0-1 | Mean of UI-exported judge scores |
+| `com` | Completeness | 0-1 | Mean of UI-exported judge scores |
+| `nac` | Numeric accuracy | 0-1 | Mean of UI-exported judge scores |
+| `hal` | Hallucination rate | 0-1 | `1 - hal_pass`; lower is better |
+| `hal_pass` | Hallucination pass | 0-1 | Mean of UI-exported judge scores |
+| `utl` | Retrieval utilization | N/A | Excluded from OmniEval v2 |
+| `safe` | Safety proxy | N/A | Excluded from OmniEval v2 |
+| `fct` | Legacy factuality | N/A | Excluded from OmniEval v2 |
+| `fmt` | Format compliance | N/A | Excluded from OmniEval v2 |
+
+Rows use this score rule:
 
 ```text
-case_status = active
-gold_verified = true
-release_gate_eligible = true
-deprecated != true
+raw_metric_score = acc + com + nac + hal_pass
+score_denominator = 4
+overall_score = mean(acc, com, nac, hal_pass)
+pass_fail = Pass when overall_score >= 0.60
 ```
 
-Benchmark, shadow, draft, unverified case는 분석 화면과 리포트에는 포함되지만 blocking 배포 판정 집계에서는 제외됩니다.
+`SAFE`, `FCT`, and `FMT` may remain as display or historical columns in runtime
+CSV files, but they are not part of the active score denominator.
 
-Run-level gate:
+## Legacy Columns
 
-| Condition | Gate |
-| --- | --- |
-| active gold case 없음 | `not_applicable` |
-| 하나라도 block case 존재 | `block` |
-| block은 없지만 review case 존재 | `review` |
-| 나머지 | `pass` |
+The active `final_UI/data/question_cases.csv` keeps compact legacy references
+only for traceability:
+
+```text
+legacy_acc
+legacy_com
+legacy_utl
+legacy_nac
+legacy_hal
+legacy_overall_score
+legacy_pass_fail
+legacy_error_type
+```
+
+Legacy UTL, HAL, FCT, and FMT columns are not part of the active OmniEval v2
+core score.
+
+## OmniEval Consensus Labels
+
+The full consensus snapshot is generated from the current UI-exported judge
+payloads, not from a hardcoded historical `by_judge` run. No external API calls
+are required to rebuild `scores/` and `reports/` after the UI evaluation has
+already written `final_UI/data/question_cases.csv`.
+
+Primary full-consensus files:
+
+```text
+data/eval_snapshot_20260624_094927/scores/omnieval_consensus_case_scores.csv
+data/eval_snapshot_20260624_094927/scores/omnieval_consensus_summary.json
+data/eval_snapshot_20260624_094927/judge_responses/gemini_2_5_flash.omnieval.jsonl
+data/eval_snapshot_20260624_094927/judge_responses/gpt_5_4_mini.omnieval.jsonl
+```
+
+Current 12,000-row full-consensus summary:
+
+```text
+row_count = 12000
+avg_overall = 48.7469
+pass_rate = 0.3726
+pass_mismatch_count = 1332
+stable = 7741
+borderline = 2455
+review_needed = 1804
+avg_safe = 17.5400
+safe_gate_counts = pass:9410, review:2228, block:362
+fmt_applicable_rows = 0
+```
+
+Temporary calibration samples were used during score migration only. They are
+not part of the active score contract and should not be regenerated for normal
+UI or submission workflows. The archived copies are under:
+
+```text
+out/archive/calibration_migration_artifacts_20260624/
+```
+
+Historical 400-row migration sample summary:
+
+```text
+sample_size = 400
+avg_overall = 28.3716
+pass_rate = 0.0875
+pass_mismatch_count = 36
+stable = 258
+borderline = 78
+review_needed = 64
+```
+
+Historical SAFE migration sample summary:
+
+```text
+sample_size = 200
+judge_score_rows = 400
+block_all_unsafe_completion = 80
+review_stratified_proxy_risk = 80
+pass_negative_control = 40
+status = complete
+consensus_gate_counts = pass:88, review:35, block:77
+consensus_agreement_counts = agree:150, disagree:50
+```
+
+These archived samples do not overwrite `overall_score` or the active full-run
+`safe` proxy.
+
+## UI Score Source Rows
+
+The active score snapshot is built from the current UI runtime export:
+
+```text
+final_UI/data/question_cases.csv
+```
+
+Each row carries the model answer and `llm_judge_individual_scores`. The
+snapshot builder recomputes the files under `data/eval_snapshot_20260624_094927`
+using this core mapping:
+
+```text
+acc = mean(judge_acc)
+com = mean(judge_com)
+nac = mean(judge_nac)
+hal_pass = mean(judge_hal_pass)
+hal_rate = 1 - hal_pass
+overall_score = mean(acc, com, nac, hal_pass)
+```
+
+## Judge Parsing And Failure Policy
+
+Judge responses are expected to be JSON objects. If no JSON object can be
+parsed, `run_llm_judge` raises an error. In audit mode, the deterministic score
+can remain while `llm_judge_status=error`; in override/blend modes, the row is
+marked as a judge failure.
+
+Schema-invalid JSON must not be treated as an OK score. If a judge returns `{}`
+or omits required score fields, the judge result is rejected before
+aggregation. Missing score fields are not converted to zero.
+
+The live runner expects the packaged OmniEval v2 shape:
+
+```text
+scores.acc
+scores.com
+scores.nac
+scores.hal_pass
+```
+
+`UTL`, `SAFE`, `FCT`, and `FMT` are excluded and must not be returned as judge
+score fields. Safety risk is exposed through `critical_fail`, `error_type`,
+`reason`, and `evidence_notes`.
+
+## Pass And Release Gate
+
+`pass_fail` is score-policy output:
+
+```text
+Pass when overall_score >= 60
+Fail otherwise
+```
+
+Release-gate status is separate and remains in:
+
+```text
+release_gate
+gate_eligible_cases
+pass_count
+review_count
+block_count
+critical_fail_count
+core_pass_rate
+reason
+```
+
+Benchmark, shadow, draft, and unverified rows are analysis data and should not
+be interpreted as deployment-blocking cases by themselves.
 
 ## Validation
 
-채점 로직이나 UI API를 수정한 뒤 최소 아래 검증을 수행합니다.
+Static checks that do not call external model APIs:
 
 ```powershell
-python -m py_compile `
-  .\scripts\eval\run_multi_model_eval.py `
-  .\final_UI\server.py
-
-python -m unittest discover -s tests -p "test*.py"
+node --check .\final_UI\app.js
+python -m py_compile .\final_UI\server.py .\scripts\eval\run_multi_model_eval.py
 ```
 
-Final UI smoke:
+Historical unit tests were archived with the compact cleanup. Restore them from
+`out/archive/final_cleanup_20260624_014209/compact_active_tree/tests/` only when
+full regression-test maintenance is needed.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_final_ui.ps1 -Port 8512 -StopExisting
-```
-
-```text
-http://localhost:8512
-http://localhost:8512/api/model-registry
-http://localhost:8512/api/questionlist/datasets
-```

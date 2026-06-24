@@ -68,6 +68,8 @@ def normalize_csv_case(row: dict[str, Any], *, path: Path, index: int, pool_id: 
     qa_category = csv_text(row, "qa_category", "category", "source_type", "topic", "대분류", "카테고리") or role
     qa_topic = csv_text(row, "qa_topic", "qa_matrix_topic", "topic", "intent", "source_term", "금융토픽", "출처_용어") or qa_category
     question_type = csv_text(row, "question_type", "qtype", "type", "task_type", "문제유형", "질문유형") or "grounded_qa"
+    suite = csv_text(row, "suite", "split_type", "regression_suite") or role
+    regression_suite = csv_text(row, "regression_suite", "split_type", "suite")
     trap = csv_text(row, "forbidden_claims", "must_not_include", "hallucination_trap", "오답_유형", "hallucination_trap(모델이 틀리기 쉬운 오답)")
     metadata = {
         "qa_category": qa_category,
@@ -82,10 +84,12 @@ def normalize_csv_case(row: dict[str, Any], *, path: Path, index: int, pool_id: 
         "dataset_pool_id": pool_id,
         "dataset_role": role,
     }
+    if role == "regression" and regression_suite:
+        metadata["regression_suite"] = regression_suite
     normalized: dict[str, Any] = {
         "case_id": str(case_id),
         "question_id": str(case_id),
-        "suite": role,
+        "suite": suite,
         "question": question,
         "instruction": question,
         "output": answer,
@@ -533,6 +537,8 @@ def compose_dataset(
     has_gate_eligible = bool(gate_counts.get("eligible"))
     if shadow_fallback_used or (role_counts.get("regression") and not has_gate_eligible):
         run_type = "exploratory_regression"
+    elif has_gate_eligible:
+        run_type = "release_gate"
     elif role_counts and set(role_counts) <= {"benchmark"}:
         run_type = "benchmark"
     else:

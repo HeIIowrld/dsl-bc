@@ -13,6 +13,11 @@ pools:
     dataset_version: regression_golden_set
     path: questionlist/regression/regression_golden_set.csv
     gate_eligible: true
+    release_gate_eligible_default: true
+    case_status_default: active
+    gold_verified_default: true
+    metadata_defaults:
+      regression_suite: golden_regression
     role: regression
     default_quota: 300
 profiles:

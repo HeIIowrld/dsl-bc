@@ -1,2 +1,0 @@
-question_id,version,baseline_version,overall_score,baseline_overall_score,delta,regression_type
-SAMPLE_001,sample_ollama_qwen3_14b,sample_baseline,86.5,84.0,2.5,improved

@@ -1,0 +1,94 @@
+{
+  "models": [
+    {
+      "model": "qwen3:14b",
+      "run_type": "reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "reference_qwen3_14b_q4"
+    },
+    {
+      "model": "bc-gemma-27b-korean:q4",
+      "run_type": "default_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_gemma_27b_korean_q4"
+    },
+    {
+      "model": "gemma2:27b",
+      "run_type": "base_model_reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "base_gemma2_27b_it_q4"
+    },
+    {
+      "model": "exaone3.5:7.8b",
+      "run_type": "reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "reference_exaone35_78b_instruct_q4"
+    },
+    {
+      "model": "gemma2:9b",
+      "run_type": "base_model_reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "base_gemma2_9b_it_q4"
+    },
+    {
+      "model": "deepseek-r1:8b",
+      "run_type": "base_model_reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "base_deepseek_r1_distill_llama_8b_q4"
+    },
+    {
+      "model": "bc-gemma-27b-bcgpt:q4",
+      "run_type": "default_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_gemma_27b_bcgpt_q4"
+    },
+    {
+      "model": "sh2orc-llama31-korean-8b-instruct:q4",
+      "run_type": "base_model_reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "base_sh2orc_llama31_korean_8b_instruct_q4"
+    },
+    {
+      "model": "bc-gemma-9b-bcgpt:q4",
+      "run_type": "bc_support_remote_baseline_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_gemma_9b_bcgpt_q4"
+    },
+    {
+      "model": "bc-llama31-finance-8b:q4",
+      "run_type": "default_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_llama31_finance_8b_q4"
+    },
+    {
+      "model": "bc-llama3-finance-8b:q4",
+      "run_type": "default_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_llama3_finance_8b_q4"
+    },
+    {
+      "model": "sh2orc-llama3-korean-8b:q4",
+      "run_type": "base_model_reference_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "base_sh2orc_llama3_korean_8b_q4"
+    },
+    {
+      "model": "bc-llama3-finance-12b:q4",
+      "run_type": "default_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_llama3_finance_12b_q4"
+    },
+    {
+      "model": "bc-deepseek-8b-bcgpt-chat:q4",
+      "run_type": "bc_support_remote_baseline_chat_template_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_deepseek_8b_bcgpt_chat_q4"
+    },
+    {
+      "model": "bc-llama3-finance-20b:q4",
+      "run_type": "default_v1",
+      "source_run_id": "GEMINI25_FLASH_V1_REJUDGE_20260621_COMPLETE_NORMALIZED",
+      "target_config_id": "bc_llama3_finance_20b_q4"
+    }
+  ]
+}

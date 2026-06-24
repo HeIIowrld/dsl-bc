@@ -1,2 +1,0 @@
-run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,utl,nac,hal,scored_acc,scored_com,scored_utl,scored_nac,scored_hal,utl_applicable,utl_applicable_rate,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw
-SAMPLE_RUN_QWEN3,qwen3:14b,sample_ollama_qwen3_14b,sample_benchmark_v1,2026-06-07,2026-06-07T09:00:00,2,2,0,1.0,86.5,1.0,86.5,17,18,16,18,17,17,18,16,18,17,True,1.0,88.0,84.0,1200,0

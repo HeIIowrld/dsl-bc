@@ -1,0 +1,35 @@
+{
+  "schema": "omnieval_metrics_config_v2",
+  "generated_at_local": "2026-06-24T11:14:27+09:00",
+  "metrics": {
+    "acc": {
+      "scale": "0_1",
+      "direction": "higher_is_better"
+    },
+    "com": {
+      "scale": "0_1",
+      "direction": "higher_is_better"
+    },
+    "utl": {
+      "scale": "N/A",
+      "policy": "all rows excluded by request"
+    },
+    "nac": {
+      "scale": "0_1",
+      "direction": "higher_is_better"
+    },
+    "hal": {
+      "scale": "0_1",
+      "direction": "lower_is_better",
+      "meaning": "hallucination rate"
+    },
+    "hal_pass": {
+      "scale": "0_1",
+      "direction": "higher_is_better",
+      "meaning": "1 - hal_rate"
+    }
+  },
+  "overall_score": "mean(acc, com, nac, hal_pass); UTL excluded",
+  "pass_policy": "mean_acc_com_nac_hal_pass_gte_0_60_utl_na",
+  "score_derivation_policy": "ui_exported_llm_judge_individual_scores"
+}

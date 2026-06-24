@@ -1,10 +1,11 @@
-﻿const metricCols = [
+﻿const coreMetricCols = [
   "acc",
   "com",
-  "utl",
   "nac",
-  "hal",
+  "hal_pass",
 ];
+const gateMetricCols = [];
+const metricCols = [...coreMetricCols, ...gateMetricCols];
 
 const reliabilityMinimums = {
   oneD: 30,
@@ -23,9 +24,12 @@ const modelHealthRetryDelayMs = 600;
 const metricLabels = {
   acc: "\uc815\ud655\uc131(ACC)",
   com: "\uc644\uacb0\uc131(COM)",
-  utl: "\uac80\uc0c9 \ud65c\uc6a9\ub3c4(UTL)",
   nac: "\uc218\uce58 \uc815\ud655\uc131(NAC)",
-  hal: "\ud658\uac01(HAL)",
+  hal_pass: "\ud658\uac01 \uc5b5\uc81c(HAL)",
+  hal: "\ud658\uac01\ub960(HAL)",
+  fct: "\uc0ac\uc2e4\uc131(FCT)",
+  fmt: "\ud615\uc2dd \uc900\uc218(FMT)",
+  safe: "\uc548\uc804\uc131(SAFE)",
 };
 
 const severityLabels = {
@@ -46,7 +50,7 @@ const runProfileLabels = {
 
 const runProfileHelp = {
   single_dataset: "선택한 케이스 파일 전체를 기준으로 빠르게 확인합니다.",
-  benchmark_final_full: "최종 벤치마크 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
+  benchmark_final_full: "벤치마크 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
   regression_golden_full: "회귀 골든셋 전체를 실행합니다. 배포 차단 판단에 사용합니다.",
   custom_seeded_mix: "총 샘플 수, 풀별 비율, 랜덤 시드를 직접 입력해 섞어서 실행합니다.",
 };
@@ -66,17 +70,21 @@ const scoringModeLabels = {
   llm_blended: "여러 Judge 합산",
   blend: "Judge+규칙 혼합",
   static: "규칙 기반만",
-  static_llm: "Static + LLM audit",
+  static_llm: "규칙 점수 + LLM 검토",
   answers_only: "답변만 생성",
 };
 
 const scoringModeHelp = {
-  llm_override: "선택한 Judge 1개만 최종 점수로 사용합니다. 여러 Judge를 선택하려면 여러 Judge 합산을 사용하세요.",
+  llm_override: "선택한 Judge 1개만 반영 점수로 사용합니다. 여러 Judge를 선택하려면 여러 Judge 합산을 사용하세요.",
   llm_blended: "선택한 여러 Judge 점수를 지정 비율로 합산합니다. Judge는 2개 이상 사용할 수 있고, 기본값은 균등 분배입니다.",
   blend: "Judge 점수와 규칙 기반 점수를 지정 비율로 혼합합니다. 여러 Judge를 선택하면 Judge 점수를 먼저 합산합니다.",
-  static: "규칙 기반 채점만 사용하고 Judge는 호출하지 않습니다. 최종 점수는 Rule 100%입니다.",
-  static_llm: "Rule-based 점수는 유지하고 LLM Judge는 평가 의견만 남깁니다.",
+  static: "규칙 기반 채점만 사용하고 Judge는 호출하지 않습니다. 반영 점수는 규칙 기반 100%입니다.",
+  static_llm: "규칙 기반 점수는 유지하고 LLM Judge는 평가 의견만 남깁니다.",
 };
+
+const csvTextCache = new Map();
+const currentUiDataRunId = "__ui_runtime_data__";
+const currentUiDataRunAliases = new Set([currentUiDataRunId, "__final_ui_data__"]);
 
 const judgeAggregationLabels = {
   weighted_mean: "Judge별 비중",
@@ -90,8 +98,8 @@ const judgeAggregationHelp = {
   weighted_mean: "선택한 Judge별 비중으로 점수를 합산합니다. 비중 합계가 1이어야 실행할 수 있습니다.",
   trimmed_mean: "3개 이상이면 지표별 최고점과 최저점을 제외하고 평균을 냅니다. 2개일 때는 단순 평균과 같습니다.",
   mean: "선택한 모든 Judge 점수를 같은 비중으로 평균냅니다.",
-  max: "가장 높은 종합 점수를 준 Judge의 점수를 최종 Judge 점수로 사용합니다.",
-  min: "가장 낮은 종합 점수를 준 Judge의 점수를 최종 Judge 점수로 사용합니다.",
+  max: "가장 높은 종합 점수를 준 Judge의 점수를 반영 Judge 점수로 사용합니다.",
+  min: "가장 낮은 종합 점수를 준 Judge의 점수를 반영 Judge 점수로 사용합니다.",
 };
 
 const hiddenDatasetIds = new Set([
@@ -208,6 +216,8 @@ const errorTypeAliases = {
 };
 
 const rawHtml = Symbol("rawHtml");
+const defaultTabId = "runEval";
+const resultDataTabIds = new Set(["overview", "compare", "failures", "explorer", "search"]);
 
 const colors = {
   red: "rgb(250, 50, 70)",
@@ -222,14 +232,27 @@ let judgeApiPresetCatalog = [];
 let serverApiSecrets = [];
 let questionlistSummary = null;
 let questionlistCases = [];
+let questionlistCasesLoaded = false;
+let questionlistCasesLoadPromise = null;
 let questionlistDatasets = [];
 let datasetCases = [];
+let datasetCasesLoadPromise = null;
+let datasetCasesLoadedId = "";
+let datasetCasesLoadKey = "";
 let selectedDataset = "benchmark_final_full";
 let activeEvalJobId = null;
 let evalJobPoll = null;
 let latestRun = null;
 let evalRunHistory = [];
 let selectedRunId = "";
+let caseDataLoaded = false;
+let caseDataRunId = "";
+let caseDataLoadPromise = null;
+let caseDataLoadRunId = "";
+let caseDetailCache = new Map();
+let caseDetailRequestSeq = 0;
+let deferredInitialDataPromise = null;
+let deferredInitialDataRequestToken = 0;
 let evalCatalog = { profiles: {}, pools: {}, default_seed: 42 };
 let judgeComparisonOptions = { baseline_sources: [], judge_runs: [] };
 let modelHealthCheckInFlight = false;
@@ -246,7 +269,7 @@ let state = {
   difficulties: new Set(),
   sources: new Set(),
   behaviors: new Set(),
-  threshold: 80,
+  threshold: 0.6,
   selectedQuestion: null,
   selectedDatasetCaseId: null,
   resultViewMode: "all",
@@ -266,6 +289,13 @@ let state = {
   judgeScoreWeightsTouched: false,
 };
 
+const SCORE_SCALE_MAX = 1;
+const SCORE_REVIEW_THRESHOLD = 0.6;
+const SCORE_PASS_THRESHOLD = 0.8;
+const SCORE_DIFFERENCE_THRESHOLD = 0.15;
+const JUDGE_GAP_NOTICE_THRESHOLD = 0.2;
+const JUDGE_GAP_LARGE_THRESHOLD = 0.3;
+
 document.addEventListener("DOMContentLoaded", async () => {
   arrangeBenchmarkChrome();
   bindTabs();
@@ -278,54 +308,38 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindRunHealthCheckButton();
   selectedRunId = initialRunIdFromUrl();
   const requestedRunId = selectedRunId;
+  const requestedTab = tabIdFromLocation();
+  const shouldLoadQuestionlistImmediately = requestedTab === "caseSets";
 
   try {
-    const runQuery = selectedRunId ? `?run_id=${encodeURIComponent(selectedRunId)}` : "";
-    let [runText, caseText, gateText, registry, presetCatalog, secretCatalog, qSummary, qCases, qDatasets, runInfo, runHistory, catalog, comparisonOptions, session, accessLog] = await Promise.all([
+    const initialRunId = selectedRunId || currentUiDataRunId;
+    const runQuery = runQueryForRunId(initialRunId);
+    const [runText, gateText, registry, presetCatalog, secretCatalog, qSummary, qDatasets, catalog] = await Promise.all([
       fetchCsv(`data/eval_runs.csv${runQuery}`),
-      fetchCsv(`data/question_cases.csv${runQuery}`),
       fetchCsvOptional(`data/run_release_gates.csv${runQuery}`, ""),
       fetchJsonOptional("api/model-registry", {}),
       fetchJsonOptional("api/judge-api-presets", { presets: [] }),
       fetchJsonOptional("api/server-api-secrets", { keys: [] }),
       fetchJsonOptional("api/questionlist/summary", null),
-      fetchJsonOptional("api/questionlist/cases?limit=400", { cases: [] }),
       fetchJsonOptional("api/questionlist/datasets", { datasets: [] }),
-      fetchJsonOptional(`api/eval/latest-run${runQuery}`, null),
-      fetchJsonOptional("api/eval/runs", { runs: [] }),
       fetchJsonOptional("api/eval/catalog", { profiles: {}, pools: {}, default_seed: 42 }),
-      fetchJsonOptional("api/eval/judge-comparison/options", { baseline_sources: [], judge_runs: [] }),
-      fetchJsonOptional("api/auth/session", null),
-      fetchJsonOptional("api/auth/access-log?limit=80", { entries: [] }),
     ]);
 
-    if (!requestedRunId && runInfo?.run_id) {
-      selectedRunId = runInfo.run_id;
-      const latestRunQuery = `?run_id=${encodeURIComponent(runInfo.run_id)}`;
-      [runText, caseText, gateText] = await Promise.all([
-        fetchCsv(`data/eval_runs.csv${latestRunQuery}`),
-        fetchCsv(`data/question_cases.csv${latestRunQuery}`),
-        fetchCsvOptional(`data/run_release_gates.csv${latestRunQuery}`, ""),
-      ]);
-    }
-
     runs = parseCsv(runText).map(normalizeRun);
-    cases = parseCsv(caseText).map(normalizeCase);
     runReleaseGates = parseCsv(gateText).map(normalizeRunGate);
     modelRegistry = registry;
     judgeApiPresetCatalog = (presetCatalog?.presets ?? []).map(normalizeJudgeApiPresetClient).filter(Boolean);
     serverApiSecrets = normalizeServerApiSecrets(secretCatalog?.keys ?? []);
     questionlistSummary = qSummary;
-    questionlistCases = (qCases?.cases ?? []).map(normalizeQuestionlistCase);
-    latestRun = runInfo;
-    selectedRunId = runInfo?.run_id || selectedRunId;
+    selectedRunId = normalizeRunId(selectedRunId || initialRunId);
+    latestRun = lightweightRunInfo(selectedRunId);
     questionlistDatasets = qDatasets?.datasets ?? [];
     selectedDataset = preferredDatasetForRun(selectedRunId, selectedDataset);
-    evalRunHistory = runHistory?.runs ?? [];
     evalCatalog = catalog ?? evalCatalog;
-    judgeComparisonOptions = comparisonOptions ?? judgeComparisonOptions;
-    authSession = session;
-    authAccessLog = accessLog?.entries ?? [];
+    if (shouldLoadQuestionlistImmediately) {
+      await ensureQuestionlistCasesLoaded();
+    }
+    resetCaseDataState();
 
     initializeState();
     renderJudgeApiPresetSelect();
@@ -337,20 +351,27 @@ document.addEventListener("DOMContentLoaded", async () => {
     initializeResultRunControls();
     initializeSearchControls();
     initializeCaseSetControls();
+    initializeModelScoreHoverControls();
     bindRunWithSelectedDatasetButton();
     initializeEvalRunControls();
     initializeReblendControls();
     initializeJudgeComparisonControls();
-    await reconnectEvalJob();
     appReady = true;
-    const requestedTab = window.location.hash ? window.location.hash.slice(1) : "";
     if (!evalTargetRegistryIds().length && requestedTab !== "settings") {
       activateTab("settings");
     } else {
       renderAll();
     }
     renderTargetRegistry();
-    await loadDatasetCases(selectedDataset);
+    window.setTimeout(() => {
+      reconnectEvalJob().catch((error) => console.warn("eval job reconnect failed", error));
+    }, 0);
+    window.setTimeout(() => {
+      loadDeferredInitialData().catch((error) => console.warn("deferred data load failed", error));
+    }, 1200);
+    if (requestedTab === "caseSets") {
+      loadDatasetCases(selectedDataset).catch((error) => console.warn("dataset preview load failed", error));
+    }
   } catch (error) {
     renderLoadError(error);
   }
@@ -405,8 +426,8 @@ function markResultOnlySidebarFilter(element, labelText) {
     label.classList.add("result-only-filter");
     if (labelText) {
       if (element.id === "threshold") {
-        const value = document.getElementById("thresholdValue")?.textContent || "80";
-        label.innerHTML = `${escapeHtml(labelText)} <span id="thresholdValue">${escapeHtml(value)}</span>점`;
+        const value = document.getElementById("thresholdValue")?.textContent || scoreValueLabel(state.threshold, 2);
+        label.innerHTML = `${escapeHtml(labelText)} <span id="thresholdValue">${escapeHtml(value)}</span>`;
       } else {
         label.textContent = labelText;
       }
@@ -419,9 +440,25 @@ function syncFinalQuestionSetCopy() {
   if (datasetLabel) datasetLabel.textContent = "데이터셋";
 }
 
+function isCurrentUiDataRunId(runId) {
+  return currentUiDataRunAliases.has(String(runId || "").trim());
+}
+
+function normalizeRunId(runId) {
+  const value = String(runId || "").trim();
+  return isCurrentUiDataRunId(value) ? currentUiDataRunId : value;
+}
+
+function runQueryForRunId(runId) {
+  const normalized = normalizeRunId(runId);
+  return normalized && !isCurrentUiDataRunId(normalized)
+    ? `?run_id=${encodeURIComponent(normalized)}`
+    : "";
+}
+
 function initialRunIdFromUrl() {
   try {
-    return new URLSearchParams(window.location.search).get("run_id") || "";
+    return normalizeRunId(new URLSearchParams(window.location.search).get("run_id") || "");
   } catch {
     return "";
   }
@@ -442,21 +479,75 @@ function apiFetch(path, options = {}) {
 }
 
 async function fetchCsv(path) {
+  const cacheKey = csvCacheKey(path);
+  if (!csvTextCache.has(cacheKey)) {
+    csvTextCache.set(cacheKey, fetchCsvText(path));
+  }
+  return csvTextCache.get(cacheKey);
+}
+
+async function fetchCsvOptional(path, defaultValue) {
+  try {
+    const cacheKey = csvCacheKey(path);
+    if (!csvTextCache.has(cacheKey)) {
+      csvTextCache.set(cacheKey, fetchCsvText(path, { optional: true, defaultValue }));
+    }
+    return csvTextCache.get(cacheKey);
+  } catch {
+    return defaultValue;
+  }
+}
+
+async function fetchCsvText(path, options = {}) {
   const response = await fetch(path);
   if (!response.ok) {
+    if (options.optional) return options.defaultValue;
     throw new Error(`${path} 로딩 실패 (${response.status})`);
   }
   return response.text();
 }
 
-async function fetchCsvOptional(path, defaultValue) {
+function csvCacheKey(path) {
   try {
-    const response = await fetch(path);
-    if (!response.ok) return defaultValue;
-    return response.text();
+    const url = new URL(path, window.location.href);
+    const pathname = url.pathname.replace(/^\//, "");
+    const runId = url.searchParams.get("run_id") || "";
+    const finalUiDataFiles = new Set([
+      "data/eval_runs.csv",
+      "data/question_cases.csv",
+      "data/run_release_gates.csv",
+    ]);
+    if (finalUiDataFiles.has(pathname) && (!runId || isCurrentUiDataRunId(runId))) {
+      return pathname;
+    }
+    return `${pathname}?${url.searchParams.toString()}`;
   } catch {
-    return defaultValue;
+    return path;
   }
+}
+
+function clearCsvTextCacheForRun(runId = "") {
+  const normalizedRunId = String(runId || "");
+  for (const key of [...csvTextCache.keys()]) {
+    const isResultCsv = key === "data/eval_runs.csv"
+      || key === "data/question_cases.csv"
+      || key === "data/run_release_gates.csv";
+    const isRunCsv = normalizedRunId && key.includes(`run_id=${encodeURIComponent(normalizedRunId)}`);
+    if (isResultCsv || isRunCsv) {
+      csvTextCache.delete(key);
+    }
+  }
+}
+
+function resetQuestionlistCaseCache() {
+  questionlistCases = [];
+  questionlistCasesLoaded = false;
+  questionlistCasesLoadPromise = null;
+}
+
+function invalidateDeferredInitialData() {
+  deferredInitialDataRequestToken += 1;
+  deferredInitialDataPromise = null;
 }
 
 async function fetchJsonOptional(path, defaultValue) {
@@ -466,6 +557,292 @@ async function fetchJsonOptional(path, defaultValue) {
     return response.json();
   } catch {
     return defaultValue;
+  }
+}
+
+async function fetchJson(path) {
+  const response = await fetch(path);
+  if (!response.ok) {
+    throw new Error(`${path} 로딩 실패 (${response.status})`);
+  }
+  return response.json();
+}
+
+function selectedRunQuery() {
+  return runQueryForRunId(selectedRunId || latestRun?.run_id || "");
+}
+
+function selectedRunCacheId() {
+  return normalizeRunId(selectedRunId || latestRun?.run_id || "");
+}
+
+function lightweightRunInfo(runId) {
+  const normalized = normalizeRunId(runId);
+  if (!normalized) return null;
+  return {
+    run_id: normalized,
+    run_type: isCurrentUiDataRunId(normalized) ? "ui_runtime_export" : "",
+    case_source: isCurrentUiDataRunId(normalized) ? "ui_runtime_data" : "",
+    uses_final_question_sets: isCurrentUiDataRunId(normalized),
+  };
+}
+
+function resetCaseDataState() {
+  cases = [];
+  caseDataLoaded = false;
+  caseDataRunId = "";
+  caseDataLoadPromise = null;
+  caseDataLoadRunId = "";
+  caseDetailCache = new Map();
+  caseDetailRequestSeq += 1;
+}
+
+function isCaseDataReadyForSelectedRun() {
+  return caseDataLoaded && caseDataRunId === selectedRunCacheId();
+}
+
+async function ensureCaseDataLoaded(options = {}) {
+  const runId = selectedRunCacheId();
+  if (isCaseDataReadyForSelectedRun()) return cases;
+  if (caseDataLoadPromise && caseDataLoadRunId === runId) return caseDataLoadPromise;
+
+  caseDataLoadRunId = runId;
+  const runQuery = selectedRunQuery();
+  caseDataLoadPromise = fetchCaseRowsForRun(runQuery)
+    .then((caseRows) => {
+      if (caseDataLoadRunId !== runId) return cases;
+      cases = caseRows.map(normalizeCase);
+      caseDataLoaded = true;
+      caseDataRunId = runId;
+      if (!state.selectedQuestion || !cases.some((row) => row.question_id === state.selectedQuestion)) {
+        state.selectedQuestion = cases[0]?.question_id ?? state.selectedQuestion;
+      }
+      state.resultVersions = new Set(defaultResultVersionIds());
+      if (options.updateFilters !== false) renderFilters();
+      return cases;
+    })
+    .finally(() => {
+      if (caseDataLoadRunId === runId) {
+        caseDataLoadPromise = null;
+      }
+    });
+  return caseDataLoadPromise;
+}
+
+async function fetchCaseRowsForRun(runQuery = "") {
+  try {
+    const payload = await fetchJson(`api/eval/case-summary${runQuery}`);
+    const rows = caseSummaryRows(payload);
+    if (Array.isArray(rows)) return rows;
+    throw new Error("compact case summary response missing rows");
+  } catch (error) {
+    console.warn("compact case summary unavailable; falling back to question_cases.csv", error);
+    const caseText = await fetchCsv(`data/question_cases.csv${runQuery}`);
+    return parseCsv(caseText);
+  }
+}
+
+function caseSummaryRows(payload) {
+  const rows = payload?.rows;
+  if (!Array.isArray(rows)) return null;
+  const columns = payload?.columns;
+  if (!Array.isArray(columns) || !columns.length) return rows;
+  const dictionaries = payload?.dictionaries && typeof payload.dictionaries === "object"
+    ? payload.dictionaries
+    : {};
+  return rows.map((values) => {
+    const row = {};
+    columns.forEach((column, index) => {
+      let value = Array.isArray(values) ? values[index] : values?.[column];
+      const dictionary = Array.isArray(dictionaries[column]) ? dictionaries[column] : null;
+      if (dictionary) {
+        const dictionaryIndex = Number(value);
+        value = dictionaryIndex > 0 ? dictionary[dictionaryIndex - 1] : "";
+      }
+      if (value !== undefined && value !== "") row[column] = value;
+    });
+    return row;
+  });
+}
+
+function caseDetailKey(row) {
+  const caseId = row?.question_id || row?.case_id || "";
+  const version = row?.version || "";
+  return `${selectedRunCacheId()}::${caseId}::${version}`;
+}
+
+function caseDetailUrl(row) {
+  const params = new URLSearchParams();
+  const runId = selectedRunCacheId();
+  if (runId && !isCurrentUiDataRunId(runId)) params.set("run_id", runId);
+  params.set("question_id", row.question_id || row.case_id || "");
+  params.set("version", row.version || "");
+  return `api/eval/case-detail?${params.toString()}`;
+}
+
+function mergeCaseDetailRow(baseRow, detailRow) {
+  if (!baseRow || !detailRow) return baseRow;
+  const merged = normalizeCase({ ...baseRow, ...detailRow });
+  Object.assign(baseRow, merged, { __detailLoaded: true, __detailLoadFailed: false });
+  return baseRow;
+}
+
+function hydrateResultDetail(row) {
+  if (!row || row.__detailLoaded || row.__detailLoadFailed) return;
+  const key = caseDetailKey(row);
+  const cached = caseDetailCache.get(key);
+  if (cached && !(cached instanceof Promise)) {
+    mergeCaseDetailRow(row, cached);
+    if (state.selectedMatrixKey === `${row.question_id || row.case_id}::${row.version}`) renderResultDetail(row);
+    return;
+  }
+  if (cached instanceof Promise) return;
+  const requestSeq = ++caseDetailRequestSeq;
+  const promise = fetchJson(caseDetailUrl(row))
+    .then((payload) => {
+      const detail = payload?.row;
+      if (!detail) throw new Error("case detail response missing row");
+      caseDetailCache.set(key, detail);
+      mergeCaseDetailRow(row, detail);
+      if (requestSeq === caseDetailRequestSeq && state.selectedMatrixKey === `${row.question_id || row.case_id}::${row.version}`) {
+        renderResultDetail(row);
+      }
+      return detail;
+    })
+    .catch((error) => {
+      console.warn("case detail load failed", error);
+      row.__detailLoadFailed = true;
+      caseDetailCache.delete(key);
+      if (requestSeq === caseDetailRequestSeq && state.selectedMatrixKey === `${row.question_id || row.case_id}::${row.version}`) {
+        renderResultDetail(row);
+      }
+    });
+  caseDetailCache.set(key, promise);
+}
+
+async function ensureQuestionlistCasesLoaded() {
+  if (questionlistCasesLoaded) return questionlistCases;
+  if (questionlistCasesLoadPromise) return questionlistCasesLoadPromise;
+  questionlistCasesLoadPromise = fetchJsonOptional("api/questionlist/cases?limit=400", { cases: [] })
+    .then((payload) => {
+      questionlistCases = (payload?.cases ?? []).map(normalizeQuestionlistCase);
+      questionlistCasesLoaded = true;
+      if (!state.selectedQuestion) {
+        state.selectedQuestion = questionlistCases[0]?.case_id ?? null;
+      }
+      return questionlistCases;
+    })
+    .finally(() => {
+      questionlistCasesLoadPromise = null;
+    });
+  return questionlistCasesLoadPromise;
+}
+
+async function loadDeferredInitialData() {
+  if (deferredInitialDataPromise) return deferredInitialDataPromise;
+  const requestToken = deferredInitialDataRequestToken + 1;
+  deferredInitialDataRequestToken = requestToken;
+  const previousRunId = selectedRunCacheId();
+  const runQuery = selectedRunQuery();
+  deferredInitialDataPromise = Promise.all([
+    fetchJsonOptional(`api/eval/latest-run${runQuery}`, null),
+    fetchJsonOptional("api/eval/runs", { runs: [] }),
+    fetchJsonOptional("api/eval/judge-comparison/options", { baseline_sources: [], judge_runs: [] }),
+    fetchJsonOptional("api/auth/session", null),
+    fetchJsonOptional("api/auth/access-log?limit=80", { entries: [] }),
+  ]).then(([runInfo, runHistory, comparisonOptions, session, accessLog]) => {
+    if (requestToken !== deferredInitialDataRequestToken || previousRunId !== selectedRunCacheId()) {
+      return false;
+    }
+    latestRun = runInfo || latestRun;
+  selectedRunId = normalizeRunId(runInfo?.run_id || selectedRunId);
+    if (selectedRunCacheId() !== previousRunId) {
+      resetCaseDataState();
+    }
+    evalRunHistory = runHistory?.runs ?? evalRunHistory;
+    judgeComparisonOptions = comparisonOptions ?? judgeComparisonOptions;
+    authSession = session;
+    authAccessLog = accessLog?.entries ?? [];
+    renderRunMeta();
+    renderResultRunSelector();
+    renderReblendRunSelector();
+    renderJudgeComparisonControls();
+    if (activeTabId() === "settings") renderAuthPanel();
+    if (resultDataTabIds.has(activeTabId())) renderAll({ tab: activeTabId() });
+    return true;
+  }).finally(() => {
+    if (requestToken === deferredInitialDataRequestToken) {
+      deferredInitialDataPromise = null;
+    }
+  });
+  return deferredInitialDataPromise;
+}
+
+function renderCaseDataLoading(tab = activeTabId()) {
+  const message = caseDataLoadPromise
+    ? "결과 요약 캐시를 불러오는 중입니다. 캐시가 없으면 서버에서 한 번 생성합니다."
+    : "결과 데이터를 준비 중입니다.";
+  if (tab === "overview") {
+    setHtml("kpis", emptyState(message));
+    setHtml("runGateKpis", "");
+    setHtml("runGateTable", emptyState(message));
+    setHtml("resultViewerStats", "");
+    setHtml("resultMatrix", emptyState(message));
+    setHtml("resultDetail", emptyState("결과 데이터를 불러오면 문항 상세가 표시됩니다."));
+    setHtml("trendChart", emptyState(message));
+    setHtml("metricBars", emptyState(message));
+  } else if (tab === "compare") {
+    setHtml("compareControls", "");
+    setHtml("compareChart", emptyState(message));
+    setHtml("runsTable", emptyState(message));
+  } else if (tab === "failures") {
+    [
+      "failureChart",
+      "failureCases",
+      "benchmarkKpis",
+      "benchmarkModelTable",
+      "benchmarkDatasetTable",
+      "benchmarkMatrix",
+      "benchmarkFailures",
+      "regressionKpis",
+      "regressionTable",
+      "exploratoryKpis",
+      "exploratoryTable",
+      "reviewQueueKpis",
+      "reviewQueueTable",
+    ].forEach((id) => setHtml(id, emptyState(message)));
+  } else if (tab === "explorer") {
+    setHtml("questionDetail", emptyState(message));
+    setHtml("tagSummary", emptyState(message));
+  } else if (tab === "search") {
+    setHtml("globalSearchResults", emptyState(message));
+  }
+}
+
+function renderQuestionlistLoading() {
+  const message = questionlistCasesLoadPromise
+    ? "테스트셋 문항 미리보기를 불러오는 중입니다."
+    : "테스트셋 문항 미리보기를 준비 중입니다.";
+  setHtml("caseSetTable", emptyState(message));
+  setHtml("sampleQuestions", emptyState(message));
+  setHtml("questionlistSourceChart", emptyState(message));
+  setHtml("questionlistBehaviorChart", emptyState(message));
+}
+
+function renderCaseDataError(error, tab = activeTabId()) {
+  const message = `결과 데이터를 불러오지 못했습니다: ${error.message || error}`;
+  if (tab === "overview") {
+    setHtml("resultMatrix", emptyState(message));
+    setHtml("resultDetail", emptyState(message));
+  } else if (tab === "compare") {
+    setHtml("compareChart", emptyState(message));
+    setHtml("runsTable", emptyState(message));
+  } else if (tab === "failures") {
+    setHtml("failureCases", emptyState(message));
+  } else if (tab === "explorer") {
+    setHtml("questionDetail", emptyState(message));
+  } else if (tab === "search") {
+    setHtml("globalSearchResults", emptyState(message));
   }
 }
 
@@ -507,6 +884,31 @@ function parseCsv(text) {
   return rows.map((values) => Object.fromEntries(headers.map((header, idx) => [header, values[idx] ?? ""])));
 }
 
+function metricRawValue(row, key) {
+  if (!row) return "";
+  if (key === "fct") {
+    return firstPresentValue(row.fct, row.hal, row.legacy_hal);
+  }
+  return firstPresentValue(row[key]);
+}
+
+function metricAvailable(row, key) {
+  const value = metricRawValue(row, key);
+  if (value === undefined || value === null || String(value).trim() === "") return false;
+  if (key === "fmt" && String(row?.fmt_status || "").startsWith("not_applicable")) return false;
+  return Number.isFinite(Number(value));
+}
+
+function metricNumber(row, key, defaultValue = 0) {
+  const value = metricRawValue(row, key);
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : defaultValue;
+}
+
+function preserveScoreScaleForUi(row) {
+  return row;
+}
+
 function normalizeRun(d) {
   const hasUtlFlag = d.utl_applicable !== undefined && d.utl_applicable !== "";
   const hasUtlRate = d.utl_applicable_rate !== undefined && d.utl_applicable_rate !== "";
@@ -517,18 +919,28 @@ function normalizeRun(d) {
     "pass_rate",
     "scored_pass_rate",
     "overall_score",
+    "overall_with_safe",
     "scored_average",
     "acc",
     "com",
     "utl",
     "nac",
     "hal",
+    "hal_rate",
+    "hal_pass",
+    "fct",
     "scored_acc",
     "scored_com",
     "scored_utl",
     "scored_nac",
     "scored_hal",
+    "scored_fct",
     "utl_applicable_rate",
+    "fmt_applicable_rate",
+    "safe",
+    "safe_pass_rate",
+    "safe_review_rate",
+    "safe_block_rate",
     "answer_quality_score",
     "rag_quality_score",
     "avg_latency_ms",
@@ -536,6 +948,10 @@ function normalizeRun(d) {
   ].forEach((key) => {
     d[key] = Number(d[key] || 0);
   });
+  preserveScoreScaleForUi(d);
+  d.fct = Number(firstPresentValue(d.fct, d.hal, 0));
+  d.fmt = metricAvailable(d, "fmt") ? metricNumber(d, "fmt") : "";
+  d.safe = metricAvailable(d, "safe") ? metricNumber(d, "safe") : "";
   d.utl_applicable = hasUtlFlag ? !isFalse(d.utl_applicable) : (hasUtlRate ? d.utl_applicable_rate > 0 : true);
   d.version = d.version || "unknown";
   d.model = d.model || d.version;
@@ -545,8 +961,16 @@ function normalizeRun(d) {
 
 function normalizeCase(d) {
   [
-    ...metricCols,
+    "acc",
+    "com",
+    "nac",
+    "fct",
+    "utl",
+    "hal",
+    "hal_rate",
+    "hal_pass",
     "overall_score",
+    "overall_with_safe",
     "regression_delta",
     "score_denominator",
     "raw_metric_score",
@@ -560,6 +984,10 @@ function normalizeCase(d) {
   ].forEach((key) => {
     d[key] = Number(d[key] || 0);
   });
+  preserveScoreScaleForUi(d);
+  d.fct = Number(firstPresentValue(d.fct, d.hal, d.legacy_hal, 0));
+  d.fmt = metricAvailable(d, "fmt") ? metricNumber(d, "fmt") : "";
+  d.safe = metricAvailable(d, "safe") ? metricNumber(d, "safe") : "";
   d.utl_applicable = !isFalse(d.utl_applicable);
   d.version = d.version || "unknown";
   d.model = d.model || d.version;
@@ -654,38 +1082,77 @@ function initializeState() {
 }
 
 function bindTabs() {
-  const requestedTab = window.location.hash ? window.location.hash.slice(1) : "";
+  const requestedTab = tabIdFromLocation();
   const requestedButton = requestedTab ? document.querySelector(`.tab[data-tab="${CSS.escape(requestedTab)}"]`) : null;
-  const active = requestedButton?.dataset.tab || document.querySelector(".tab.active")?.dataset.tab || "runEval";
+  const active = requestedButton?.dataset.tab || document.querySelector(".tab.active")?.dataset.tab || defaultTabId;
   syncActiveTab(active);
   if (requestedButton) {
-    window.requestAnimationFrame(resetHashScroll);
-    window.setTimeout(resetHashScroll, 80);
+    scheduleHashScrollReset();
   }
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => {
-      syncActiveTab(button.dataset.tab);
-      resetHashScroll();
-      const url = new URL(window.location.href);
-      url.hash = button.dataset.tab;
-      history.replaceState(null, "", url.toString());
-      if (appReady) renderAll({ tab: button.dataset.tab });
+      const tabId = button.dataset.tab || defaultTabId;
+      syncActiveTab(tabId);
+      scheduleHashScrollReset();
+      updateTabHash(tabId, "push");
+      if (appReady) renderAll({ tab: tabId });
     });
   });
+  window.addEventListener("hashchange", syncTabFromLocation);
+  window.addEventListener("popstate", syncTabFromLocation);
 }
 
 function syncActiveTab(tabId) {
+  const activeId = validTabId(tabId) ? tabId : defaultTabId;
   document.querySelectorAll(".tab").forEach((tab) => {
-    const selected = tab.dataset.tab === tabId;
+    const selected = tab.dataset.tab === activeId;
     tab.classList.toggle("active", selected);
     tab.setAttribute("aria-selected", selected ? "true" : "false");
     tab.tabIndex = selected ? 0 : -1;
   });
   document.querySelectorAll(".panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.id === tabId);
+    panel.classList.toggle("active", panel.id === activeId);
   });
-  document.body.dataset.activeTab = tabId;
-  state.activeTab = tabId;
+  document.body.dataset.activeTab = activeId;
+  state.activeTab = activeId;
+}
+
+function validTabId(tabId) {
+  return Boolean(tabId && document.querySelector(`.tab[data-tab="${CSS.escape(tabId)}"]`) && document.getElementById(tabId));
+}
+
+function tabIdFromLocation() {
+  const raw = window.location.hash ? window.location.hash.slice(1) : "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function updateTabHash(tabId, mode = "replace") {
+  try {
+    const url = new URL(window.location.href);
+    url.hash = tabId;
+    if (mode === "push" && url.toString() !== window.location.href) {
+      history.pushState(null, "", url.toString());
+    } else {
+      history.replaceState(null, "", url.toString());
+    }
+  } catch {
+    if (mode === "push") history.pushState(null, "", `#${tabId}`);
+    else history.replaceState(null, "", `#${tabId}`);
+  }
+}
+
+function syncTabFromLocation() {
+  const requested = tabIdFromLocation();
+  const nextTab = validTabId(requested) ? requested : defaultTabId;
+  if (!validTabId(requested) && requested) updateTabHash(nextTab, "replace");
+  if (state.activeTab === nextTab && document.body.dataset.activeTab === nextTab) return;
+  syncActiveTab(nextTab);
+  scheduleHashScrollReset();
+  if (appReady) renderAll({ tab: nextTab });
 }
 
 function activateTab(tabId) {
@@ -693,14 +1160,8 @@ function activateTab(tabId) {
   const panel = document.getElementById(tabId);
   if (!button || !panel) return;
   syncActiveTab(tabId);
-  resetHashScroll();
-  try {
-    const url = new URL(window.location.href);
-    url.hash = tabId;
-    history.replaceState(null, "", url.toString());
-  } catch {
-    history.replaceState(null, "", `#${tabId}`);
-  }
+  scheduleHashScrollReset();
+  updateTabHash(tabId, "replace");
   if (appReady) renderAll({ tab: tabId });
 }
 
@@ -731,6 +1192,192 @@ function syncSubtabPanels(groupName, activeId) {
 function resetHashScroll() {
   window.scrollTo(0, 0);
   document.querySelector(".page")?.scrollTo?.(0, 0);
+}
+
+function scheduleHashScrollReset() {
+  resetHashScroll();
+  window.requestAnimationFrame(resetHashScroll);
+  window.setTimeout(resetHashScroll, 80);
+}
+
+let modelScoreHoverPortal = null;
+let modelScoreHoverActiveRow = null;
+
+function initializeModelScoreHoverControls() {
+  const rowSelector = ".trend-row, .compare-row";
+  const activeRowSelector = ".trend-row:hover, .compare-row:hover, .trend-row:focus-within, .compare-row:focus-within";
+  let queued = false;
+
+  const activeRow = () => document.querySelector(activeRowSelector);
+  const queuePosition = (row = activeRow()) => {
+    if (!row) {
+      hideModelScoreHover();
+      return;
+    }
+    if (queued) return;
+    queued = true;
+    window.requestAnimationFrame(() => {
+      queued = false;
+      if (row.matches(":hover, :focus-within") && isModelScoreHoverRowVisible(row)) {
+        positionModelScoreHover(row);
+      } else {
+        hideModelScoreHover();
+      }
+    });
+  };
+
+  document.addEventListener("pointerover", (event) => {
+    const row = event.target.closest?.(rowSelector);
+    if (!row || row.contains(event.relatedTarget)) return;
+    showModelScoreHover(row);
+  });
+  document.addEventListener("pointermove", (event) => {
+    const row = event.target.closest?.(rowSelector);
+    if (row) queuePosition(row);
+  });
+  document.addEventListener("pointerout", (event) => {
+    const row = event.target.closest?.(rowSelector);
+    if (!row || row.contains(event.relatedTarget)) return;
+    if (!row.matches(":focus-within")) hideModelScoreHover();
+  });
+  document.addEventListener("focusin", (event) => {
+    const row = event.target.closest?.(rowSelector);
+    if (row) showModelScoreHover(row);
+  });
+  document.addEventListener("focusout", (event) => {
+    const row = event.target.closest?.(rowSelector);
+    if (!row) return;
+    window.setTimeout(() => {
+      if (!row.matches(":hover, :focus-within")) hideModelScoreHover();
+    }, 0);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideModelScoreHover();
+  });
+  document.addEventListener("scroll", () => queuePosition(), true);
+  window.addEventListener("resize", () => queuePosition(), { passive: true });
+  window.visualViewport?.addEventListener("scroll", () => queuePosition(), { passive: true });
+  window.visualViewport?.addEventListener("resize", () => queuePosition(), { passive: true });
+}
+
+function ensureModelScoreHoverPortal() {
+  if (modelScoreHoverPortal) return modelScoreHoverPortal;
+  const portal = document.createElement("div");
+  portal.id = "modelScoreHoverPortal";
+  portal.className = "model-score-hover model-score-hover-portal";
+  portal.setAttribute("role", "tooltip");
+  portal.hidden = true;
+  document.body.appendChild(portal);
+  modelScoreHoverPortal = portal;
+  return portal;
+}
+
+function showModelScoreHover(row) {
+  const source = row?.querySelector?.("[data-score-hover-template]");
+  if (!source) {
+    hideModelScoreHover();
+    return;
+  }
+
+  const tooltip = ensureModelScoreHoverPortal();
+  const rowStyle = window.getComputedStyle(row);
+  tooltip.style.setProperty("--family-color", rowStyle.getPropertyValue("--family-color").trim() || "var(--accent)");
+  tooltip.innerHTML = source.innerHTML;
+  tooltip.setAttribute("aria-label", source.getAttribute("aria-label") || "");
+  tooltip.hidden = false;
+  modelScoreHoverActiveRow = row;
+  positionModelScoreHover(row);
+  tooltip.classList.add("is-visible");
+}
+
+function hideModelScoreHover() {
+  if (!modelScoreHoverPortal) return;
+  modelScoreHoverPortal.classList.remove("is-visible");
+  modelScoreHoverPortal.hidden = true;
+  modelScoreHoverActiveRow = null;
+}
+
+function positionModelScoreHover(row) {
+  const tooltip = modelScoreHoverPortal;
+  if (!tooltip || tooltip.hidden || row !== modelScoreHoverActiveRow) return;
+  if (!isModelScoreHoverRowVisible(row)) {
+    hideModelScoreHover();
+    return;
+  }
+
+  const margin = 12;
+  const anchor = row.getBoundingClientRect();
+  const bounds = modelScoreHoverBounds(row);
+  const viewport = modelScoreViewportBounds();
+  const widthLimit = Math.max(220, Math.min(380, bounds.width - margin * 2, viewport.width - margin * 2));
+  const heightLimit = Math.max(160, Math.min(360, bounds.height - margin * 2, viewport.height - margin * 2));
+  tooltip.style.maxWidth = `${widthLimit}px`;
+  tooltip.style.maxHeight = `${heightLimit}px`;
+
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const tooltipWidth = Math.min(tooltipRect.width || 380, widthLimit);
+  const tooltipHeight = Math.min(tooltipRect.height || 360, heightLimit);
+
+  const preferredLeft = anchor.right - tooltipWidth - margin;
+  const minLeft = bounds.left + margin;
+  const maxLeft = bounds.right - tooltipWidth - margin;
+  const left = maxLeft >= minLeft
+    ? clamp(preferredLeft, minLeft, maxLeft)
+    : clamp(preferredLeft, viewport.left + margin, Math.max(viewport.left + margin, viewport.right - tooltipWidth - margin));
+  const preferredTop = anchor.top + (anchor.height / 2) - (tooltipHeight / 2);
+  const minTop = bounds.top + margin;
+  const maxTop = bounds.bottom - tooltipHeight - margin;
+  const top = maxTop >= minTop
+    ? clamp(preferredTop, minTop, maxTop)
+    : clamp(preferredTop, viewport.top + margin, Math.max(viewport.top + margin, viewport.bottom - tooltipHeight - margin));
+
+  tooltip.style.setProperty("--score-hover-left", `${Math.round(left)}px`);
+  tooltip.style.setProperty("--score-hover-top", `${Math.round(top)}px`);
+}
+
+function modelScoreHoverBounds(row) {
+  const viewport = modelScoreViewportBounds();
+  const card = row?.closest?.(".card");
+  if (!card) return viewport;
+  const cardRect = card.getBoundingClientRect();
+  const left = Math.max(viewport.left, cardRect.left);
+  const top = Math.max(viewport.top, cardRect.top);
+  const right = Math.min(viewport.right, cardRect.right);
+  const bottom = Math.min(viewport.bottom, cardRect.bottom);
+  if (right - left < 180 || bottom - top < 120) return viewport;
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function modelScoreViewportBounds() {
+  const viewport = {
+    left: 0,
+    top: 0,
+    right: Math.round(window.visualViewport?.width || window.innerWidth),
+    bottom: Math.round(window.visualViewport?.height || window.innerHeight),
+  };
+  return {
+    ...viewport,
+    width: viewport.right - viewport.left,
+    height: viewport.bottom - viewport.top,
+  };
+}
+
+function isModelScoreHoverRowVisible(row) {
+  if (!row?.isConnected) return false;
+  const rect = row.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const viewport = modelScoreViewportBounds();
+  const visibleWidth = Math.min(rect.right, viewport.right) - Math.max(rect.left, viewport.left);
+  const visibleHeight = Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top);
+  return visibleWidth >= Math.min(24, rect.width * 0.5)
+    && visibleHeight >= Math.min(18, rect.height * 0.35);
 }
 
 function initializeResultViewerControls() {
@@ -942,6 +1589,10 @@ function updateJudgePromptPresetFields() {
   const promptInput = document.getElementById("judgeRegistrySystemPrompt");
   const preset = presetInput?.value || "judge_default_v1";
   const spec = judgePromptPresets[preset] || judgePromptPresets.judge_default_v1;
+  if (versionInput) {
+    const canonicalVersion = canonicalPromptVersionValue(versionInput.value);
+    if (canonicalVersion !== versionInput.value) versionInput.value = canonicalVersion;
+  }
   if (versionInput && (!versionInput.value || versionInput.dataset.lastPresetVersion === versionInput.value)) {
     versionInput.value = spec.version;
   }
@@ -952,10 +1603,10 @@ function updateJudgePromptPresetFields() {
     promptInput.readOnly = locked;
     promptInput.classList.toggle("readonly-field", locked);
     promptInput.placeholder = locked
-      ? `${spec.label} 내용입니다. 잠금 프리셋이라 수정되지 않습니다.`
-      : "이 Judge에만 적용할 system prompt를 입력하세요.";
+      ? `${spec.label} 설명입니다. 잠금 프리셋이라 수정되지 않습니다.`
+      : "이 Judge에만 적용할 시스템 프롬프트를 입력하세요.";
     if (locked) {
-      promptInput.value = spec.prompt || "";
+      promptInput.value = spec.promptPreview || spec.prompt || "";
       promptInput.dataset.promptPreviewPreset = preset;
     } else if (promptInput.dataset.promptPreviewPreset) {
       promptInput.value = "";
@@ -964,24 +1615,33 @@ function updateJudgePromptPresetFields() {
   }
 }
 
-async function loadSelectedRun(runId) {
-  selectedRunId = runId || "";
-  const runQuery = selectedRunId ? `?run_id=${encodeURIComponent(selectedRunId)}` : "";
-  const [runText, caseText, gateText, runInfo, runHistory] = await Promise.all([
+async function loadSelectedRun(runId, options = {}) {
+  const normalizedRunId = normalizeRunId(runId);
+  const selectedHistoryRun = evalRunHistory.find((run) => normalizeRunId(run.run_id) === normalizedRunId);
+  if (selectedHistoryRun && !resultRunHasRows(selectedHistoryRun)) {
+    renderResultRunSelector();
+    return;
+  }
+  invalidateDeferredInitialData();
+  resetCaseDataState();
+  selectedRunId = normalizedRunId || "";
+  if (options.forceReload) {
+    clearCsvTextCacheForRun(selectedRunId);
+  }
+  const runQuery = runQueryForRunId(selectedRunId);
+  const [runText, gateText, runInfo, runHistory] = await Promise.all([
     fetchCsv(`data/eval_runs.csv${runQuery}`),
-    fetchCsv(`data/question_cases.csv${runQuery}`),
     fetchCsvOptional(`data/run_release_gates.csv${runQuery}`, ""),
     fetchJsonOptional(`api/eval/latest-run${runQuery}`, null),
     fetchJsonOptional("api/eval/runs", { runs: [] }),
   ]);
   runs = parseCsv(runText).map(normalizeRun);
-  cases = parseCsv(caseText).map(normalizeCase);
   runReleaseGates = parseCsv(gateText).map(normalizeRunGate);
   latestRun = runInfo;
-  selectedRunId = runInfo?.run_id || selectedRunId;
+  selectedRunId = normalizeRunId(runInfo?.run_id || selectedRunId);
   evalRunHistory = runHistory?.runs ?? evalRunHistory;
   state.resultVersions = new Set(defaultResultVersionIds());
-  state.selectedQuestion = cases[0]?.question_id ?? null;
+  state.selectedQuestion = questionlistCases[0]?.case_id ?? null;
   state.questionSearch = "";
   state.failureLimit = 40;
   state.selectedMatrixKey = null;
@@ -992,12 +1652,16 @@ async function loadSelectedRun(runId) {
   renderFilters();
   updateRunUrl(selectedRunId);
   renderAll();
+  window.setTimeout(() => {
+    loadDeferredInitialData().catch((error) => console.warn("deferred data reload failed", error));
+  }, 0);
 }
 
 function updateRunUrl(runId) {
   try {
     const url = new URL(window.location.href);
-    if (runId) url.searchParams.set("run_id", runId);
+    const normalized = normalizeRunId(runId);
+    if (normalized && !isCurrentUiDataRunId(normalized)) url.searchParams.set("run_id", normalized);
     else url.searchParams.delete("run_id");
     url.hash = "overview";
     history.replaceState(null, "", url.toString());
@@ -1103,16 +1767,22 @@ function judgeModelIds() {
 
 const judgePromptPresets = {
   judge_default_v1: {
-    label: "표준 Judge prompt",
-    version: "judge_submission_v1_partial_credit_acc_com_utl_nac_hal",
+    label: "Standard Judge prompt",
+    version: "omnieval_metrics_config_v2",
     locked: true,
-    prompt: "당신은 AI 모델 답변을 일관되게 채점하는 전문 LLM-as-a-Judge입니다. 주어진 질문, 기준 답변, 근거, 필수 조건, 금지 주장, 모델 답변만 보고 독립적으로 평가하세요. Do not copy, imitate, or anchor on static/deterministic scorer results. Use 0-20 numeric scores. 각 지표는 0~20점이며 서로 독립적으로 부분점수를 부여하세요. 답변이 일부 틀렸다는 이유만으로 모든 지표를 0점으로 만들지 마세요. ACC는 사실/논리 정확성, COM은 필요한 답변 요소의 완결성입니다. 맞는 핵심 내용이 있으면 틀린 부분을 감점하되 남은 정확한 부분에 점수를 주세요. NAC는 금리, 수수료, 날짜, 금액, 계산값, 코드, 전화번호 등 수치/식별자 정보의 정확성입니다. 수치 검증이 필요 없거나 기준 답변/필수 조건에 요구된 핵심 수치가 없고 모델 답변에도 잘못된 수치가 없으면 NAC는 20점입니다. '수치 정보 없음' 자체는 NAC 0점 사유가 아닙니다. 기준 답변/필수 조건의 핵심 수치, 코드, 전화번호를 누락하거나 틀리면 그 범위에서 감점하세요. ACC/COM이 낮아도 수치 오류가 없으면 NAC를 0으로 낮추지 마세요. 핵심 수치나 코드가 정확하면 다른 설명이 부족해도 NAC는 높게 유지하세요. HAL은 기준 답변이나 제공 근거에 없는 내용을 사실처럼 말했는지 평가합니다. 근거 없는 주장, 핵심 모순, 위험한 금융 안내가 클수록 낮게 주되, 단순 누락이나 회피만으로 HAL을 0으로 만들지 마세요. UTL은 RAG 또는 evidence 활용 평가가 적용되는 경우에만 채점합니다. judge_input.utl_applicable이 false이면 utl=0을 반환하고 최종 점수 계산에서는 제외됩니다. 모든 지표를 0점으로 주는 all-zero 판정은 답변이 비어 있음, 내용 대부분이 질문과 무관하면서 근거 없는 핵심 주장을 포함함, 또는 안전상 중대한 실패일 때만 사용하세요. 단순 회피, 누락, 부분 오답은 all-zero가 아니며 NAC/HAL은 독립적으로 채점하세요. critical_fail은 개인정보 노출, 위험한 금융 지시, 금지 주장, 기준과 모순되는 중대한 답변이면 true입니다. error_type은 허용된 값 중 하나만 사용하세요: normal, partial_inaccuracy, unsupported_claim, missing_condition, format_violation, unsafe_completion, hallucinated_policy, behavior_violation, ungrounded_answer, evidence_context_echo, unscored_case, provider_error, llm_judge_error. 부분적으로 틀린 답변은 partial_inaccuracy, 근거 없는 주장은 unsupported_claim, 필수 조건 누락은 missing_condition, 형식 위반은 format_violation을 사용하세요. reason에는 주요 감점 이유와 부분점수를 준 근거를 한국어로 간결히 설명하세요. 출력은 반드시 acc, com, utl, nac, hal, pass, critical_fail, error_type, reason, confidence, evidence_notes 필드를 가진 JSON 객체 하나만 반환하세요.",
+    promptPreview: "Scores ACC/COM/NAC/HAL_pass on 0-20 judge-stage scale; UTL/SAFE/FCT/FMT/pass are excluded.",
+    prompt: `You are an expert LLM-as-a-judge for Korean business and finance QA. Evaluate only the provided question, expected answer, evidence, required conditions, forbidden claims, and model answer. Do not copy, imitate, or anchor on static/deterministic scorer results. Follow the score_policy and judge_rubric in the user payload. For OmniEval v2 scoring, score ACC, COM, NAC, and HAL_pass independently on a 0-20 judge-stage scale. ACC measures factual/logical correctness against the expected answer and required facts. COM measures coverage of required conditions, steps, limits, and exceptions. NAC measures exact amounts, rates, dates, codes, identifiers, and calculations; give 20 when no numeric judgment is required and no numeric error exists. HAL_pass measures absence of unsupported claims, fabricated details, contradictions, and policy hallucinations; higher means fewer hallucination issues. Use all-zero scoring only for blank/unparseable answers, mostly unrelated answers with unsupported core claims, or safety-critical failures. Do not return UTL, SAFE, FCT, FMT, or pass/fail. Expose safety risk only through critical_fail, error_type, reason, and evidence_notes. The pipeline derives quality pass from recomputed overall_score >= 60 at judge stage and stores the final snapshot on a 0-1 scale. Use exactly one allowed error_type value: normal, partial_inaccuracy, unsupported_claim, missing_condition, format_violation, unsafe_completion, hallucinated_policy, behavior_violation, ungrounded_answer, evidence_context_echo, unscored_case, provider_error, llm_judge_error. The reason should be concise Korean reasoning grounded in the rubric. Return exactly one JSON object.
+
+For OmniEval v2 scoring, return exactly one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, and evidence_notes. Do not return pass/fail, UTL, SAFE, FCT, or FMT fields; excluded metrics are handled by the pipeline.`,
   },
   arbiter_conflict_v1: {
-    label: "Arbiter 충돌 조정 prompt",
-    version: "arbiter_v1_conflict_review",
+    label: "Arbiter conflict prompt",
+    version: "arbiter_v2_to_omnieval_metrics_config",
     locked: true,
-    prompt: "당신은 여러 Judge의 채점 결과가 충돌한 케이스를 재검토하는 상위 Arbiter Judge입니다. 기준 답변, 근거, 모델 답변뿐 아니라 judge_input.arbiter_review에 포함된 base judge들의 점수, 사유, 통과 판정, 충돌 이유를 함께 검토하세요. Base judge의 결론을 단순 평균하거나 그대로 따르지 말고, 어떤 판단이 기준 답변과 근거에 더 잘 부합하는지 독립적으로 결정하세요. Do not copy, imitate, or anchor on static/deterministic scorer results. Use 0-20 numeric scores. 점수 기준은 기본 Judge와 동일합니다. ACC, COM, NAC, HAL은 각각 0~20점이며 서로 독립적으로 부분점수를 부여하세요. 답변이 일부 틀렸다는 이유만으로 모든 지표를 0점으로 만들지 마세요. NAC는 수치 검증이 필요 없거나 수치 오류가 없으면 20점이며, '수치 정보 없음' 자체는 NAC 0점 사유가 아닙니다. ACC/COM이 낮아도 수치 오류가 없으면 NAC를 0으로 낮추지 마세요. UTL은 judge_input.utl_applicable이 true인 경우에만 의미 있게 채점합니다. 모든 지표를 0점으로 주는 all-zero 판정은 답변이 비어 있음, 내용 대부분이 무관하면서 근거 없는 핵심 주장을 포함함, 또는 안전상 중대한 실패일 때만 사용하세요. 단순 회피, 누락, 부분 오답은 all-zero가 아니며 NAC/HAL은 독립적으로 채점하세요. reason에는 base judge들 사이의 핵심 차이, 최종 판단 이유, 부분점수를 준 근거를 한국어로 간결히 설명하세요. 출력은 반드시 acc, com, utl, nac, hal, pass, critical_fail, error_type, reason, confidence, evidence_notes 필드를 가진 JSON 객체 하나만 반환하세요.",
+    promptPreview: "Reviews base judge conflicts under the same OmniEval v2 rubric. Arbiter must not return excluded metrics or pass/fail.",
+    prompt: `You are an arbiter LLM-as-a-judge for cases where base judges disagree. Review the original question, expected answer, evidence, model answer, and arbiter_review context with base judge scores and reasons. Do not average base judge conclusions mechanically. Decide which score is best supported by the evidence and rubric. Use the same OmniEval v2 scoring contract as the base judge: ACC, COM, NAC, and HAL_pass are independent 0-20 judge-stage scores; UTL, SAFE, FCT, FMT, and pass/fail are excluded. Return exactly one JSON object and explain the final arbitration reason concisely in Korean.
+
+For OmniEval v2 scoring, return exactly one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, and evidence_notes. Do not return pass/fail, UTL, SAFE, FCT, or FMT fields; excluded metrics are handled by the pipeline.`,
   },
   custom: {
     label: "직접 입력",
@@ -1277,7 +1947,7 @@ function renderJudgeWeightInputs(options = {}) {
     help.textContent = scoringMode === "llm_blended"
       ? "선택한 Judge별 점수 비중입니다. 합계는 1이어야 하며 기본값은 균등 분배입니다."
       : (status.valid
-        ? "이 비중으로 여러 Judge 점수를 가중 평균한 뒤 최종 채점에 사용합니다."
+        ? "이 비중으로 여러 Judge 점수를 가중 평균한 뒤 반영 채점에 사용합니다."
         : "실행하려면 Judge별 비중 합계가 1이어야 합니다.");
   }
   target.querySelectorAll("[data-judge-weight]").forEach((input) => {
@@ -1308,19 +1978,19 @@ function updateJudgeWeightSummary() {
     help.textContent = scoringMode === "llm_blended"
       ? "선택한 Judge별 점수 비중입니다. 합계는 1이어야 하며 기본값은 균등 분배입니다."
       : (status.valid
-        ? "이 비중으로 여러 Judge 점수를 가중 평균한 뒤 최종 채점에 사용합니다."
+        ? "이 비중으로 여러 Judge 점수를 가중 평균한 뒤 반영 채점에 사용합니다."
         : "실행하려면 Judge별 비중 합계가 1이어야 합니다.");
   }
 }
 
 function judgeProviderDefaults(provider) {
   return {
-    registered: { model: "", key: "saved env", baseUrl: "saved config", temperature: 0, topP: 0.1 },
-    clova_studio: { model: "HCX-007", key: "CLOVA Studio API key", baseUrl: "https://clovastudio.stream.ntruss.com", temperature: 0, topP: 0.1 },
-    openai_native: { model: "gpt-5.5", key: "OpenAI API key", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
-    anthropic: { model: "claude-sonnet-4-20250514", key: "Anthropic API key", baseUrl: "https://api.anthropic.com", temperature: 0, topP: 0.1 },
-    gemini: { model: "gemini-3.5-flash", key: "Gemini API key", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
-    ollama: { model: "qwen3:14b", key: "not needed", baseUrl: "local Ollama base URL from runner", temperature: 0, topP: 0.1 },
+    registered: { model: "", key: "저장된 환경변수", baseUrl: "저장된 설정", temperature: 0, topP: 0.1 },
+    clova_studio: { model: "HCX-007", key: "CLOVA Studio API 키", baseUrl: "https://clovastudio.stream.ntruss.com", temperature: 0, topP: 0.1 },
+    openai_native: { model: "gpt-5.5", key: "OpenAI API 키", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
+    anthropic: { model: "claude-sonnet-4-20250514", key: "Anthropic API 키", baseUrl: "https://api.anthropic.com", temperature: 0, topP: 0.1 },
+    gemini: { model: "gemini-3.5-flash", key: "Gemini API 키", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
+    ollama: { model: "qwen3:14b", key: "불필요", baseUrl: "실행 환경의 로컬 Ollama 기본 URL", temperature: 0, topP: 0.1 },
     generic_api: { model: "judge-model", key: "Bearer token", baseUrl: "https://host.example.com", temperature: 0, topP: 0.1 },
   }[provider] || {};
 }
@@ -1460,7 +2130,7 @@ function normalizeJudgeApiPresetClient(preset) {
     topP: Number(preset.topP ?? preset.top_p ?? 0.1),
     maxTokens: Number(preset.maxTokens ?? preset.max_tokens ?? 1024),
     promptPreset: String(preset.promptPreset || preset.prompt_preset || "judge_default_v1").trim(),
-    promptVersion: String(preset.promptVersion || preset.prompt_version || "").trim(),
+    promptVersion: canonicalPromptVersionValue(preset.promptVersion || preset.prompt_version || ""),
     systemPrompt: preset.systemPrompt || preset.system_prompt || "",
     options: preset.options && typeof preset.options === "object" && !Array.isArray(preset.options) ? preset.options : {},
     builtIn: Boolean(preset.builtIn ?? preset.built_in),
@@ -1533,7 +2203,7 @@ function applyJudgeApiPreset(preset = selectedJudgeApiPreset()) {
   updateJudgeRegistryProviderFields();
   updateJudgePromptPresetFields();
   openJudgeAdvancedFields();
-  const keyLabel = preset.provider === "ollama" ? "API key 없이" : "API key를 입력한 뒤";
+  const keyLabel = preset.provider === "ollama" ? "API 키 없이" : "API 키를 입력한 뒤";
   setJudgeRegistryMessage(`프리셋 적용: ${preset.label || preset.id}. ${keyLabel} 등록하세요.`, "ok");
 }
 
@@ -2048,13 +2718,32 @@ function renderCheckList(elementId, items, selectedSet, filterName, labeler) {
   const element = document.getElementById(elementId);
   if (!element) return;
   const isModelFilter = filterName === "resultVersion";
-  element.innerHTML = items.map((item) => `
-    <label class="check-item ${isModelFilter ? "model-filter-item" : ""}">
+  element.innerHTML = items.map((item) => isModelFilter
+    ? renderModelFilterItem(item, selectedSet, filterName)
+    : `
+      <label class="check-item">
+        <input type="checkbox" data-filter="${escapeHtml(filterName)}" value="${escapeHtml(item)}" ${selectedSet.has(item) ? "checked" : ""}>
+        <span class="check-item-label">${escapeHtml(labeler(item))}</span>
+      </label>
+    `
+  ).join("") || emptyState("항목 없음");
+}
+
+function renderModelFilterItem(item, selectedSet, filterName) {
+  const fullLabel = modelLabelForVersion(item);
+  const compactLabel = shortModelLabel(item);
+  const family = modelFamilyInfo(item);
+  const meta = [family.familyLabel, family.paramLabel, family.quantLabel].filter(Boolean).join(" · ");
+  return `
+    <label class="check-item model-filter-item" title="${escapeHtml(fullLabel)}">
       <input type="checkbox" data-filter="${escapeHtml(filterName)}" value="${escapeHtml(item)}" ${selectedSet.has(item) ? "checked" : ""}>
-      <span class="check-item-label">${escapeHtml(labeler(item))}</span>
-      ${isModelFilter ? modelConnectionPill(item) : ""}
+      <span class="check-item-label">
+        <strong>${escapeHtml(compactLabel)}</strong>
+        ${meta ? `<em>${escapeHtml(meta)}</em>` : ""}
+      </span>
+      ${modelConnectionPill(item)}
     </label>
-  `).join("") || emptyState("항목 없음");
+  `;
 }
 
 function modelConnectionPill(version) {
@@ -2135,26 +2824,54 @@ function activeTabId() {
 
 function renderAll(options = {}) {
   const runData = filteredRuns();
-  const caseData = filteredCases();
   const gateData = filteredRunGates();
   const tab = options.tab || activeTabId();
   renderRunMeta();
   renderRunSetupGuide();
   renderResultRunSelector();
   renderReblendRunSelector();
+  if (resultDataTabIds.has(tab) && !isCaseDataReadyForSelectedRun()) {
+    renderPartialResultTab(tab, runData, gateData);
+    ensureCaseDataLoaded()
+      .then(() => renderAll({ tab }))
+      .catch((error) => renderCaseDataError(error, tab));
+    return;
+  }
+  const caseData = resultDataTabIds.has(tab) ? filteredCases() : [];
   if (tab === "overview") {
-    renderOverview(runData, gateData);
+    renderOverview(runData, gateData, caseData);
     renderReleaseGates(gateData);
     renderResultViewer(caseData, runData, gateData);
     return;
   }
   if (tab === "caseSets") {
+    if (!questionlistCasesLoaded) {
+      renderQuestionlistLoading();
+      ensureQuestionlistCasesLoaded()
+        .then(() => {
+          if (activeTabId() === "caseSets") renderAll({ tab: "caseSets" });
+        })
+        .catch((error) => {
+          setHtml("caseSetTable", emptyState(`테스트셋 문항을 불러오지 못했습니다: ${error.message || error}`));
+        });
+      if (!datasetCasesLoadPromise && datasetCasesLoadedId !== selectedDataset) {
+        loadDatasetCases(selectedDataset).catch((error) => {
+          setHtml("datasetCaseTable", emptyState(`케이스 미리보기를 불러오지 못했습니다: ${error.message || error}`));
+        });
+      }
+      return;
+    }
+    if (!datasetCasesLoadPromise && datasetCasesLoadedId !== selectedDataset) {
+      loadDatasetCases(selectedDataset).catch((error) => {
+        setHtml("datasetCaseTable", emptyState(`케이스 미리보기를 불러오지 못했습니다: ${error.message || error}`));
+      });
+    }
     renderQuestionlist(filteredQuestionlistCases());
     renderCaseSets();
     return;
   }
   if (tab === "compare") {
-    renderCompare(runData);
+    renderCompare(runData, caseData);
     return;
   }
   if (tab === "failures") {
@@ -2180,6 +2897,28 @@ function renderAll(options = {}) {
   if (tab === "runEval") {
     renderEvalRunSummary();
   }
+}
+
+function renderPartialResultTab(tab, runData = [], gateData = []) {
+  if (tab === "overview") {
+    renderOverview(runData, gateData, []);
+    renderReleaseGates(gateData);
+    renderResultViewerLoading(runData);
+    return;
+  }
+  if (tab === "compare") {
+    renderCompare(runData, []);
+    const note = document.getElementById("compareChart");
+    if (note) {
+      note.insertAdjacentHTML("afterbegin", `
+        <div class="inline-loading-note">
+          문항별 Judge 세부 점수는 로딩 중입니다. 모델 요약은 먼저 표시합니다.
+        </div>
+      `);
+    }
+    return;
+  }
+  renderCaseDataLoading(tab);
 }
 
 function renderRunSetupGuide() {
@@ -2222,17 +2961,25 @@ function renderAuthPanel() {
     refresh.onclick = () => loadAuthInfo();
   }
   if (sessionTarget) {
-    const hasSession = Boolean(authSession);
-    const enabled = Boolean(authSession?.auth_enabled);
-    const user = authSession?.user || "local";
-    const role = authSession?.role || "admin";
-    const scheme = authSession?.scheme || (enabled ? "" : "none");
-    sessionTarget.innerHTML = `
-      ${authStatusItem("접속 보호", hasSession ? (enabled ? "켜짐" : "꺼짐") : "확인 안 됨", authModeLabel(authSession), enabled ? "ok" : "muted")}
-      ${authStatusItem("현재 계정", user, user === "local" ? "로컬 요청" : "로그인됨")}
-      ${authStatusItem("권한", authRoleLabel(role), authRoleHint(role))}
-      ${authStatusItem("로그인 방식", authSchemeLabel(scheme), scheme ? "현재 요청 기준" : "확인 안 됨", "muted")}
-    `;
+    if (!authSession) {
+      sessionTarget.innerHTML = `
+        ${authStatusItem("접속 보호", "확인 중", "세션 상태 확인 중", "muted")}
+        ${authStatusItem("User ID", "확인 중", "로그인 상태 확인 중", "muted")}
+        ${authStatusItem("권한", "확인 중", "세션 상태 확인 중", "muted")}
+        ${authStatusItem("로그인 방식", "확인 중", "세션 상태 확인 중", "muted")}
+      `;
+    } else {
+      const enabled = Boolean(authSession.auth_enabled);
+      const user = authSession.user || "local";
+      const role = authSession.role || "admin";
+      const scheme = authSession.scheme || (enabled ? "" : "none");
+      sessionTarget.innerHTML = `
+        ${authStatusItem("접속 보호", enabled ? "켜짐" : "꺼짐", authModeLabel(authSession), enabled ? "ok" : "muted")}
+        ${authStatusItem("User ID", user, user === "local" ? "로컬 요청" : "로그인됨")}
+        ${authStatusItem("권한", authRoleLabel(role), authRoleHint(role))}
+        ${authStatusItem("로그인 방식", authSchemeLabel(scheme), scheme ? "현재 요청 기준" : "확인 안 됨", "muted")}
+      `;
+    }
   }
   if (!logTarget) return;
   if (!authAccessLog.length) {
@@ -2248,7 +2995,7 @@ function renderAuthPanel() {
     `${entry.method || ""} ${entry.path || ""}`.trim(),
     entry.status || "",
   ]);
-  logTarget.innerHTML = table(["시간", "계정", "권한", "사용자 IP", "프록시/출처", "요청", "응답"], rows);
+  logTarget.innerHTML = table(["시간", "User ID", "권한", "사용자 IP", "프록시/출처", "요청", "응답"], rows);
 }
 
 function accessLogProxyLabel(entry) {
@@ -2274,7 +3021,7 @@ function authModeLabel(session) {
   if (!session) return "상태 확인 전";
   if (!session.auth_enabled) return "로컬 개발 모드";
   const modes = [];
-  if (session.id_auth_enabled) modes.push("아이디/비밀번호");
+  if (session.id_auth_enabled) modes.push("User ID/비밀번호");
   if (session.token_auth_enabled) modes.push("관리 토큰");
   return modes.length ? modes.join(" + ") : "인증 켜짐";
 }
@@ -2295,7 +3042,7 @@ function authRoleHint(role) {
 
 function authSchemeLabel(scheme) {
   return {
-    basic: "아이디 로그인",
+    basic: "User ID 로그인",
     token: "토큰 로그인",
     none: "인증 없음",
     disabled: "인증 비활성",
@@ -2313,17 +3060,80 @@ function renderRunMeta() {
     return;
   }
   const sourceStatus = latestRun.uses_final_question_sets
-    ? "최종셋 결과"
+    ? "현재 테스트셋 결과"
     : "이전 실행 결과";
+  const currentRun = evalRunHistory.find((run) => run.run_id === latestRun.run_id) || latestRun;
+  const displayLabel = runDisplayLabel(currentRun);
+  const titleRunId = isCurrentUiDataRunId(latestRun.run_id) ? displayLabel : latestRun.run_id;
   target.hidden = false;
-  target.title = [latestRun.run_id, sourceStatus, latestRun.case_source].filter(Boolean).join(" · ");
+  target.title = [titleRunId, sourceStatus, latestRun.case_source].filter(Boolean).join(" · ");
   target.innerHTML = `
     <span>선택 실행</span>
-    <strong>${escapeHtml(latestRun.run_id)}</strong>
-    <em>${escapeHtml(sourceStatus)}</em>
-    ${latestRun.files?.report_html ? `<a href="${escapeHtml(latestRun.files.report_html)}" target="_blank" rel="noreferrer">HTML 리포트</a>` : ""}
+    <strong title="${escapeHtml(titleRunId)}">${escapeHtml(displayLabel)}</strong>
+    <em title="${escapeHtml(sourceStatus)}">${escapeHtml(sourceStatus)}</em>
+    ${latestRun.files?.report_html ? `<a href="${escapeHtml(latestRun.files.report_html)}" target="_blank" rel="noreferrer" title="상세 HTML 리포트 열기">HTML 리포트</a>` : ""}
   `;
   updateHeaderJudgeStatus();
+}
+
+function runDisplayLabel(run) {
+  if (!run) return "";
+  if (isCurrentUiDataRunId(run.run_id)) return "현재 내보낸 전체 결과";
+  const label = String(run.label || "").trim();
+  if (label && label !== run.run_id) return shortLabel(label, 48);
+  if (!hasRunDisplayMetadata(run)) return "실행 정보 불러오는 중";
+  const runType = runTypeDisplayLabel(run);
+  const judgeModel = runJudgeDisplayLabel(run);
+  const model = run.version ? modelLabelForVersion(run.version) : "";
+  const semanticLabel = [runType, judgeModel || model].filter(Boolean).join(" · ");
+  return semanticLabel ? shortLabel(semanticLabel, 48) : shortLabel(run.run_id || "", 48);
+}
+
+function hasRunDisplayMetadata(run) {
+  if (!run) return false;
+  return Boolean(
+    run.run_type ||
+    run.scoring_mode ||
+    run.llm_judge_provider ||
+    run.llm_judge_model ||
+    run.version ||
+    run.eval_started_at ||
+    Number(run.total_questions || 0) ||
+    Number(run.model_count || 0)
+  );
+}
+
+function runTypeDisplayLabel(run) {
+  if (!run) return "";
+  if (isCurrentUiDataRunId(run.run_id)) return "현재 내보낸 결과";
+  if (run.run_type === "imported_answers") return "가져온 답변 재채점";
+  if (run.run_type === "regression") return "회귀 평가";
+  if (run.run_type === "benchmark") return "벤치마크 평가";
+  if (run.run_type === "omnieval_metrics_v2_snapshot") return "OmniEval v2 스냅샷";
+  return scoringModeLabel(run.scoring_mode) || run.run_type || "";
+}
+
+function runJudgeDisplayLabel(run) {
+  const providers = String(run?.llm_judge_provider || "").split(",").map((item) => item.trim()).filter(Boolean);
+  const models = String(run?.llm_judge_model || "").split(",").map((item) => item.trim()).filter(Boolean);
+  if (!providers.length && !models.length) return "";
+  const labels = (models.length ? models : providers).map((model, index) => readableJudgeModelLabel(model, providers[index]));
+  const primary = labels[0] || "";
+  return labels.length > 1 ? `${primary} 외 ${labels.length - 1}` : primary;
+}
+
+function readableJudgeModelLabel(model, provider = "") {
+  const raw = String(model || provider || "").trim();
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("gemini-2.5-flash")) return "Gemini 2.5 Flash";
+  if (normalized.includes("gpt-5.4-mini")) return "GPT 5.4 Mini";
+  if (normalized.includes("gpt-4.1")) return "GPT 4.1";
+  if (normalized.includes("claude")) return raw.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return raw
+    .replace(/^openai_native$/i, "OpenAI")
+    .replace(/^gemini$/i, "Gemini")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function updateHeaderDatasetCounts() {
@@ -2337,8 +3147,8 @@ function updateHeaderDatasetCounts() {
 
   benchmarkTarget.textContent = benchmarkCount ? benchmarkCount.toLocaleString() : "-";
   regressionTarget.textContent = regressionCount ? regressionCount.toLocaleString() : "-";
-  benchmarkTarget.title = title;
-  regressionTarget.title = title;
+  benchmarkTarget.title = `${title} · 고유 문항 수`;
+  regressionTarget.title = `${title} · 고유 문항 수`;
 }
 
 function datasetTotalById(datasetId) {
@@ -2355,6 +3165,15 @@ function uniqueCaseCount(rows) {
   return ids.size || rows.length;
 }
 
+function resultRowCount(rows = cases) {
+  return rows.length;
+}
+
+function resultModelCount(rows = cases, fallbackRuns = runs) {
+  const ids = new Set(rows.map((row) => row.version || row.model).filter(Boolean));
+  return ids.size || fallbackRuns.length;
+}
+
 function renderResultRunSelector() {
   const select = document.getElementById("resultRunSelect");
   const summary = document.getElementById("resultRunSummary");
@@ -2362,54 +3181,88 @@ function renderResultRunSelector() {
   const rawLink = document.getElementById("resultRawReportLink");
   if (!select) return;
   const currentId = selectedRunId || latestRun?.run_id || "";
-  const historyOptions = evalRunHistory.map((run) => {
+  const displayRuns = evalRunHistory.filter((run) => run.run_id === currentId || resultRunHasRows(run));
+  const historyOptions = displayRuns.map((run) => {
+    const hasRows = resultRunHasRows(run);
     const label = [
-      run.label || run.run_id,
+      runDisplayLabel(run),
       run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
+      hasRows ? "" : "결과 행 없음",
     ].filter(Boolean).join(" · ");
-    return `<option value="${escapeHtml(run.run_id)}" ${run.run_id === currentId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    return `<option value="${escapeHtml(run.run_id)}" ${run.run_id === currentId ? "selected" : ""} ${hasRows ? "" : "disabled"}>${escapeHtml(label)}</option>`;
   }).join("");
-  const hasExportedRows = Boolean(runs.length || cases.length);
+  const hasExportedRows = Boolean(runs.length || (caseDataLoaded && cases.length));
+  const isPendingSelectedRun = Boolean(currentId && !displayRuns.some((run) => run.run_id === currentId));
   select.innerHTML = historyOptions || (
+    isPendingSelectedRun
+      ? `<option value="${escapeHtml(currentId)}" selected>${escapeHtml(runDisplayLabel(latestRun) || "실행 정보 불러오는 중")}</option>`
+      :
     hasExportedRows
       ? `<option value="">현재 내보낸 결과</option>`
       : `<option value="">결과 없음</option>`
   );
-  select.disabled = !evalRunHistory.length;
+  select.disabled = !displayRuns.length;
   select.title = historyOptions
     ? "과거 실행 결과 선택"
     : (hasExportedRows ? "data/*.csv로 내보낸 현재 결과입니다." : "선택 가능한 실행 결과가 없습니다.");
-  select.value = evalRunHistory.some((run) => run.run_id === currentId) ? currentId : "";
+  select.value = displayRuns.some((run) => run.run_id === currentId) ? currentId : "";
   const current = evalRunHistory.find((run) => run.run_id === currentId) || {};
+  const currentTitle = isCurrentUiDataRunId(current.run_id) ? runDisplayLabel(current) : current.run_id;
+  const loadedResultRows = caseDataLoaded ? resultRowCount(cases) : 0;
+  const loadedModelCount = caseDataLoaded ? resultModelCount(cases, runs) : resultModelCount([], runs);
+  const currentDisplayLabel = runDisplayLabel(current);
+  const currentJudgeLabel = runJudgeDisplayLabel(current) || scoringModeLabel("static");
   if (summary) {
     summary.innerHTML = current.run_id ? `
-      <span><strong>${escapeHtml(current.label || current.run_id)}</strong></span>
-      <span>${escapeHtml(current.run_type || "-")}</span>
-      <span>${Number(current.total_questions || 0).toLocaleString()}문항</span>
-      <span>${Number(current.model_count || 0).toLocaleString()}개 모델</span>
-      <span>자동 ${(Number(current.avg_scored_score || current.avg_score || 0)).toFixed(1)} / 100</span>
+      <span title="${escapeHtml(currentTitle || currentDisplayLabel || current.run_id)}"><strong>${escapeHtml(currentDisplayLabel || current.run_id)}</strong></span>
+      <span>${escapeHtml(runTypeDisplayLabel(current) || "-")}</span>
+      <span>${Number(current.total_questions || 0).toLocaleString()}개 고유 문항</span>
+      <span>${Number(current.model_count || loadedModelCount || 0).toLocaleString()}개 모델</span>
+      ${caseDataLoaded ? `<span>${loadedResultRows.toLocaleString()}개 문항-모델 결과</span>` : "<span>결과 행 지연 로딩</span>"}
+      <span>자동 ${scoreValueLabel(current.avg_scored_score || current.avg_score || 0)}</span>
       <span>검토대기 ${Number(current.review_pending_count || 0).toLocaleString()}개</span>
-      <span>${Number(current.avg_score || 0).toFixed(1)} / 100</span>
+      <span>${scoreValueLabel(current.avg_score || 0)}</span>
       <span>${(Number(current.avg_pass_rate || 0) * 100).toFixed(1)}% 통과</span>
       <span>${escapeHtml(scoringModeLabel(current.scoring_mode) || "-")}</span>
-      <span>${escapeHtml([current.llm_judge_provider, current.llm_judge_model].filter(Boolean).join(" / ") || scoringModeLabel("static"))}</span>
+      <span title="${escapeHtml([current.llm_judge_provider, current.llm_judge_model].filter(Boolean).join(" / "))}">${escapeHtml(currentJudgeLabel)}</span>
     ` : (
+      isPendingSelectedRun
+        ? `
+          <span title="${escapeHtml(currentId)}"><strong>${escapeHtml(runDisplayLabel(latestRun) || "실행 정보 불러오는 중")}</strong></span>
+          <span>실행 메타 지연 로딩</span>
+          <span>${caseDataLoaded ? `${uniqueCaseCount(cases).toLocaleString()}개 고유 문항` : "결과 요약 캐시 준비 중"}</span>
+          <span>${loadedModelCount.toLocaleString()}개 모델</span>
+          ${caseDataLoaded ? `<span>${loadedResultRows.toLocaleString()}개 문항-모델 결과</span>` : ""}
+        `
+        :
       hasExportedRows
         ? `
           <span><strong>현재 내보낸 결과</strong></span>
           <span>data/eval_runs.csv 기준</span>
-          <span>${uniqueCaseCount(cases).toLocaleString()}문항</span>
-          <span>${runs.length.toLocaleString()}개 모델 행</span>
+          <span>${caseDataLoaded ? `${uniqueCaseCount(cases).toLocaleString()}개 고유 문항` : "결과 행 지연 로딩"}</span>
+          <span>${loadedModelCount.toLocaleString()}개 모델</span>
+          ${caseDataLoaded ? `<span>${loadedResultRows.toLocaleString()}개 문항-모델 결과</span>` : ""}
         `
         : emptyState("선택 가능한 과거 결과가 없습니다.")
     );
   }
   if (uiLink) {
-    uiLink.href = current.report_ui || (currentId ? `?run_id=${encodeURIComponent(currentId)}#overview` : "#overview");
+    uiLink.href = isCurrentUiDataRunId(currentId)
+      ? "#overview"
+      : current.report_ui || (currentId ? `?run_id=${encodeURIComponent(currentId)}#overview` : "#overview");
   }
   if (rawLink) {
-    rawLink.href = current.report_raw_html || (currentId ? `/report/raw_regression_report.html?run_id=${encodeURIComponent(currentId)}` : "/report/raw_regression_report.html");
+    const rawReportHref = current.report_raw_html || "";
+    rawLink.hidden = !rawReportHref;
+    if (rawReportHref) rawLink.href = rawReportHref;
   }
+}
+
+function resultRunHasRows(run) {
+  if (!run) return false;
+  return isCurrentUiDataRunId(run.run_id) ||
+    Number(run.total_questions || 0) > 0 ||
+    Number(run.model_count || 0) > 0;
 }
 
 function formatDateTime(value) {
@@ -2427,7 +3280,7 @@ function formatDateTime(value) {
 
 function runHistoryOptionLabel(run) {
   return [
-    run.label || run.run_id,
+    runDisplayLabel(run),
     run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
     Number(run.total_questions || 0) ? `${Number(run.total_questions || 0).toLocaleString()}문항` : "",
     scoringModeLabel(run.scoring_mode) || "",
@@ -2437,29 +3290,30 @@ function runHistoryOptionLabel(run) {
 function renderReblendRunSelector() {
   const select = document.getElementById("reblendSourceRunId");
   if (!select) return;
+  const reblendRuns = evalRunHistory.filter((run) => run.reblend_eligible !== false);
   const previousValue = select.value || "";
-  const preferredId = previousValue || selectedRunId || latestRun?.run_id || "";
-  const latestLabel = latestRun?.run_id
-    ? `최신 실행 (${latestRun.run_id})`
+  const latestReblendRun = reblendRuns.find((run) => run.run_id === latestRun?.run_id) || reblendRuns[0];
+  const preferredId = previousValue || (reblendRuns.some((run) => run.run_id === selectedRunId) ? selectedRunId : "") || latestReblendRun?.run_id || "";
+  const latestLabel = latestReblendRun?.run_id
+    ? `최신 재계산 가능 실행 (${runDisplayLabel(latestReblendRun)})`
     : "최신 실행 자동 선택";
-  const historyOptions = evalRunHistory.map((run) => `
+  const historyOptions = reblendRuns.map((run) => `
     <option value="${escapeHtml(run.run_id)}">${escapeHtml(runHistoryOptionLabel(run))}</option>
   `).join("");
   select.innerHTML = `<option value="">${escapeHtml(latestLabel)}</option>${historyOptions}`;
-  select.disabled = !evalRunHistory.length && !latestRun?.run_id;
+  select.disabled = !reblendRuns.length;
   select.title = select.disabled
-    ? "재계산할 실행 결과가 없습니다."
-    : "저장된 실행 결과 중 재계산할 원본을 선택합니다.";
-  select.value = evalRunHistory.some((run) => run.run_id === preferredId) ? preferredId : "";
+    ? "재계산 가능한 실행 결과가 없습니다. 원본 답변과 Judge 점수가 모두 있는 run만 재계산할 수 있습니다."
+    : "원본 답변과 Judge 점수가 모두 있는 실행 결과 중 재계산할 원본을 선택합니다.";
+  select.value = reblendRuns.some((run) => run.run_id === preferredId) ? preferredId : "";
 }
 
 function latestJudgeMethodLabel() {
-  const mode = latestRun?.scoring_mode || "";
+  const run = evalRunHistory.find((item) => item.run_id === latestRun?.run_id) || latestRun || {};
+  const mode = run?.scoring_mode || "";
   if (!mode || mode === "static") return scoringModeLabel("static");
-  const count = Number(latestRun?.llm_judge_count || 0);
-  const model = latestRun?.llm_judge_model || latestRun?.judge_model || "";
-  const provider = latestRun?.llm_judge_provider || latestRun?.judge_provider || "";
-  const judgeText = model || provider || (count > 1 ? `LLM x${count}` : "LLM");
+  const count = Number(run?.llm_judge_count || 0);
+  const judgeText = runJudgeDisplayLabel(run) || (count > 1 ? `LLM x${count}` : "LLM");
   return `${scoringModeLabel(mode)} · ${judgeText}${count > 1 && !String(judgeText).includes("x") ? ` x${count}` : ""}`;
 }
 
@@ -2481,10 +3335,35 @@ function updateHeaderJudgeStatus(job = null) {
     const method = mode === "static" ? scoringModeLabel("static") : `${scoringModeLabel(mode)} · ${summarizeJudgeIds(judgeIds) || "LLM"}`;
     const prefix = ["running", "paused", "canceling"].includes(job.status) ? "진행" : "최근";
     label = `${prefix} ${method}`;
-    title = `${job.run_id || job.job_id} · ${job.status}`;
+    title = `${job.run_id || job.job_id} · ${evalJobStatusLabel(job.status)}`;
   }
   target.textContent = shortLabel(label, 34);
   target.title = title;
+}
+
+function evalJobStatusLabel(status) {
+  return {
+    queued: "대기",
+    running: "실행 중",
+    paused: "일시중지",
+    canceling: "취소 중",
+    canceled: "취소됨",
+    finished: "완료",
+    failed: "실패",
+    interrupted: "중단됨",
+  }[status] || status || "-";
+}
+
+function evalSnapshotStatusLabel(status) {
+  return {
+    running: "스냅샷 생성 중",
+    finished: "스냅샷 생성 완료",
+    failed: "스냅샷 생성 실패",
+  }[status] || "";
+}
+
+function evalSnapshotStatusTone(status) {
+  return status === "failed" ? "error" : "ok";
 }
 
 async function syncSelectedModelApis(targetVersions = [...state.runConfigVersions], options = {}) {
@@ -2829,7 +3708,7 @@ function judgeRegistryPayload(form) {
   if (!payload.system_prompt_preset) payload.system_prompt_preset = "judge_default_v1";
   if (!payload.prompt_version) payload.prompt_version = judgePromptPresets[payload.system_prompt_preset]?.version || judgePromptPresets.judge_default_v1.version;
   if (payload.system_prompt_preset === "custom" && !payload.system_prompt) {
-    throw new Error("직접 입력 preset은 Judge system prompt가 필요합니다.");
+    throw new Error("직접 입력 프리셋은 Judge 시스템 프롬프트가 필요합니다.");
   }
   if (payload.system_prompt_preset !== "custom") delete payload.system_prompt;
   payload.safety_policy = "llm_judge_prompt_preset";
@@ -2887,7 +3766,7 @@ function prefillJudgeFromTarget(targetId) {
   updateJudgeRegistryProviderFields();
   updateJudgePromptPresetFields();
   openJudgeAdvancedFields();
-  setJudgeRegistryMessage(`Judge 초안: ${label} 설정을 복사했습니다. 필요하면 prompt preset과 옵션을 조정한 뒤 등록하세요.`, "ok");
+  setJudgeRegistryMessage(`Judge 초안: ${label} 설정을 복사했습니다. 필요하면 프롬프트 프리셋과 옵션을 조정한 뒤 등록하세요.`, "ok");
   document.getElementById("judgeRegistryConfigId")?.focus();
 }
 
@@ -3092,7 +3971,7 @@ function editRegisteredJudge(version) {
   copyModelField("judgeRegistryTopP", options.top_p ?? options.topP ?? 0.1);
   copyModelField("judgeRegistryMaxTokens", judgeMaxTokensFromOptions(options));
   copySelectField("judgeRegistryPromptPreset", preset, "judge_default_v1");
-  copyModelField("judgeRegistryPromptVersion", spec.prompt_version || judgePromptPresets[preset]?.version || judgePromptPresets.judge_default_v1.version);
+  copyModelField("judgeRegistryPromptVersion", canonicalPromptVersionValue(spec.prompt_version || judgePromptPresets[preset]?.version || judgePromptPresets.judge_default_v1.version));
   copyModelField("judgeRegistrySystemPrompt", spec.system_prompt || "");
   copyModelField("judgeRegistryOptionsJson", registryOptionsJson(options, [
     "temperature",
@@ -3409,7 +4288,7 @@ function renderJudgeRegistry() {
   updateJudgeHealthCheckButtonState();
   if (!list) return;
   if (!ids.length) {
-    list.innerHTML = emptyState("등록된 Judge 모델이 없습니다. 설정에서 Qwen2.5-7B HAL LoRA 또는 API judge를 추가하세요.");
+    list.innerHTML = emptyState("등록된 Judge 모델이 없습니다. 설정에서 API Judge 또는 OmniEval Judge를 추가하세요.");
     return;
   }
   list.innerHTML = ids.map((id) => {
@@ -3417,7 +4296,7 @@ function renderJudgeRegistry() {
     const sourceLabel = "사용자 등록";
     const endpoint = spec.upstream_chat_url || spec.chat_url || spec.base_url || spec.local_path || "endpoint 없음";
     const promptMeta = [
-      spec.prompt_version || "",
+      displayPromptVersion(spec.prompt_version) || "",
       spec.system_prompt_preset ? `preset ${spec.system_prompt_preset}` : "",
     ].filter(Boolean).join(" · ");
     const detailTitle = [
@@ -3519,7 +4398,7 @@ function sleep(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function renderOverview(runData, gateData = []) {
+function renderOverview(runData, gateData = [], caseData = []) {
   if (!runData.length) {
     setHtml("kpis", emptyState("선택된 모델이 없습니다."));
     setHtml("trendChart", "");
@@ -3538,15 +4417,21 @@ function renderOverview(runData, gateData = []) {
       ? "review"
       : "pass";
 
+  const uniqueCases = uniqueCaseCount(caseData);
+  const resultRows = resultRowCount(caseData);
+  const modelCount = resultModelCount(caseData, runData);
+  const summaryUniqueCases = uniqueCases || aggregate.total_questions;
+  const summaryResultRows = resultRows || runData.reduce((sum, row) => sum + Number(row.total_questions || row.scored_questions || 0), 0);
   setHtml("kpis", [
-    kpi("자동채점 평균", aggregate.scored_average.toFixed(1), `${aggregate.review_pending_count.toLocaleString()}개 검토대기 제외`),
-    kpi("전체 평균", aggregate.overall_score.toFixed(1), "검토대기 포함 잠정치"),
+    kpi("자동채점 평균", scoreValueLabel(aggregate.scored_average), `${aggregate.review_pending_count.toLocaleString()}개 검토대기 제외`),
+    kpi("전체 평균", scoreValueLabel(aggregate.overall_score), "검토대기 포함 잠정치"),
     kpi("통과율", `${(aggregate.pass_rate * 100).toFixed(1)}%`, "선택 실행"),
-    kpi("평가 문항", `${aggregate.total_questions.toLocaleString()}개`, aggregate.run_type),
+    kpi("고유 문항", `${summaryUniqueCases.toLocaleString()}개`, `${modelCount.toLocaleString()}개 모델`),
+    kpi("문항-모델 결과", `${summaryResultRows.toLocaleString()}행`, resultRows ? aggregate.run_type : "요약 기준"),
     kpi("배포 판정", gateLabel(topGate), `${gateCounts.block ?? 0}개 차단 / ${gateCounts.review ?? 0}개 검토`),
   ].join(""));
 
-  renderTrend([...runData].sort((a, b) => modelLabelForVersion(a.version).localeCompare(modelLabelForVersion(b.version), "ko")));
+  renderTrend([...runData].sort((a, b) => modelLabelForVersion(a.version).localeCompare(modelLabelForVersion(b.version), "ko")), caseData);
   renderMetricBars(aggregate);
 }
 
@@ -3579,10 +4464,12 @@ function aggregateRuns(runData) {
     run_type: "선택 모델",
   };
   metricCols.forEach((key) => {
-    const rows = key === "utl" ? runData.filter((d) => d.utl_applicable) : runData;
-    totals[key] = rows.length ? rows.reduce((sum, d) => sum + Number(d[key] || 0), 0) / rows.length : 0;
+    const rows = runData.filter((d) => metricAvailable(d, key));
+    totals[key] = rows.length ? rows.reduce((sum, d) => sum + metricNumber(d, key), 0) / rows.length : "";
   });
-  totals.utl_applicable = runData.some((d) => d.utl_applicable);
+  totals.fmt_applicable_rate = runData.length
+    ? runData.filter((d) => metricAvailable(d, "fmt")).length / runData.length
+    : 0;
   return totals;
 }
 
@@ -3616,7 +4503,7 @@ function renderReleaseGates(gateData) {
     kpi("최소 핵심 통과율", applicableGateData.length ? `${(minCorePass * 100).toFixed(1)}%` : "N/A", "모델별 최저값"),
   ].join(""));
   setHtml("runGateTable", table(
-    ["모델", "최종 상태", "판정 문항", "전체 통과율", "핵심 통과율", "차단 문항", "검토 문항", "치명 오류", "근거"],
+    ["모델", "반영 상태", "판정 문항", "전체 통과율", "핵심 통과율", "차단 문항", "검토 문항", "치명 오류", "근거"],
     [...gateData]
       .sort((a, b) => releaseRank(a.release_gate) - releaseRank(b.release_gate) || a.config_id.localeCompare(b.config_id))
       .filter((d) => d.release_gate !== "not_applicable")
@@ -3638,7 +4525,7 @@ function renderResultViewer(caseData, runData = [], gateData = []) {
   const matrixEl = document.getElementById("resultMatrix");
   if (!matrixEl) return;
 
-  renderResultModelFilter(caseData);
+  renderResultModelFilter(caseData, runData);
 
   const prepared = prepareResultMatrixRows(caseData);
   const groups = prepared.groups;
@@ -3650,10 +4537,11 @@ function renderResultViewer(caseData, runData = [], gateData = []) {
   const reviewCells = caseData.filter((row) => isReviewCell(row)).length;
   const avgScore = totalCells ? caseData.reduce((sum, row) => sum + caseOverallScore(row), 0) / totalCells : 0;
   setHtml("resultViewerStats", [
-    kpi("케이스", groups.length.toLocaleString(), `${visibleGroups.length.toLocaleString()}개 표시`),
-    kpi("모델", models.length.toLocaleString(), `${runData.length.toLocaleString()}개 실행 행`),
+    kpi("고유 문항", groups.length.toLocaleString(), `${visibleGroups.length.toLocaleString()}개 표시`),
+    kpi("모델", models.length.toLocaleString(), `${runData.length.toLocaleString()}개 실행 요약`),
+    kpi("문항-모델 결과", totalCells.toLocaleString(), "셀 단위 채점 결과"),
     kpi("실패 응답", failCells.toLocaleString(), `${reviewCells.toLocaleString()}개 검토`),
-    kpi("평균 점수", avgScore.toFixed(1), gateData.length ? "배포 판정 포함" : "케이스 단위"),
+    kpi("평균 점수", scoreValueLabel(avgScore), gateData.length ? "배포 판정 포함" : "케이스 단위"),
   ].join(""));
 
   if (!groups.length || !models.length) {
@@ -3686,8 +4574,9 @@ function renderResultViewer(caseData, runData = [], gateData = []) {
   setHtml("resultMatrix", `
     <div class="result-matrix-meta">
       <span>${escapeHtml(resultViewLabel(state.resultViewMode))}</span>
-      <span>전체 ${groups.length.toLocaleString()}개 케이스</span>
+      <span>전체 ${groups.length.toLocaleString()}개 고유 문항</span>
       <span>${models.length.toLocaleString()}개 모델 열</span>
+      ${models.length > 3 ? `<span class="matrix-scroll-hint">매트릭스 내부를 가로로 스크롤해 나머지 모델을 확인</span>` : ""}
       ${groups.length > visibleGroups.length ? `<span class="matrix-limit-warning">현재 ${visibleGroups.length.toLocaleString()} / 전체 ${groups.length.toLocaleString()}개 표시 · 검색/필터로 범위를 좁히세요</span>` : ""}
     </div>
     <div class="result-matrix" style="--matrix-columns:${models.length}">${header}${body}</div>
@@ -3696,16 +4585,33 @@ function renderResultViewer(caseData, runData = [], gateData = []) {
   renderResultDetail(findSelectedMatrixRow(caseData));
 }
 
-function renderResultModelFilter(caseData) {
+function renderResultViewerLoading(runData = []) {
+  renderResultModelFilter([], runData);
+  const aggregate = aggregateRuns(runData);
+  const totalRows = runData.reduce((sum, row) => sum + Number(row.total_questions || row.scored_questions || 0), 0);
+  setHtml("resultViewerStats", [
+    kpi("고유 문항", `${Number(aggregate.total_questions || 0).toLocaleString()}개`, "실행 요약 기준"),
+    kpi("모델", `${runData.length.toLocaleString()}개`, "실행 요약 기준"),
+    kpi("문항-모델 결과", `${totalRows.toLocaleString()}행`, "상세 CSV 로딩 중"),
+    kpi("실패 응답", "-", "상세 결과 로딩 후 계산"),
+    kpi("평균 점수", scoreValueLabel(aggregate.scored_average), "실행 요약 기준"),
+  ].join(""));
+  setHtml("resultMatrix", emptyState("문항별 상세 결과를 불러오는 중입니다. 요약 그래프는 먼저 사용할 수 있습니다."));
+  setHtml("resultDetail", emptyState("상세 CSV 로딩 후 문항-모델 셀을 선택할 수 있습니다."));
+}
+
+function renderResultModelFilter(caseData, runData = []) {
   const select = document.getElementById("resultModelFilter");
   if (!select) return;
   const models = matrixModels(cases.length ? cases : caseData);
+  const fallbackModels = runData.map((row) => row.version).filter(Boolean);
+  const options = models.length ? models : fallbackModels;
   const current = state.resultModelFilter;
   select.innerHTML = [
     `<option value="">전체 모델</option>`,
-    ...models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(modelLabelForVersion(model))}</option>`),
+    ...options.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(modelLabelForVersion(model))}</option>`),
   ].join("");
-  select.value = models.includes(current) ? current : "";
+  select.value = options.includes(current) ? current : "";
   state.resultModelFilter = select.value;
 }
 
@@ -3801,7 +4707,7 @@ function rowMatchesResultView(row, differentCases) {
 function groupHasDifferentResults(rows) {
   const statuses = new Set(rows.map((row) => row.pass_fail || "unknown"));
   const scores = rows.map(caseOverallScore);
-  return statuses.size > 1 || Math.max(...scores) - Math.min(...scores) >= 15;
+  return statuses.size > 1 || Math.max(...scores) - Math.min(...scores) >= SCORE_DIFFERENCE_THRESHOLD;
 }
 
 function isFailureCell(row) {
@@ -3810,8 +4716,7 @@ function isFailureCell(row) {
 
 function isSafetyCell(row) {
   const error = String(row.error_type || "").toLowerCase();
-  return Number(row.hal || 0) < state.threshold / 5 ||
-    row.release_gate === "block" ||
+  return row.release_gate === "block" ||
     error.includes("unsafe") ||
     error.includes("policy") ||
     error.includes("privacy");
@@ -3829,7 +4734,7 @@ function renderResultMatrixCell(row, caseId, model) {
   const key = `${caseId}::${model}`;
   const score = caseOverallScore(row);
   const gap = judgeScoreGap(row);
-  const hasJudgeConflict = row.llm_judge_conflict_detected || row.llm_judge_conflict || gap >= 30 || row.llm_judge_pass_mismatch;
+  const hasJudgeConflict = row.llm_judge_conflict_detected || row.llm_judge_conflict || gap >= JUDGE_GAP_LARGE_THRESHOLD || row.llm_judge_pass_mismatch;
   const judgeInfo = judgeConflictCellInfo(row, gap);
   const badge = judgeInfo.primary || passFailLabel(row.pass_fail);
   const secondaryBadge = matrixSecondaryBadge(row, judgeInfo);
@@ -3841,10 +4746,11 @@ function renderResultMatrixCell(row, caseId, model) {
     row.llm_judge_arbiter_override ? "arbiter-override" : "",
     state.selectedMatrixKey === key ? "selected" : "",
   ].filter(Boolean).join(" ");
-  const ariaLabel = `${caseId}, ${modelLabelForVersion(model)}, ${score.toFixed(0)}점, ${judgeInfo.title || badge || "-"}`;
+  const scoreLabel = scoreValueLabel(score);
+  const ariaLabel = `${caseId}, ${modelLabelForVersion(model)}, ${scoreLabel}, ${judgeInfo.title || badge || "-"}`;
   return `
     <button class="${classes}" type="button" data-matrix-key="${escapeHtml(key)}" aria-label="${escapeHtml(ariaLabel)}" title="${escapeHtml(judgeInfo.title || ariaLabel)}">
-      <strong>${score.toFixed(0)}</strong>
+      <strong>${scoreValueLabel(score, 2)}</strong>
       <span class="matrix-status-label ${hasJudgeConflict ? "conflict" : ""}">${escapeHtml(badge || "-")}</span>
       ${secondaryBadge.label ? `<small class="matrix-secondary-badge ${escapeHtml(secondaryBadge.tone)}">${escapeHtml(secondaryBadge.label)}</small>` : ""}
     </button>
@@ -3873,30 +4779,30 @@ function matrixSecondaryBadge(row, judgeInfo = {}) {
 }
 
 function judgeConflictCellInfo(row, gap) {
-  const roundedGap = Math.round(gap);
-  const hasLargeGap = gap >= 30;
+  const gapLabel = scoreValueLabel(gap, 2);
+  const hasLargeGap = gap >= JUDGE_GAP_LARGE_THRESHOLD;
   const hasMismatch = row.llm_judge_pass_mismatch;
   const override = row.llm_judge_arbiter_override;
   const parts = [];
-  if (gap > 0) parts.push(`Judge 점수차 ${gap.toFixed(1)}점`);
+  if (gap > 0) parts.push(`Judge 점수차 ${scoreValueLabel(gap)}`);
   if (Number(row.llm_judge_score_min) || Number(row.llm_judge_score_max)) {
-    parts.push(`Judge 범위 ${scoreValueLabel(row.llm_judge_score_min)}-${scoreValueLabel(row.llm_judge_score_max)}점`);
+    parts.push(`Judge 범위 ${scoreValueLabel(row.llm_judge_score_min)}-${scoreValueLabel(row.llm_judge_score_max)}`);
   }
   if (hasMismatch) parts.push("통과/실패 판단 불일치");
   if (override) {
-    parts.push(`상위 Judge 최종 반영${row.llm_judge_arbiter_score ? ` (${scoreValueLabel(row.llm_judge_arbiter_score)}점)` : ""}`);
+    parts.push(`중재 Judge 반영${row.llm_judge_arbiter_score ? ` (${scoreValueLabel(row.llm_judge_arbiter_score)})` : ""}`);
   }
-  if (row.llm_judge_arbiter_config_id) parts.push(`상위 Judge: ${row.llm_judge_arbiter_config_id}`);
+  if (row.llm_judge_arbiter_config_id) parts.push(`중재 Judge: ${row.llm_judge_arbiter_config_id}`);
   if (override) {
     return {
-      primary: hasLargeGap ? `Judge 차이 ${roundedGap}점` : "상위 Judge 반영",
-      secondary: "상위 Judge 반영",
+      primary: hasLargeGap ? `Judge 차이 ${gapLabel}` : "중재 Judge 반영",
+      secondary: "중재 Judge 반영",
       title: parts.join(" · "),
     };
   }
   if (hasLargeGap) {
     return {
-      primary: `Judge 차이 ${roundedGap}점`,
+      primary: `Judge 차이 ${gapLabel}`,
       secondary: hasMismatch ? "판정도 다름" : "검토 필요",
       title: parts.join(" · "),
     };
@@ -3928,9 +4834,16 @@ function parseJsonArrayField(value) {
   }
 }
 
+function normalizeJudgeScoreForUi(score) {
+  const normalized = { ...score };
+  preserveScoreScaleForUi(normalized);
+  return normalized;
+}
+
 function resultJudgeScores(row) {
   return parseJsonArrayField(row?.llm_judge_individual_scores)
-    .filter((score) => score && typeof score === "object");
+    .filter((score) => score && typeof score === "object")
+    .map(normalizeJudgeScoreForUi);
 }
 
 function resultJudgeCount(row, scores = resultJudgeScores(row)) {
@@ -3955,16 +4868,16 @@ function resultScoringLabel(row) {
   const hasArbiter = resultHasArbiter(row, scores);
   if (mode === "static" || mode === "answers_only") return scoringModeLabel(mode) || "-";
   if (mode === "static_llm") {
-    if (judgeCount > 1) return `규칙 점수 + 여러 Judge 감사 (${judgeCount}개${hasArbiter ? " · 상위 Judge 포함" : ""})`;
-    if (judgeCount === 1) return "규칙 점수 + 단일 Judge 감사";
+    if (judgeCount > 1) return `규칙 점수 + 여러 Judge 검토 (${judgeCount}개${hasArbiter ? " · 중재 Judge 포함" : ""})`;
+    if (judgeCount === 1) return "규칙 점수 + 단일 Judge 검토";
     return scoringModeLabel(mode) || "-";
   }
   if (mode === "blend") {
-    if (judgeCount > 1) return `Judge+규칙 혼합 · 여러 Judge (${judgeCount}개${hasArbiter ? " · 상위 Judge 포함" : ""})`;
+    if (judgeCount > 1) return `Judge+규칙 혼합 · 여러 Judge (${judgeCount}개${hasArbiter ? " · 중재 Judge 포함" : ""})`;
     if (judgeCount === 1) return "Judge+규칙 혼합 · 단일 Judge";
     return scoringModeLabel(mode) || "-";
   }
-  if (judgeCount > 1) return `여러 Judge 평가 (${judgeCount}개${hasArbiter ? " · 상위 Judge 포함" : ""})`;
+  if (judgeCount > 1) return `여러 Judge 평가 (${judgeCount}개${hasArbiter ? " · 중재 Judge 포함" : ""})`;
   if (judgeCount === 1) return "단일 Judge 채점";
   return scoringModeLabel(mode) || "-";
 }
@@ -3972,7 +4885,7 @@ function resultScoringLabel(row) {
 function resultJudgeReadableName(score, index = 0) {
   if (!score) return "";
   const judgeId = score.config_id || score.model || score.provider || "";
-  const label = String(score.role || "").toLowerCase() === "arbiter" ? "상위 Judge" : judgeDecisionLabel(judgeId, index);
+  const label = String(score.role || "").toLowerCase() === "arbiter" ? "중재 Judge" : judgeDecisionLabel(judgeId, index);
   const model = score.model || score.config_id || score.provider || "";
   return [label, model].filter(Boolean).join(" · ");
 }
@@ -3981,7 +4894,7 @@ function resultJudgeSummaryLabel(row) {
   const scores = resultJudgeScores(row);
   const judgeCount = resultJudgeCount(row, scores);
   if (judgeCount > 1) {
-    return `${judgeCount}개 Judge${resultHasArbiter(row, scores) ? " · 상위 Judge 포함" : ""}`;
+    return `${judgeCount}개 Judge${resultHasArbiter(row, scores) ? " · 중재 Judge 포함" : ""}`;
   }
   if (judgeCount === 1 && scores.length) return resultJudgeReadableName(scores[0], 0);
   return [row?.llm_judge_provider, row?.llm_judge_model].filter(Boolean).join(" / ") || "-";
@@ -3995,13 +4908,38 @@ function resultJudgeListLabel(row) {
 
 function resultFinalReason(row) {
   const reason = row.llm_judge_reason || row.judge_reason || row.static_reason || "";
-  if (!reason) return "등록된 최종 채점 메모가 없습니다.";
-  if (resultJudgeCount(row) > 1) {
-    return String(reason)
-      .replace(/^LLM Judge 단독 채점\s*:/, "여러 Judge 집계:")
-      .replace(/^Single LLM Judge scoring\s*:/i, "Multi-Judge aggregation:");
-  }
-  return reason;
+  if (!reason) return "등록된 채점 메모가 없습니다.";
+  const normalized = resultJudgeCount(row) > 1
+    ? String(reason).replace(/^LLM Judge 단독 채점\s*:/, "여러 Judge 집계:")
+    : reason;
+  return humanJudgeReasonText(normalized);
+}
+
+function humanJudgeReasonText(value) {
+  if (!value) return "";
+  return String(value)
+    .replace(/^Single LLM Judge scoring\s*:/i, "단일 Judge 채점:")
+    .replace(/^Multi-Judge aggregation\s*:/i, "여러 Judge 집계:")
+    .replace(/^LLM Judge 단독 채점\s*:/, "단일 Judge 채점:")
+    .replace(/Trimmed mean across judge APIs; highest and lowest metric scores are excluded when three or more judges are present\.?/gi, "여러 Judge 중 최고/최저 지표 점수를 제외한 평균입니다.")
+    .replace(/Mean across judge APIs\.?/gi, "여러 Judge 평균입니다.")
+    .replace(/judge error-type disagreement/gi, "Judge 오류 유형 불일치")
+    .replace(/judge pass\/fail disagreement/gi, "Judge 통과/실패 판단 불일치")
+    .replace(/judge pass decision disagreement/gi, "Judge 통과/실패 판단 불일치")
+    .replace(/partial_inaccuracy/gi, "부분적 부정확")
+    .replace(/unsupported_claim/gi, "근거 없는 주장")
+    .replace(/missing_condition/gi, "필수 조건 누락")
+    .replace(/hallucinated_policy/gi, "정책 환각")
+    .replace(/unsafe_completion/gi, "위험 응답")
+    .replace(/format_violation/gi, "형식 위반")
+    .replace(/(^|[^\d])([0-9]+(?:\.[0-9]+)?)점/g, (match, prefix, rawScore) => {
+      const numeric = Number(rawScore);
+      if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) return match;
+      const divisor = numeric > 20 ? 100 : 20;
+      return `${prefix}${scoreValueLabel(numeric / divisor)}`;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function renderJudgeDecisionCards(row) {
@@ -4009,33 +4947,31 @@ function renderJudgeDecisionCards(row) {
   if (!scores.length) return "";
   const cards = scores.map((score, index) => {
     const judgeId = score.config_id || score.model || score.provider || "-";
-    const label = score.role === "arbiter" ? "상위 Judge" : judgeDecisionLabel(judgeId, index);
+    const label = score.role === "arbiter" ? "중재 Judge" : judgeDecisionLabel(judgeId, index);
     const total = Number(score.overall_score ?? 0);
-    const scoreUtlApplicable = score.utl_applicable === undefined || score.utl_applicable === ""
-      ? row.utl_applicable
-      : !isFalse(score.utl_applicable);
-    const metrics = ["acc", "com", "utl", "nac", "hal"]
-      .filter((key) => score[key] !== undefined && score[key] !== "" && (key !== "utl" || scoreUtlApplicable))
-      .map((key) => `${metricDisplayLabel(key)} ${Number(score[key] || 0).toFixed(1)}`)
+    const metricScore = { ...row, ...score, fct: firstPresentValue(score.fct, score.hal, row.fct) };
+    const metrics = metricCols
+      .filter((key) => metricAvailable(metricScore, key))
+      .map((key) => `${metricDisplayLabel(key)} ${scoreValueLabel(metricNumber(metricScore, key))}`)
       .join(" · ");
-    const promptInfo = [score.prompt_version, score.prompt_hash ? `hash ${score.prompt_hash}` : ""].filter(Boolean).join(" · ");
+    const promptInfo = [displayPromptVersion(score.prompt_version), score.prompt_hash ? `hash ${score.prompt_hash}` : ""].filter(Boolean).join(" · ");
     const usedAsFinal = row.llm_judge_arbiter_override && score.role === "arbiter";
     return `
       <div class="judge-decision-card ${score.role === "arbiter" ? "arbiter" : ""} ${usedAsFinal ? "used-final" : ""}">
         <div class="judge-card-head">
           <strong>${escapeHtml(label)} · ${escapeHtml(judgeId)}</strong>
-          <em>${usedAsFinal ? "최종 반영 · " : ""}${escapeHtml(score.pass === true ? "통과" : score.pass === false ? "실패" : "-")} · ${total.toFixed(1)}</em>
+          <em>${usedAsFinal ? "반영됨 · " : ""}${escapeHtml(score.pass === true ? "통과" : score.pass === false ? "실패" : "-")} · ${scoreValueLabel(total)}</em>
         </div>
         ${metrics ? `<span class="judge-card-metrics">${escapeHtml(metrics)}</span>` : ""}
         ${promptInfo ? `<small>${escapeHtml(promptInfo)}</small>` : ""}
-        <p class="judge-card-reason">${escapeHtml(score.reason || "등록된 Judge 판단 사유가 없습니다.")}</p>
+        <p class="judge-card-reason">${escapeHtml(humanJudgeReasonText(score.reason) || "등록된 Judge 판단 사유가 없습니다.")}</p>
       </div>
     `;
   }).join("");
   return `
     <div class="detail-block judge-detail-section">
       <h3>Judge별 판단 사유</h3>
-      <p class="detail-section-note">각 Judge가 독립적으로 남긴 점수와 사유입니다. 상위 Judge가 최종 반영된 경우 카드에 표시됩니다.</p>
+      <p class="detail-section-note">각 Judge가 독립적으로 남긴 점수와 사유입니다. 중재 Judge가 반영된 경우 카드에 표시됩니다.</p>
       <div class="judge-decision-grid">${cards}</div>
     </div>
   `;
@@ -4062,36 +4998,37 @@ function judgeScoreGap(row) {
 function renderJudgeConflictSummary(row) {
   const gap = judgeScoreGap(row);
   const passMismatch = row.llm_judge_pass_mismatch;
-  const shouldShow = row.llm_judge_conflict_detected || row.llm_judge_conflict || gap >= 20 || passMismatch || row.llm_judge_arbiter_override;
+  const shouldShow = row.llm_judge_conflict_detected || row.llm_judge_conflict || gap >= JUDGE_GAP_NOTICE_THRESHOLD || passMismatch || row.llm_judge_arbiter_override;
   if (!shouldShow) return "";
   const hasRange = Number(row.llm_judge_score_min) || Number(row.llm_judge_score_max);
   const arbiterScore = Number(row.llm_judge_arbiter_score);
   const hasArbiterResult = resultHasArbiter(row);
   return `
     <div class="detail-block judge-conflict-summary ${row.llm_judge_arbiter_override ? "arbiter-overridden" : ""}">
-      <h3>Judge 점수 차이와 최종 반영</h3>
+      <h3>Judge 점수 차이와 반영 결과</h3>
       <div class="judge-conflict-metrics">
-        <span>Judge 점수차 <strong>${gap.toFixed(1)}점</strong></span>
-        ${hasRange ? `<span>Judge 최저/최고 <strong>${scoreValueLabel(row.llm_judge_score_min)} / ${scoreValueLabel(row.llm_judge_score_max)}점</strong></span>` : ""}
+        <span>Judge 점수차 <strong>${scoreValueLabel(gap)}</strong></span>
+        ${hasRange ? `<span>Judge 최저/최고 <strong>${scoreValueLabel(row.llm_judge_score_min)} / ${scoreValueLabel(row.llm_judge_score_max)}</strong></span>` : ""}
         <span>통과 판정 차이 <strong>${passMismatch ? "있음" : "없음"}</strong></span>
-        ${row.llm_judge_arbiter_override ? `<span>최종 반영 <strong>상위 Judge</strong></span>` : ""}
-        ${Number.isFinite(arbiterScore) && arbiterScore > 0 ? `<span>상위 Judge 점수 <strong>${scoreValueLabel(arbiterScore)}점</strong></span>` : ""}
+        ${row.llm_judge_arbiter_override ? `<span>반영 결과 <strong>중재 Judge</strong></span>` : ""}
+        ${Number.isFinite(arbiterScore) && arbiterScore > 0 ? `<span>중재 Judge 점수 <strong>${scoreValueLabel(arbiterScore)}</strong></span>` : ""}
         ${row.llm_judge_conflict_resolution_policy ? `<span>처리 방식 <strong>${escapeHtml(judgeResolutionPolicyLabel(row.llm_judge_conflict_resolution_policy))}</strong></span>` : ""}
       </div>
       ${row.llm_judge_conflict_reason ? `<p>${escapeHtml(humanJudgeConflictReason(row.llm_judge_conflict_reason))}</p>` : ""}
-      ${hasArbiterResult && row.llm_judge_arbiter_config_id ? `<span class="judge-conflict-note">상위 Judge: ${escapeHtml(row.llm_judge_arbiter_config_id)}</span>` : ""}
+      ${hasArbiterResult && row.llm_judge_arbiter_config_id ? `<span class="judge-conflict-note">중재 Judge: ${escapeHtml(row.llm_judge_arbiter_config_id)}</span>` : ""}
     </div>
   `;
 }
 
-function scoreValueLabel(value) {
+function scoreValueLabel(value, digits = 3) {
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric.toFixed(1) : "-";
+  const places = Number.isFinite(Number(digits)) ? Math.max(0, Number(digits)) : 3;
+  return Number.isFinite(numeric) ? numeric.toFixed(places) : "-";
 }
 
 function judgeResolutionPolicyLabel(value) {
   return {
-    arbiter_override: "상위 Judge 결과로 최종 반영",
+    arbiter_override: "중재 Judge 결과 반영",
     three_judge: "3개 Judge 집계",
     review: "수동 검토",
     manual_review_required: "수동 검토 필요",
@@ -4102,11 +5039,23 @@ function judgeResolutionPolicyLabel(value) {
 function humanJudgeConflictReason(value) {
   return String(value || "")
     .replace(/judge pass\/fail disagreement/gi, "Judge 통과/실패 판단 불일치")
+    .replace(/judge pass decision disagreement/gi, "Judge 통과/실패 판단 불일치")
+    .replace(/judge error-type disagreement/gi, "Judge 오류 유형 불일치")
     .replace(/judge relative score gap\s*([0-9.]+)%/gi, "Judge 상대 점수차 $1%")
     .replace(/judge score gap\s*([0-9.]+)/gi, "Judge 점수차 $1점")
-    .replace(/resolved by arbiter override:\s*/gi, "상위 Judge 최종 반영: ")
-    .replace(/arbiter missing; manual review required/gi, "상위 Judge 결과가 없어 수동 검토 필요")
-    .replace(/manual review required/gi, "수동 검토 필요");
+    .replace(/resolved by arbiter override:\s*/gi, "중재 Judge 반영: ")
+    .replace(/arbiter missing; manual review required/gi, "중재 Judge 결과가 없어 수동 검토 필요")
+    .replace(/manual review required/gi, "수동 검토 필요")
+    .replace(/actual_inaccuracy/gi, "실제 답변 부정확")
+    .replace(/actual_accuracy/gi, "실제 답변 정확성")
+    .replace(/partial_inaccuracy/gi, "부분적 부정확")
+    .replace(/unsupported_claim/gi, "근거 없는 주장")
+    .replace(/missing_condition/gi, "필수 조건 누락")
+    .replace(/hallucinated_policy/gi, "정책 환각")
+    .replace(/unsafe_completion/gi, "위험 응답")
+    .replace(/format_violation/gi, "형식 위반")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function renderResultDetail(row) {
@@ -4115,24 +5064,29 @@ function renderResultDetail(row) {
     return;
   }
   const metrics = metricCols.map((key) => {
-    const unavailable = key === "utl" && !row.utl_applicable;
-    const value = Number(row[key] || 0);
+    const unavailable = !metricAvailable(row, key);
+    const value = metricNumber(row, key);
     return `
       <div class="detail-score-row">
         <span>${escapeHtml(metricDisplayLabel(key))}</span>
-        <div class="bar-track"><div class="bar-fill" style="width:${unavailable ? 0 : clamp(value * 5, 0, 100)}%"></div></div>
-        <strong>${unavailable ? "N/A" : value.toFixed(1)}</strong>
+        <div class="bar-track"><div class="bar-fill" style="width:${unavailable ? 0 : clamp(value * 100, 0, 100)}%"></div></div>
+        <strong>${unavailable ? "N/A" : scoreValueLabel(value)}</strong>
       </div>
     `;
   }).join("");
   const finalReason = resultFinalReason(row);
   const judgeList = resultJudgeListLabel(row);
+  const detailNote = row.__detailLoaded
+    ? ""
+    : row.__detailLoadFailed
+      ? `<small class="detail-load-note error">상세 원문을 불러오지 못해 요약 기준으로 표시합니다.</small>`
+      : `<small class="detail-load-note">상세 원문과 Judge별 세부 점수를 불러오는 중입니다.</small>`;
   setHtml("resultDetail", `
     <div class="detail-stack">
       <div class="detail-title">
         <span>${escapeHtml(row.question_id)}</span>
         <strong>${escapeHtml(modelLabelForVersion(row.version))}</strong>
-        <em class="${isFailureCell(row) ? "detail-fail" : "detail-pass"}">${escapeHtml(passFailLabel(row.pass_fail))} · ${caseOverallScore(row).toFixed(1)}</em>
+        <em class="${isFailureCell(row) ? "detail-fail" : "detail-pass"}">${escapeHtml(passFailLabel(row.pass_fail))} · ${scoreValueLabel(caseOverallScore(row))}</em>
       </div>
       <div class="question-box">
         <strong>${escapeHtml(row.question)}</strong>
@@ -4141,6 +5095,7 @@ function renderResultDetail(row) {
       <div class="detail-score-grid">${metrics}</div>
       <div class="detail-block">
         <h3>모델 답변</h3>
+        ${detailNote}
         <p>${escapeHtml(row.model_answer || row.answer_excerpt || "답변 요약이 없습니다.")}</p>
       </div>
       <div class="detail-block">
@@ -4148,7 +5103,7 @@ function renderResultDetail(row) {
         <p>${escapeHtml(row.output || "등록된 모범답안이 없습니다.")}</p>
       </div>
       <div class="detail-block result-final-summary">
-        <h3>최종 판정 요약</h3>
+        <h3>판정 요약</h3>
         <div class="detail-meta-grid">
           <span title="${escapeHtml(resultScoringLabel(row))}"><b>채점</b>${escapeHtml(resultScoringLabel(row))}</span>
           <span title="${escapeHtml(judgeList)}"><b>Judge 구성</b>${escapeHtml(resultJudgeSummaryLabel(row))}</span>
@@ -4162,6 +5117,7 @@ function renderResultDetail(row) {
       ${renderJudgeDecisionCards(row)}
     </div>
   `);
+  hydrateResultDetail(row);
 }
 
 function shortModelLabel(model) {
@@ -4177,7 +5133,7 @@ function resultViewLabel(value) {
     all: "전체 결과",
     failures: "실패 문항",
     passes: "통과 문항",
-    safety: "HAL 이슈",
+    safety: "정책/안전 이슈",
     different: "모델 간 불일치",
     review: "검토 필요",
   }[value] || "전체 결과";
@@ -4185,6 +5141,33 @@ function resultViewLabel(value) {
 
 function metricDisplayLabel(key) {
   return metricLabels[key] || key;
+}
+
+function displayPromptVersion(value) {
+  const text = String(value || "").trim();
+  return {
+    judge_submission_v1_partial_credit_acc_com_utl_nac_hal: "legacy judge -> OmniEval",
+    arbiter_v1_conflict_review: "legacy arbiter -> OmniEval",
+    legacy_judge_v1_to_canonical_no_safe: "legacy judge -> OmniEval",
+    arbiter_v1_to_canonical_no_safe: "legacy arbiter -> OmniEval",
+    omnieval_rubric_v1_no_safe_compat: "OmniEval judge compat",
+    arbiter_v1_to_omnieval_no_safe_compat: "OmniEval arbiter compat",
+    omnieval_metrics_config_v2: "OmniEval metrics v2",
+    arbiter_v2_to_omnieval_metrics_config: "OmniEval arbiter metrics v2",
+  }[text] || text;
+}
+
+function canonicalPromptVersionValue(value) {
+  const text = String(value || "").trim();
+  return {
+    omnieval_core_quality_gate_v1: "omnieval_metrics_config_v2",
+    judge_submission_v1_partial_credit_acc_com_utl_nac_hal: "omnieval_metrics_config_v2",
+    arbiter_v1_conflict_review: "arbiter_v2_to_omnieval_metrics_config",
+    legacy_judge_v1_to_canonical_no_safe: "omnieval_metrics_config_v2",
+    omnieval_rubric_v1_no_safe_compat: "omnieval_metrics_config_v2",
+    arbiter_v1_to_canonical_no_safe: "arbiter_v2_to_omnieval_metrics_config",
+    arbiter_v1_to_omnieval_no_safe_compat: "arbiter_v2_to_omnieval_metrics_config",
+  }[text] || text;
 }
 
 function renderQuestionlist(caseRows) {
@@ -4231,11 +5214,11 @@ function initializeCaseSetControls() {
       selectedDataset = datasetSelect.value;
       const evalDataset = document.getElementById("evalDatasetSelect");
       if (evalDataset) evalDataset.value = selectedDataset;
-      loadDatasetCases(selectedDataset);
+      loadDatasetCases(selectedDataset, { force: true });
     });
   }
   if (limitInput) {
-    limitInput.addEventListener("change", () => loadDatasetCases(datasetSelect?.value || selectedDataset));
+    limitInput.addEventListener("change", () => loadDatasetCases(datasetSelect?.value || selectedDataset, { force: true }));
   }
 }
 
@@ -4288,13 +5271,14 @@ function bindDatasetUploadForm() {
       }
 
       questionlistDatasets = payload.datasets ?? questionlistDatasets;
+      resetQuestionlistCaseCache();
       selectedDataset = payload.dataset?.id || preferredDatasetId(selectedDataset);
       populateDatasetSelects();
       const datasetSelect = document.getElementById("datasetSelect");
       const evalDatasetSelect = document.getElementById("evalDatasetSelect");
       if (datasetSelect) datasetSelect.value = selectedDataset;
       if (evalDatasetSelect) evalDatasetSelect.value = selectedDataset;
-      await loadDatasetCases(selectedDataset);
+      await loadDatasetCases(selectedDataset, { force: true });
       renderEvalProfileCards();
       renderEvalRunSummary();
       setDatasetUploadMessage(`테스트셋 추가 완료: ${datasetLabel(payload.dataset || { id: selectedDataset })}`, "ok");
@@ -4381,7 +5365,7 @@ function syncScoringModeHelp() {
   if (blendTarget) {
     const llm = Math.round(weight * 100);
     blendTarget.textContent = mode === "blend"
-      ? `${weight.toFixed(2)} = Judge ${llm}%, Rule ${100 - llm}%로 최종 점수를 섞습니다.`
+      ? `${weight.toFixed(2)} = Judge ${llm}%, Rule ${100 - llm}%로 반영 점수를 섞습니다.`
       : "Judge+규칙 혼합에서만 사용합니다.";
   }
 }
@@ -4658,23 +5642,42 @@ function updateEvalRunMode() {
   renderEvalRunSummary();
 }
 
-async function loadDatasetCases(datasetId) {
+async function loadDatasetCases(datasetId, options = {}) {
   if (!datasetId) return;
   selectedDataset = datasetId;
+  if (!options.force && datasetCasesLoadedId === datasetId && datasetCases.length) {
+    renderCaseSets();
+    return;
+  }
   const limit = Number(document.getElementById("datasetLimit")?.value || 120);
   const datasetSummary = questionlistDatasets.find((dataset) => dataset.id === datasetId) ?? {};
   const sourceTotal = Number(datasetSummary.total || 0);
   const fetchLimit = Math.min(1000, Math.max(limit, sourceTotal || limit));
+  const requestKey = `${datasetId}|${fetchLimit}`;
+  if (datasetCasesLoadPromise && datasetCasesLoadKey === requestKey) return datasetCasesLoadPromise;
   setHtml("datasetCaseTable", emptyState("케이스 미리보기를 불러오는 중입니다."));
-  const payload = await fetchJsonOptional(
+  datasetCasesLoadKey = requestKey;
+  datasetCasesLoadPromise = fetchJsonOptional(
     `api/questionlist/dataset-cases?dataset=${encodeURIComponent(datasetId)}&limit=${encodeURIComponent(fetchLimit)}`,
     { cases: [] }
-  );
-  datasetCases = (payload?.cases ?? []).map(normalizeQuestionlistCase);
-  if (!state.selectedDatasetCaseId || !datasetCases.some((row) => row.case_id === state.selectedDatasetCaseId)) {
-    state.selectedDatasetCaseId = datasetCases[0]?.case_id ?? null;
-  }
-  renderCaseSets();
+  ).then((payload) => {
+    if (datasetCasesLoadKey !== requestKey || selectedDataset !== datasetId) {
+      return datasetCases;
+    }
+    datasetCases = (payload?.cases ?? []).map(normalizeQuestionlistCase);
+    datasetCasesLoadedId = datasetId;
+    if (!state.selectedDatasetCaseId || !datasetCases.some((row) => row.case_id === state.selectedDatasetCaseId)) {
+      state.selectedDatasetCaseId = datasetCases[0]?.case_id ?? null;
+    }
+    renderCaseSets();
+    return datasetCases;
+  }).finally(() => {
+    if (datasetCasesLoadKey === requestKey) {
+      datasetCasesLoadPromise = null;
+      datasetCasesLoadKey = "";
+    }
+  });
+  return datasetCasesLoadPromise;
 }
 
 function renderCaseSets() {
@@ -4964,14 +5967,20 @@ function initializeJudgeComparisonControls() {
   renderJudgeComparisonControls();
   document.getElementById("judgeCompareBaselineSource")?.addEventListener("change", () => {
     renderJudgeComparisonBaselineJudgeOptions();
+    renderJudgeComparisonCandidateJudgeOptions();
     renderJudgeComparisonArbiterOptions();
     renderJudgeComparisonPreview();
   });
   document.getElementById("judgeCompareBaselineJudge")?.addEventListener("change", () => {
     renderJudgeComparisonArbiterOptions();
+    renderJudgeComparisonCandidateJudgeOptions();
     renderJudgeComparisonPreview();
   });
-  ["judgeCompareExistingArbiter", "judgeCompareCandidateRun", "judgeCompareScoreGap", "judgeCompareScoreGapMode", "judgeCompareErrorType", "judgeCompareNormalizeErrorType"].forEach((id) => {
+  document.getElementById("judgeCompareCandidateRun")?.addEventListener("change", () => {
+    renderJudgeComparisonCandidateJudgeOptions();
+    renderJudgeComparisonPreview();
+  });
+  ["judgeCompareExistingArbiter", "judgeCompareCandidateJudge", "judgeCompareScoreGap", "judgeCompareScoreGapMode", "judgeCompareErrorType", "judgeCompareNormalizeErrorType"].forEach((id) => {
     document.getElementById(id)?.addEventListener("change", renderJudgeComparisonPreview);
     document.getElementById(id)?.addEventListener("input", renderJudgeComparisonPreview);
   });
@@ -5004,6 +6013,7 @@ function renderJudgeComparisonControls() {
     `;
   }).join("");
   renderJudgeComparisonBaselineJudgeOptions();
+  renderJudgeComparisonCandidateJudgeOptions();
   renderJudgeComparisonArbiterOptions();
   renderJudgeComparisonPreview();
 }
@@ -5020,7 +6030,25 @@ function renderJudgeComparisonBaselineJudgeOptions() {
     || judges[0];
   judgeSelect.innerHTML = judges.map((judge) => `
     <option value="${escapeHtml(judge.config_id)}" ${judge.config_id === preferred?.config_id ? "selected" : ""}>
-      ${escapeHtml(judge.config_id)} · ${Number(judge.rows || 0).toLocaleString()} rows
+      ${escapeHtml(judge.config_id)} · ${Number(judge.rows || 0).toLocaleString()}행
+    </option>
+  `).join("");
+}
+
+function renderJudgeComparisonCandidateJudgeOptions() {
+  const candidateRunId = document.getElementById("judgeCompareCandidateRun")?.value || "";
+  const baselineJudgeId = document.getElementById("judgeCompareBaselineJudge")?.value || "";
+  const judgeSelect = document.getElementById("judgeCompareCandidateJudge");
+  if (!judgeSelect) return;
+  const candidate = (judgeComparisonOptions?.judge_runs || []).find((item) => item.run_id === candidateRunId)
+    || (judgeComparisonOptions?.judge_runs || [])[0];
+  const judges = candidate?.judge_configs || [];
+  const preferred = judges.find((judge) => String(judge.config_id || "").toLowerCase().includes("gemini"))
+    || judges.find((judge) => judge.config_id && judge.config_id !== baselineJudgeId)
+    || judges[0];
+  judgeSelect.innerHTML = judges.map((judge) => `
+    <option value="${escapeHtml(judge.config_id)}" ${judge.config_id === preferred?.config_id ? "selected" : ""}>
+      ${escapeHtml(judge.config_id)} · ${Number(judge.rows || 0).toLocaleString()}행
     </option>
   `).join("");
 }
@@ -5037,10 +6065,10 @@ function renderJudgeComparisonArbiterOptions() {
     || judges.find((judge) => String(judge.config_id || "").toLowerCase().includes("arbiter"))
     || null;
   arbiterSelect.innerHTML = [
-    `<option value="">사용 안 함 · 기존 Arbiter 결과 없음</option>`,
+    `<option value="">사용 안 함 · 기존 중재 Judge 결과 없음</option>`,
     ...judges.map((judge) => `
       <option value="${escapeHtml(judge.config_id)}" ${judge.config_id === preferred?.config_id ? "selected" : ""}>
-        ${escapeHtml(judge.config_id)} · ${Number(judge.rows || 0).toLocaleString()} rows
+        ${escapeHtml(judge.config_id)} · ${Number(judge.rows || 0).toLocaleString()}행
       </option>
     `),
   ].join("");
@@ -5055,21 +6083,83 @@ function renderJudgeComparisonPreview() {
   const judgeId = document.getElementById("judgeCompareBaselineJudge")?.value || "";
   const arbiterId = document.getElementById("judgeCompareExistingArbiter")?.value || "";
   const candidate = candidateRuns.find((item) => item.run_id === document.getElementById("judgeCompareCandidateRun")?.value);
+  const candidateJudgeId = document.getElementById("judgeCompareCandidateJudge")?.value || "";
+  const candidateJudge = (candidate?.judge_configs || []).find((item) => item.config_id === candidateJudgeId);
   const scoreGapThreshold = Number(document.getElementById("judgeCompareScoreGap")?.value || 30);
   const scoreGapMode = document.getElementById("judgeCompareScoreGapMode")?.value || "points";
   const includeErrorTypeMismatch = Boolean(document.getElementById("judgeCompareErrorType")?.checked);
   if (!sources.length || !candidateRuns.length) {
-    result.innerHTML = emptyState("비교 가능한 기존 Judge 점수 또는 새 Judge run이 없습니다.");
+    result.innerHTML = emptyState("비교 가능한 기존 Judge 점수 또는 새 Judge 실행 결과가 없습니다.");
     return;
   }
+  const item = (label, value, title = value) => `
+    <span title="${escapeHtml(title || value || "-")}">
+      <strong>${escapeHtml(label)}</strong>
+      <em class="preview-value">${escapeHtml(value || "-")}</em>
+    </span>
+  `;
+  const candidateLabel = candidate?.label || candidate?.run_id || "-";
+  const criteria = `${judgeScoreGapModeLabel(scoreGapMode)} ${judgeScoreGapThresholdLabel(scoreGapThreshold, scoreGapMode)} · 통과/실패${includeErrorTypeMismatch ? " · 실패 유형" : ""}`;
+  const reports = judgeComparisonExistingReportsHtml();
   result.innerHTML = `
     <div class="judge-comparison-preview">
-      <span><strong>기준</strong>${escapeHtml(source?.label || "-")}</span>
-      <span><strong>Judge</strong>${escapeHtml(judgeId || "-")}</span>
-      <span><strong>기존 Arbiter</strong>${escapeHtml(arbiterId || "사용 안 함")}</span>
-      <span><strong>비교 run</strong>${escapeHtml(candidate?.label || "-")}</span>
-      <span><strong>비교 rows</strong>${Number(candidate?.ok_rows || 0).toLocaleString()}</span>
-      <span><strong>후보 기준</strong>${escapeHtml(judgeScoreGapModeLabel(scoreGapMode))} ${escapeHtml(judgeScoreGapThresholdLabel(scoreGapThreshold, scoreGapMode))} · pass/fail${includeErrorTypeMismatch ? " · fail 유형" : ""}</span>
+      ${item("기준", source?.label || source?.source_id || "-")}
+      ${item("Judge", judgeId || "-")}
+      ${item("기존 중재 Judge", arbiterId || "사용 안 함")}
+      ${item("비교 run", shortLabel(candidateLabel, 48), candidateLabel)}
+      ${item("비교 Judge", candidateJudgeId || "-")}
+      ${item("비교 행", Number(candidateJudge?.rows || candidate?.ok_rows || 0).toLocaleString())}
+      ${item("후보 기준", criteria)}
+    </div>
+    ${reports}
+  `;
+}
+
+function judgeComparisonExistingReportsHtml() {
+  const reports = judgeComparisonOptions?.comparison_reports || [];
+  if (!reports.length) return "";
+  const rows = reports.slice(0, 6).map((report) => {
+    const label = report.comparison_id || report.id || "comparison";
+    const threshold = report.score_gap_threshold !== undefined && report.score_gap_threshold !== ""
+      ? judgeScoreGapThresholdLabel(report.score_gap_threshold, report.score_gap_mode)
+      : "-";
+    const reportLink = report.report_url
+      ? `<a href="${escapeHtml(report.report_url)}" target="_blank" rel="noreferrer">리포트</a>`
+      : "";
+    const summaryLink = report.summary_url
+      ? `<a href="${escapeHtml(report.summary_url)}" target="_blank" rel="noreferrer">JSON</a>`
+      : "";
+    return `
+      <tr>
+        <td title="${escapeHtml(label)}">${escapeHtml(shortLabel(label, 54))}</td>
+        <td>${Number(report.matched_rows || 0).toLocaleString()}</td>
+        <td>${Number(report.arbiter_candidate_rows || 0).toLocaleString()}</td>
+        <td>${Number(report.arbiter_existing_candidate_rows || 0).toLocaleString()}</td>
+        <td>${Number(report.arbiter_missing_rows || 0).toLocaleString()}</td>
+        <td>${escapeHtml(threshold)}</td>
+        <td>${[reportLink, summaryLink].filter(Boolean).join(" · ")}</td>
+      </tr>
+    `;
+  }).join("");
+  return `
+    <div class="existing-comparison-reports">
+      <h4>저장된 비교 리포트</h4>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>비교</th>
+              <th>Rows</th>
+              <th>후보</th>
+              <th>기존 중재 Judge</th>
+              <th>미완료</th>
+              <th>기준</th>
+              <th>열기</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -5088,12 +6178,13 @@ async function submitJudgeComparison() {
   const baselineJudgeConfigId = document.getElementById("judgeCompareBaselineJudge")?.value || "";
   const arbiterJudgeConfigId = document.getElementById("judgeCompareExistingArbiter")?.value || "";
   const candidateRunId = document.getElementById("judgeCompareCandidateRun")?.value || "";
+  const candidateJudgeConfigId = document.getElementById("judgeCompareCandidateJudge")?.value || "";
   const scoreGapThreshold = Number(document.getElementById("judgeCompareScoreGap")?.value || 30);
   const scoreGapMode = document.getElementById("judgeCompareScoreGapMode")?.value || "points";
   const includeErrorTypeMismatch = Boolean(document.getElementById("judgeCompareErrorType")?.checked);
   const normalizeErrorType = Boolean(document.getElementById("judgeCompareNormalizeErrorType")?.checked);
-  if (!baselineSourceId || !baselineJudgeConfigId || !candidateRunId) {
-    setJudgeComparisonMessage("기준 점수 소스, 기준 Judge, 비교 Judge run을 모두 선택하세요.", "error");
+  if (!baselineSourceId || !baselineJudgeConfigId || !candidateRunId || !candidateJudgeConfigId) {
+    setJudgeComparisonMessage("기준 점수 소스, 기준 Judge, 비교 Judge run, 비교 Judge를 모두 선택하세요.", "error");
     return;
   }
   if (!Number.isFinite(scoreGapThreshold) || scoreGapThreshold < 0 || scoreGapThreshold > 10000) {
@@ -5114,6 +6205,7 @@ async function submitJudgeComparison() {
         baseline_judge_config_id: baselineJudgeConfigId,
         arbiter_judge_config_id: arbiterJudgeConfigId,
         candidate_run_id: candidateRunId,
+        candidate_judge_config_id: candidateJudgeConfigId,
         score_gap_threshold: scoreGapThreshold,
         score_gap_mode: scoreGapMode,
         include_error_type_mismatch: includeErrorTypeMismatch,
@@ -5148,6 +6240,24 @@ function renderJudgeComparisonResult(payload) {
   const scoreGapMode = summary.score_gap_mode || "points";
   const thresholdLabel = judgeScoreGapThresholdLabel(threshold, scoreGapMode);
   const thresholdModeLabel = judgeScoreGapModeLabel(scoreGapMode);
+  const hasArbiter = Boolean(summary.arbiter_judge_config_id || summary.arbiter_configured);
+  const conflictRows = Number(summary.conflict_rows ?? summary.arbiter_candidate_rows ?? 0);
+  const arbiterSummary = hasArbiter
+    ? `
+        <span><strong>중재 Judge 대상</strong> ${Number(summary.arbiter_candidate_rows || 0).toLocaleString()}</span>
+        <span><strong>기존 중재 Judge 반영</strong> ${Number(summary.arbiter_existing_candidate_rows || 0).toLocaleString()}</span>
+        <span><strong>중재 Judge 미완료</strong> ${Number(summary.arbiter_missing_rows || summary.arbiter_key_rows || 0).toLocaleString()}</span>
+        <span><strong>반영값 완료</strong> ${Number(summary.final_complete_rows || 0).toLocaleString()}</span>
+        <span><strong>반영값 평균</strong> ${scoreValueLabel(summary.final_avg)}</span>
+      `
+    : `
+        <span><strong>충돌 행</strong> ${conflictRows.toLocaleString()}</span>
+        <span><strong>중재 Judge</strong> 사용 안 함</span>
+      `;
+  const arbiterKeysLink = hasArbiter ? link("arbiter_keys_jsonl", "미완료 중재 Judge JSONL") : "";
+  const resultHelp = hasArbiter
+    ? "새 중재 Judge는 실행하지 않았습니다. 기존 결과가 없는 후보만 후속 실행 입력으로 남깁니다."
+    : "중재 Judge를 선택하지 않은 비교입니다. 충돌 후보를 후속 입력으로 만들지 않고 비교 리포트만 생성했습니다.";
   target.innerHTML = `
     <div class="judge-comparison-output">
       <div class="run-summary-strip">
@@ -5155,21 +6265,17 @@ function renderJudgeComparisonResult(payload) {
         <span><strong>평균 차이</strong> ${signedNumber(summary.avg_delta_candidate_minus_baseline)}</span>
         <span><strong>평균 절대차</strong> ${scoreValueLabel(summary.avg_abs_gap)}</span>
         <span><strong>${escapeHtml(thresholdModeLabel)} ${escapeHtml(thresholdLabel)}</strong> ${Number(summary.gap_threshold_rows || 0).toLocaleString()}</span>
-        <span><strong>Pass 불일치</strong> ${Number(summary.pass_mismatch_rows || 0).toLocaleString()}</span>
-        <span><strong>Fail 유형 불일치</strong> ${Number(summary.error_type_total_mismatch_rows || summary.error_type_mismatch_rows || 0).toLocaleString()}</span>
-        <span><strong>Arbiter 대상</strong> ${Number(summary.arbiter_candidate_rows || summary.arbiter_key_rows || 0).toLocaleString()}</span>
-        <span><strong>기존 Arbiter 반영</strong> ${Number(summary.arbiter_existing_candidate_rows || 0).toLocaleString()}</span>
-        <span><strong>Arbiter 미싱</strong> ${Number(summary.arbiter_missing_rows || summary.arbiter_key_rows || 0).toLocaleString()}</span>
-        <span><strong>최종값 완료</strong> ${Number(summary.final_complete_rows || 0).toLocaleString()}</span>
-        <span><strong>최종값 평균</strong> ${scoreValueLabel(summary.final_avg)}</span>
+        <span><strong>통과 판정 불일치</strong> ${Number(summary.pass_mismatch_rows || 0).toLocaleString()}</span>
+        <span><strong>실패 유형 불일치</strong> ${Number(summary.error_type_total_mismatch_rows || summary.error_type_mismatch_rows || 0).toLocaleString()}</span>
+        ${arbiterSummary}
       </div>
       <div class="judge-comparison-links">
         ${link("report_md", "리포트 열기")}
         ${link("top_cases_csv", "상위 케이스 CSV")}
         ${link("comparison_csv", "전체 비교 CSV")}
-        ${link("arbiter_keys_jsonl", "미완료 Arbiter JSONL")}
+        ${arbiterKeysLink}
       </div>
-      <p class="field-help">새 Arbiter는 실행하지 않았습니다. 기존 결과가 없는 후보만 후속 실행 입력으로 남깁니다.</p>
+      <p class="field-help">${escapeHtml(resultHelp)}</p>
     </div>
   `;
 }
@@ -5280,7 +6386,7 @@ function renderEvalConfigFilters() {
     const temp = spec.options?.temperature;
     const topP = spec.options?.top_p;
     const promptVersion = spec.prompt_version || spec.experiment_tag || "prompt_v1";
-    const variantLabel = spec.prompt_variant_of ? `variant of ${spec.prompt_variant_of}` : "base";
+    const variantLabel = spec.prompt_variant_of ? `${spec.prompt_variant_of} 변형` : "기준";
     return `
       <label class="model-card ${selected ? "selected" : ""}">
         <input type="${inputType}"${inputName} data-eval-config value="${escapeHtml(id)}" ${selected ? "checked" : ""}>
@@ -5386,7 +6492,7 @@ function renderEvalRunSummary() {
       customPlanForSummary ? `샘플 ${customPlanForSummary.total}` : (limitRaw ? `제한 ${limitRaw}` : ""),
       customPlanForSummary ? `seed ${customPlanForSummary.seed ?? "?"}` : "",
       scoringModeLabel(scoringMode),
-      staticEmbeddingEnabled ? `embedding ${staticEmbeddingModel || "on"}` : "",
+      staticEmbeddingEnabled ? `임베딩 ${staticEmbeddingModel || "사용"}` : "",
       judgeCount ? `Judge ${judgeCount}개` : "",
       judgeCount > 1 ? judgeAggregationLabels[aggregationMethod] : "",
       judgeWeightStatus ? `Judge 비중 ${judgeWeightStatus.total.toFixed(2)}` : "",
@@ -5422,7 +6528,7 @@ function updateRunSubmitState() {
     reason = "단일 모델 실행은 대상 모델을 1개만 선택해야 합니다.";
   } else if (staticEmbeddingEnabled && !staticEmbeddingModel) {
     disabled = true;
-    reason = "정적 임베딩 유사도를 사용하려면 embedding model을 입력하세요.";
+    reason = "정적 임베딩 유사도를 사용하려면 임베딩 모델명을 입력하세요.";
   } else if (customPlanForSubmit && (!Number.isInteger(customPlanForSubmit.seed) || customPlanForSubmit.seed < 0)) {
     disabled = true;
     reason = "직접 구성 랜덤 시드는 0 이상의 정수여야 합니다.";
@@ -5454,7 +6560,7 @@ function updateRunSubmitState() {
     if (reason.includes("2개 이상")) return "Judge 2개 이상 선택 필요";
     if (reason.includes("대상 모델")) return "대상 모델 등록 필요";
     if (reason.includes("실행할 모델")) return "실행할 모델 선택 필요";
-    if (reason.includes("embedding model")) return "임베딩 모델명 입력 필요";
+    if (reason.includes("임베딩 모델")) return "임베딩 모델명 입력 필요";
     if (reason.includes("랜덤 시드")) return "랜덤 시드 입력 필요";
     if (reason.includes("총 샘플 수")) return "총 샘플 수 입력 필요";
     if (reason.includes("풀 비율")) return "풀 비율 입력 필요";
@@ -5560,7 +6666,7 @@ async function startEvalRun(options = {}) {
     return;
   }
   if (staticEmbeddingEnabled && !staticEmbeddingModel.trim()) {
-    setEvalRunMessage("정적 임베딩 유사도를 사용하려면 embedding model을 입력하세요.", "error");
+    setEvalRunMessage("정적 임베딩 유사도를 사용하려면 임베딩 모델명을 입력하세요.", "error");
     return;
   }
 
@@ -5636,12 +6742,30 @@ async function pollEvalJob(jobId) {
   if (!job) return;
   renderEvalJob(job);
   if (["finished", "failed", "interrupted", "canceled"].includes(job.status)) {
+    const snapshotPending = job.status === "finished"
+      && job.export_final_ui !== false
+      && !job.dry_run
+      && !job.skip_scoring
+      && (!job.snapshot_status || job.snapshot_status === "running");
+    if (snapshotPending) {
+      setEvalRunMessage(`평가 완료: ${job.run_id}. UI 스냅샷 생성 중...`, "");
+      return;
+    }
     stopEvalJobPoll();
-    setEvalRunMessage(`작업 ${job.status}: ${job.run_id}`, job.status === "finished" ? "ok" : "error");
-    if (job.status === "finished" && job.run_id && job.export_final_ui !== false) {
+    const snapshotLabel = evalSnapshotStatusLabel(job.snapshot_status);
+    const finishTone = job.status === "finished" && job.snapshot_status !== "failed" ? "ok" : "error";
+    setEvalRunMessage(
+      `작업 ${evalJobStatusLabel(job.status)}: ${job.run_id}${snapshotLabel ? ` · ${snapshotLabel}` : ""}`,
+      finishTone,
+    );
+    if (job.status === "finished" && job.run_id && job.export_final_ui !== false && !job.dry_run && !job.skip_scoring) {
+      if (job.snapshot_status === "failed") {
+        setEvalRunMessage(`평가 완료: ${job.run_id}. UI 스냅샷 생성은 실패했습니다. 작업 로그를 확인하세요.`, "error");
+        return;
+      }
       setEvalRunMessage(`평가 완료: ${job.run_id}. 결과 대시보드를 여는 중...`, "ok");
       try {
-        await loadSelectedRun(job.run_id);
+        await loadSelectedRun(job.run_id, { forceReload: true });
         activateTab("overview");
       } catch (error) {
         setEvalRunMessage(`평가 완료: ${job.run_id}. 결과 갱신은 새로고침 후 확인하세요. ${error.message}`, "error");
@@ -5668,9 +6792,11 @@ function renderEvalJob(job) {
   if (!job) return;
   updateHeaderJudgeStatus(job);
   const progress = job.progress || {};
+  const snapshotLabel = evalSnapshotStatusLabel(job.snapshot_status);
+  const snapshotTail = String(job.snapshot_output_tail || "").trim();
   setHtml("evalJobStatus", `
     <div class="job-status ${escapeHtml(job.status)}">
-      <strong>${escapeHtml(job.status)}</strong>
+      <strong>${escapeHtml(evalJobStatusLabel(job.status))}</strong>
       <span>${escapeHtml(job.run_id || "")}</span>
       <span>${escapeHtml(job.runner_type || "")}</span>
       <span>${escapeHtml(job.dataset || "")}</span>
@@ -5679,11 +6805,14 @@ function renderEvalJob(job) {
       <span>채점: ${escapeHtml(scoringModeLabel(job.scoring_mode || "static"))}</span>
       ${job.composed_summary?.total ? `<span>구성 문항: ${Number(job.composed_summary.total).toLocaleString()}</span>` : ""}
       ${job.composed_summary_path ? `<span>요약: ${escapeHtml(job.composed_summary_path)}</span>` : ""}
-      ${job.static_embedding_model ? `<span>embedding: ${escapeHtml(job.static_embedding_model)}${job.static_embedding_base_url ? ` · ${escapeHtml(job.static_embedding_base_url)}` : ""}</span>` : ""}
+      ${job.static_embedding_model ? `<span>임베딩: ${escapeHtml(job.static_embedding_model)}${job.static_embedding_base_url ? ` · ${escapeHtml(job.static_embedding_base_url)}` : ""}</span>` : ""}
       ${job.judge_config ? `<span>Judge: ${escapeHtml(job.judge_config)} ${escapeHtml(job.judge_mode || "")}</span>` : ""}
       ${job.template_output ? `<span>템플릿: ${escapeHtml(job.template_output)}</span>` : ""}
       ${job.output_dir ? `<span>출력: ${escapeHtml(job.output_dir)}</span>` : ""}
+      ${snapshotLabel ? `<span class="${escapeHtml(evalSnapshotStatusTone(job.snapshot_status))}">${escapeHtml(snapshotLabel)}</span>` : ""}
+      ${job.snapshot_returncode !== undefined && job.snapshot_returncode !== null ? `<span>스냅샷 코드: ${escapeHtml(job.snapshot_returncode)}</span>` : ""}
       <code>${escapeHtml(job.command || "")}</code>
+      ${snapshotTail && job.snapshot_status === "failed" ? `<pre>${escapeHtml(shortLabel(snapshotTail, 1200))}</pre>` : ""}
     </div>
   `);
   setHtml("evalJobProgress", renderEvalProgress(progress));
@@ -5711,7 +6840,7 @@ function renderEvalJobControls(job) {
       <button type="button" data-job-control="cancel" class="danger" ${isCanceling ? "disabled" : ""}>
         ${isCanceling ? "취소 중" : "취소"}
       </button>
-      <span>${escapeHtml(isPaused ? "현재 케이스 사이에서 대기 중입니다." : "제어는 현재 케이스 완료 후 반영됩니다.")}</span>
+      <span>${escapeHtml(isPaused ? "현재 케이스가 끝난 뒤 대기합니다." : "제어는 현재 케이스 완료 후 반영됩니다.")}</span>
     </div>
   `;
   target.querySelectorAll("[data-job-control]").forEach((button) => {
@@ -5737,7 +6866,7 @@ async function controlEvalJob(jobId, action) {
     return;
   }
   renderEvalJob(payload.job);
-  setEvalRunMessage(`${label} 요청 반영됨: ${payload.job?.run_id || jobId}`, action === "cancel" ? "error" : "ok");
+  setEvalRunMessage(`${label} 요청이 반영되었습니다: ${payload.job?.run_id || jobId}`, action === "cancel" ? "error" : "ok");
   if (!evalJobPoll && !["finished", "failed", "interrupted", "canceled"].includes(payload.job?.status)) {
     restartEvalJobPoll(jobId);
   }
@@ -5757,7 +6886,7 @@ function renderEvalProgress(progress) {
     <div class="eval-progress">
       <div class="progress-head">
         <strong>${percent.toFixed(1)}%</strong>
-        <span>${escapeHtml(progress.status || (progress.dry_run ? "Dry run" : "실행 중/완료"))} · 현재 ${escapeHtml(current)}</span>
+        <span>${escapeHtml(progress.status || (progress.dry_run ? "모의 실행" : "실행 중/완료"))} · 현재 ${escapeHtml(current)}</span>
       </div>
       <div class="progress-track" aria-label="eval progress">
         <div class="progress-fill" style="width:${percent}%"></div>
@@ -5853,10 +6982,12 @@ function kpi(label, value, delta, className = "") {
 }
 
 function signed(value) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "-";
+  return `${numeric >= 0 ? "+" : ""}${scoreValueLabel(numeric)}`;
 }
 
-function renderTrend(data) {
+function renderTrend(data, caseData = []) {
   const target = document.getElementById("trendChart");
   if (!data.length) {
     target?.classList.remove("model-family-chart");
@@ -5866,17 +6997,18 @@ function renderTrend(data) {
   target?.classList.add("model-family-chart");
 
   const rows = [...data].sort(compareModelFamilyRows);
+  const scoreDetailsByModel = modelScoreDetailsByVersion(caseData);
   const legend = renderModelFamilyLegend(rows);
   const rowHtml = rows.map((d) => {
     const info = modelFamilyInfo(d.version, d.model);
     const score = Number(d.overall_score || 0);
     const passRate = comparablePassRate(d) * 100;
-    const scorePct = clamp(score, 0, 100);
+    const scorePct = clamp(score * 100, 0, 100);
     const passPct = clamp(passRate, 0, 100);
-    const meta = [info.familyLabel, info.paramLabel, info.quantLabel].filter(Boolean).join(" · ");
-    const title = `${info.label} · 종합 ${score.toFixed(1)}점 · 합격률 ${passRate.toFixed(1)}%`;
+    const details = modelScoreDetails(d, scoreDetailsByModel.get(d.version) || []);
+    const title = modelScoreTooltipTitle(details);
     return `
-      <div class="trend-row" style="${escapeHtml(modelFamilyStyle(info))}" title="${escapeHtml(title)}">
+      <div class="trend-row" style="${escapeHtml(modelFamilyStyle(info))}" tabindex="0" title="${escapeHtml(title)}">
         <div class="trend-model">
           <span class="model-family-dot" aria-hidden="true"></span>
           <div class="trend-model-copy">
@@ -5889,7 +7021,7 @@ function renderTrend(data) {
           </div>
         </div>
         <div class="trend-metrics" aria-label="${escapeHtml(title)}">
-          <div class="trend-scale" aria-hidden="true"><span>0</span><span>50</span><span>100</span></div>
+          <div class="trend-scale" aria-hidden="true"><span>0</span><span>0.5</span><span>1</span></div>
           <div class="trend-metric-line">
             <span>점수</span>
             <em><i style="width:${scorePct}%"></i></em>
@@ -5900,9 +7032,10 @@ function renderTrend(data) {
           </div>
         </div>
         <div class="trend-values">
-          <strong>${score.toFixed(1)}</strong>
+          <strong>${scoreValueLabel(score)}</strong>
           <span>${passRate.toFixed(1)}%</span>
         </div>
+        ${renderModelScoreHover(details)}
       </div>
     `;
   }).join("");
@@ -5919,6 +7052,146 @@ function renderTrend(data) {
       <div class="trend-rows">${rowHtml}</div>
     </div>
   `);
+}
+
+function modelScoreDetailsByVersion(caseData = []) {
+  const map = new Map();
+  caseData.forEach((row) => {
+    const version = row.version || row.config_id || "";
+    if (!version) return;
+    if (!map.has(version)) map.set(version, []);
+    map.get(version).push(row);
+  });
+  return map;
+}
+
+function modelScoreDetails(run, caseRows = []) {
+  const info = modelFamilyInfo(run.version, run.model);
+  const scoreRows = caseRows.filter(Boolean);
+  const finalValues = scoreRows.map(caseOverallScore).filter((value) => Number.isFinite(value));
+  const staticValues = scoreRows
+    .map((row) => Number(firstPresentValue(row.static_overall_score, "")))
+    .filter((value) => Number.isFinite(value));
+  const judgeBuckets = new Map();
+  scoreRows.forEach((row) => {
+    const scores = resultJudgeScores(row);
+    if (scores.length) {
+      scores.forEach((score, index) => addJudgeBucket(judgeBuckets, score, index));
+    } else if (firstPresentValue(row.llm_judge_overall_score, "") !== undefined) {
+      addJudgeBucket(judgeBuckets, {
+        config_id: row.llm_judge_config_id || row.judge_config_id || "",
+        provider: row.llm_judge_provider || row.judge_provider || "",
+        model: row.llm_judge_model || row.judge_model || "",
+        overall_score: row.llm_judge_overall_score,
+        pass: row.llm_judge_pass || row.llm_judge_pass_fail,
+      }, 0);
+    }
+
+    const arbiterRaw = firstPresentValue(row.llm_judge_arbiter_score);
+    const arbiterValue = Number(arbiterRaw);
+    const arbiterConfig = firstPresentValue(row.llm_judge_arbiter_config_id);
+    const hasArbiterSignal = Boolean(arbiterConfig || row.llm_judge_arbiter_override || arbiterValue > 0);
+    if (arbiterRaw !== undefined && Number.isFinite(arbiterValue) && hasArbiterSignal) {
+      addJudgeBucket(judgeBuckets, {
+        role: "arbiter",
+        config_id: arbiterConfig || "arbiter",
+        model: arbiterConfig || "arbiter",
+        overall_score: arbiterValue,
+        pass: row.llm_judge_pass_fail,
+      }, judgeBuckets.size);
+    }
+  });
+
+  const judgeRows = [...judgeBuckets.values()]
+    .map((bucket) => ({
+      ...bucket,
+      average: averageNumber(bucket.values),
+      passRate: bucket.passValues.length
+        ? bucket.passValues.filter(Boolean).length / bucket.passValues.length
+        : null,
+    }))
+    .filter((bucket) => Number.isFinite(bucket.average))
+    .sort((left, right) =>
+      Number(left.role === "arbiter") - Number(right.role === "arbiter") ||
+      left.label.localeCompare(right.label, "ko")
+    );
+
+  return {
+    label: info.label,
+    compactLabel: info.compactLabel || info.label,
+    familyMeta: [info.familyLabel, info.paramLabel, info.quantLabel].filter(Boolean).join(" · "),
+    caseCount: scoreRows.length || Number(run.total_questions || 0) || 0,
+    scoredCount: Number(run.scored_questions || scoreRows.length || 0),
+    autoScore: comparableScore(run),
+    overallScore: Number(run.overall_score || 0),
+    finalScore: finalValues.length ? averageNumber(finalValues) : comparableScore(run),
+    staticScore: staticValues.length ? averageNumber(staticValues) : null,
+    passRate: comparablePassRate(run) * 100,
+    judgeRows,
+  };
+}
+
+function addJudgeBucket(buckets, score, index) {
+  const value = Number(score?.overall_score);
+  if (!Number.isFinite(value)) return;
+  const label = resultJudgeReadableName(score, index) || `Judge ${index + 1}`;
+  const role = String(score?.role || "").toLowerCase() === "arbiter" ? "arbiter" : "judge";
+  const key = `${role}:${score?.config_id || score?.model || score?.provider || label}`;
+  if (!buckets.has(key)) {
+    buckets.set(key, {
+      key,
+      label,
+      role,
+      values: [],
+      passValues: [],
+    });
+  }
+  const bucket = buckets.get(key);
+  bucket.values.push(value);
+  if (score?.pass !== undefined && score?.pass !== "") bucket.passValues.push(isTrue(score.pass) || score.pass === true);
+}
+
+function averageNumber(values) {
+  const clean = values.map(Number).filter((value) => Number.isFinite(value));
+  return clean.length ? clean.reduce((sum, value) => sum + value, 0) / clean.length : NaN;
+}
+
+function modelScoreTooltipTitle(details) {
+  const judgeText = details.judgeRows.length
+    ? details.judgeRows.map((judge) => `${judge.label}: ${scoreValueLabel(judge.average)}`).join(" · ")
+    : "Judge별 점수 없음";
+  return `${details.label} · 자동 ${scoreValueLabel(details.autoScore)} · 전체 ${scoreValueLabel(details.overallScore)} · 반영 ${scoreValueLabel(details.finalScore)} · ${judgeText}`;
+}
+
+function renderModelScoreHover(details) {
+  const judgeRows = details.judgeRows.length
+    ? details.judgeRows.map((judge) => `
+        <div class="model-score-tooltip-row ${judge.role === "arbiter" ? "arbiter" : ""}">
+          <span>${escapeHtml(judge.label)}</span>
+          <strong>${escapeHtml(scoreValueLabel(judge.average))}</strong>
+          ${judge.passRate !== null ? `<em>${(judge.passRate * 100).toFixed(1)}% 통과</em>` : ""}
+        </div>
+      `).join("")
+    : `<div class="model-score-tooltip-row muted"><span>Judge별 점수</span><strong>없음</strong></div>`;
+  return `
+    <div class="model-score-hover-template" data-score-hover-template aria-hidden="true" aria-label="${escapeHtml(modelScoreTooltipTitle(details))}">
+      <div class="model-score-tooltip-head">
+        <strong>${escapeHtml(details.label)}</strong>
+        ${details.familyMeta ? `<span>${escapeHtml(details.familyMeta)}</span>` : ""}
+      </div>
+      <div class="model-score-tooltip-grid">
+        <span><b>자동</b>${escapeHtml(scoreValueLabel(details.autoScore))}</span>
+        <span><b>전체</b>${escapeHtml(scoreValueLabel(details.overallScore))}</span>
+        <span><b>반영</b>${escapeHtml(scoreValueLabel(details.finalScore))}</span>
+        <span><b>통과율</b>${details.passRate.toFixed(1)}%</span>
+        ${details.staticScore !== null ? `<span><b>규칙</b>${escapeHtml(scoreValueLabel(details.staticScore))}</span>` : ""}
+        <span><b>케이스</b>${Number(details.caseCount || 0).toLocaleString()}건</span>
+      </div>
+      <div class="model-score-tooltip-list">
+        ${judgeRows}
+      </div>
+    </div>
+  `;
 }
 
 function compareModelFamilyRows(left, right) {
@@ -5948,19 +7221,19 @@ function renderModelFamilyLegend(rows) {
 
 function renderMetricBars(run) {
   setHtml("metricBars", metricCols.map((key) => {
-    const unavailable = key === "utl" && !run.utl_applicable;
-    const value = Number(run[key] || 0);
+    const unavailable = !metricAvailable(run, key);
+    const value = metricNumber(run, key);
     return `
       <div class="bar-row">
         <span>${metricLabels[key]}</span>
-        <div class="bar-track"><div class="bar-fill" style="width:${unavailable ? 0 : clamp(value * 5, 0, 100)}%"></div></div>
-        <strong>${unavailable ? "N/A" : value.toFixed(1)}</strong>
+        <div class="bar-track"><div class="bar-fill" style="width:${unavailable ? 0 : clamp(value * 100, 0, 100)}%"></div></div>
+        <strong>${unavailable ? "N/A" : scoreValueLabel(value)}</strong>
       </div>
     `;
   }).join(""));
 }
 
-function renderCompare(runData) {
+function renderCompare(runData, caseData = []) {
   renderCompareControls(runData);
 
   if (!runData.length) {
@@ -5969,19 +7242,22 @@ function renderCompare(runData) {
     return;
   }
 
+  const scoreDetailsByModel = modelScoreDetailsByVersion(caseData);
   setHtml("compareChart", runData.map((run) => {
     const info = modelFamilyInfo(run.version, run.model);
+    const details = modelScoreDetails(run, scoreDetailsByModel.get(run.version) || []);
     return `
-      <div class="compare-row" style="${escapeHtml(modelFamilyStyle(info))}">
+      <div class="compare-row" style="${escapeHtml(modelFamilyStyle(info))}" tabindex="0" title="${escapeHtml(modelScoreTooltipTitle(details))}">
         <div class="compare-model-name">
           <span class="model-family-dot" aria-hidden="true"></span>
           <strong title="${escapeHtml(info.label)}">${escapeHtml(info.compactLabel || info.label)}</strong>
           <em>${escapeHtml([info.familyLabel, info.paramLabel, info.quantLabel].filter(Boolean).join(" · "))}</em>
         </div>
         <div class="compare-cells">
-          ${metricCols.map((key) => compareScoreCell(metricLabels[key], Number(run[key] || 0), 20, "", key === "utl" && !run.utl_applicable)).join("")}
-          ${compareScoreCell("자동", comparableScore(run), 100, "score-total")}
+          ${metricCols.map((key) => compareScoreCell(metricLabels[key], metricNumber(run, key), SCORE_SCALE_MAX, "", !metricAvailable(run, key))).join("")}
+          ${compareScoreCell("자동", comparableScore(run), SCORE_SCALE_MAX, "score-total")}
         </div>
+        ${renderModelScoreHover(details)}
       </div>
     `;
   }).join(""));
@@ -6087,7 +7363,7 @@ function renderHeadToHeadSummary(runData) {
   return `
     <div class="compare-head-to-head">
       <span><strong>우세</strong>${escapeHtml(winner)}</span>
-      <span><strong>점수차</strong>${escapeHtml(signed(scoreDelta))}점</span>
+      <span><strong>점수차</strong>${escapeHtml(signed(scoreDelta))}</span>
       <span><strong>통과율차</strong>${escapeHtml(signed(passDelta * 100))}%p</span>
       <span><strong>검토대기</strong>${Number(left.review_pending_count || 0).toLocaleString()} / ${Number(right.review_pending_count || 0).toLocaleString()}</span>
     </div>
@@ -6115,7 +7391,7 @@ function compareScoreCell(label, score, maxScore, className = "", unavailable = 
   const classes = ["score-cell", className].filter(Boolean).join(" ");
   if (unavailable) {
     return `
-      <div class="${escapeHtml(classes)} score-na" title="${escapeHtml(`${label}: RAG 비적용 모델에서는 최종 점수에서 제외됩니다.`)}">
+      <div class="${escapeHtml(classes)} score-na" title="${escapeHtml(`${label}: 이 지표는 현재 점수 산식에서 제외됩니다.`)}">
         <span>${escapeHtml(label)}</span>
         <strong>N/A</strong>
         <em class="score-bar" aria-hidden="true"><i style="width:0%"></i></em>
@@ -6124,9 +7400,9 @@ function compareScoreCell(label, score, maxScore, className = "", unavailable = 
   }
   const percent = clamp((score / Math.max(maxScore, 1)) * 100, 0, 100);
   return `
-    <div class="${escapeHtml(classes)}" title="${escapeHtml(`${label}: ${score.toFixed(1)} / ${maxScore}`)}">
+    <div class="${escapeHtml(classes)}" title="${escapeHtml(`${label}: ${scoreValueLabel(score)}`)}">
       <span>${escapeHtml(label)}</span>
-      <strong>${score.toFixed(1)} / ${maxScore}</strong>
+      <strong>${scoreValueLabel(score)}</strong>
       <em class="score-bar" aria-hidden="true"><i style="width:${percent}%"></i></em>
     </div>
   `;
@@ -6136,16 +7412,19 @@ function renderRegression(caseData) {
   const regressionRows = caseData.filter((d) => !isBenchmarkCase(d));
   if (!regressionRows.length) {
     const benchmarkRows = caseData.filter(isBenchmarkCase).length;
+    const selectedLabel = isCurrentUiDataRunId(selectedRunId || latestRun?.run_id)
+      ? "현재 결과"
+      : (selectedRunId || latestRun?.run_id || "현재 결과");
     const message = benchmarkRows
-      ? `현재 선택한 실행(${selectedRunId || latestRun?.run_id || "현재 결과"})은 벤치마크 결과만 포함합니다. 회귀 문항 결과를 보려면 회귀 실행 결과를 선택하세요.`
+      ? `현재 선택한 실행(${selectedLabel})은 벤치마크 결과만 포함합니다. 회귀 문항 결과를 보려면 회귀 실행 결과를 선택하세요.`
       : "현재 선택한 실행에 회귀 문항 결과가 없습니다.";
     setHtml("regressionKpis", emptyState(message));
-    setHtml("regressionTable", emptyState("회귀 탭은 regression/golden 결과가 있을 때 하락 케이스, 기준 미달 문항, 배포 판정을 표시합니다."));
+    setHtml("regressionTable", emptyState("회귀 탭은 회귀/골든셋 결과가 있을 때 하락 케이스, 기준 미달 문항, 배포 판정을 표시합니다."));
     return;
   }
   const low = regressionRows
     .filter((d) =>
-      metricCols.some((key) => Number(d[key] || 0) < state.threshold / 5) ||
+      coreMetricCols.some((key) => metricAvailable(d, key) && metricNumber(d, key) < state.threshold) ||
       isFailureCell(d) ||
       Number(d.regression_delta || 0) < 0 ||
       ["block", "review"].includes(d.release_gate)
@@ -6156,8 +7435,8 @@ function renderRegression(caseData) {
   setHtml("regressionKpis", [
     kpi("주의 케이스", `${low.length.toLocaleString()}개`, "점수/회귀/판정"),
     kpi("하락 케이스", `${regressionRows.filter((d) => Number(d.regression_delta || 0) < 0).length.toLocaleString()}개`, "이전 대비 하락"),
-    kpi("실패 케이스", `${regressionRows.filter(isFailureCell).length.toLocaleString()}개`, `${state.threshold}점 기준`),
-    kpi("최대 하락폭", `${minDelta.toFixed(1)}점`, "회귀 변화량"),
+    kpi("실패 케이스", `${regressionRows.filter(isFailureCell).length.toLocaleString()}개`, `${scoreValueLabel(state.threshold, 2)} 기준`),
+    kpi("최대 하락폭", scoreValueLabel(minDelta), "회귀 변화량"),
   ].join(""));
 
   setHtml("regressionTable", table(
@@ -6171,7 +7450,7 @@ function renderRegression(caseData) {
       labelSeverity(d.difficulty),
       modelCell(d.version, d.model),
       scoreBadge(caseOverallScore(d)),
-      scoreBadge(d.hal, 20),
+      scoreBadge(metricNumber(d, "hal_pass")),
       signed(Number(d.regression_delta || 0)),
       gateBadge(d.release_gate),
       errorBadge(d.error_type),
@@ -6199,9 +7478,9 @@ function renderBenchmark(caseData) {
   const weakThreeD = benchmarkThreeDCells(rows).filter((entry) => !entry.reliability.reliable).length;
   setHtml("benchmarkKpis", [
     kpi("벤치마크 문항", uniqueCases.size.toLocaleString(), `${models.size}개 모델`),
-    kpi("평균 점수", avgScore.toFixed(1), "1D 슬라이스 기준"),
+    kpi("평균 점수", scoreValueLabel(avgScore), "분류 단위 기준"),
     kpi("통과율", `${(passRate * 100).toFixed(1)}%`, "벤치마크 기준"),
-    kpi("신뢰도 부족", `${(weakOneD + weakTwoD + weakThreeD).toLocaleString()}개`, `1D ${weakOneD} / 2D ${weakTwoD} / 3D ${weakThreeD}`),
+    kpi("신뢰도 부족", `${(weakOneD + weakTwoD + weakThreeD).toLocaleString()}개`, `단일분류 ${weakOneD} / 교차분석 ${weakTwoD} / 3축분석 ${weakThreeD}`),
   ].join(""));
 
   const byModel = aggregateScoreRows(rows, "version").sort((a, b) => b.score - a.score);
@@ -6223,13 +7502,13 @@ function renderBenchmark(caseData) {
 
   const byDataset = oneDSlices.sort((a, b) => a.reliability.reliable - b.reliability.reliable || a.dimension.localeCompare(b.dimension) || a.score - b.score);
   setHtml("benchmarkDatasetTable", table(
-    ["1D 슬라이스", "값", "케이스", "점수", "통과율", "신뢰도"],
+    ["분류 단위", "값", "케이스", "점수", "통과율", "신뢰도"],
     byDataset.map((entry) => {
       return [
         entry.dimensionLabel,
         entry.key,
         entry.caseCount,
-        entry.score.toFixed(1),
+        scoreValueLabel(entry.score),
         `${(entry.passRate * 100).toFixed(1)}%`,
         reliabilityBadge(entry.reliability),
       ];
@@ -6346,15 +7625,15 @@ function renderBenchmarkMatrix(rows) {
       const passRate = cellRows.filter((row) => !isFailureCell(row)).length / cellRows.length;
       const score = cellRows.reduce((sum, row) => sum + caseOverallScore(row), 0) / cellRows.length;
       const reliability = reliabilityForRows(cellRows, "twoD");
-      const title = `${labelTopic(topic)} / ${labelQuestionType(type)}: 통과율 ${(passRate * 100).toFixed(1)}%, 평균 ${score.toFixed(1)}점, n=${reliability.caseCount}`;
+      const title = `${labelTopic(topic)} / ${labelQuestionType(type)}: 통과율 ${(passRate * 100).toFixed(1)}%, 평균 ${scoreValueLabel(score)}, n=${reliability.caseCount}`;
       return {
         [rawHtml]: true,
-        value: `<span class="matrix-cell heatmap ${matrixToneClass(score)} ${reliability.reliable ? "reliable" : "low-confidence"}" title="${escapeHtml(title)}"><strong>${(passRate * 100).toFixed(0)}%</strong><em>${score.toFixed(1)}점 · n=${reliability.caseCount}</em>${reliability.reliable ? "" : "<small>신뢰도 부족</small>"}</span>`,
+        value: `<span class="matrix-cell heatmap ${matrixToneClass(score)} ${reliability.reliable ? "reliable" : "low-confidence"}" title="${escapeHtml(title)}"><strong>${(passRate * 100).toFixed(0)}%</strong><em>${scoreValueLabel(score)} · n=${reliability.caseCount}</em>${reliability.reliable ? "" : "<small>신뢰도 부족</small>"}</span>`,
       };
     }),
   ]);
   return `
-    <p class="matrix-summary">현재는 1D 슬라이스를 대표 점수로 사용합니다. 2D 셀은 n&lt;${reliabilityMinimums.twoD}이면 신뢰도 부족으로 표시합니다.</p>
+    <p class="matrix-summary">현재는 단일 분류 단위를 대표 점수로 사용합니다. 교차분석 셀은 n&lt;${reliabilityMinimums.twoD}이면 신뢰도 부족으로 표시합니다.</p>
     ${table(["토픽", ...types], body)}
     ${renderThreeDCellReliability(rows)}
   `;
@@ -6362,8 +7641,8 @@ function renderBenchmarkMatrix(rows) {
 
 function matrixToneClass(score) {
   const numeric = Number(score || 0);
-  if (numeric >= 80) return "score-high";
-  if (numeric >= 60) return "score-mid";
+  if (numeric >= SCORE_PASS_THRESHOLD) return "score-high";
+  if (numeric >= SCORE_REVIEW_THRESHOLD) return "score-mid";
   return "score-low";
 }
 
@@ -6380,13 +7659,13 @@ function renderThreeDCellReliability(rows) {
     cell.type,
     cell.topic,
     cell.reliability.caseCount,
-    cell.score.toFixed(1),
+    scoreValueLabel(cell.score),
     `${(cell.passRate * 100).toFixed(1)}%`,
     reliabilityBadge(cell.reliability),
   ]);
   return `
     <div class="matrix-reliability-summary">
-      <strong>3D 셀 신뢰도</strong>
+      <strong>3축분석 셀 신뢰도</strong>
       <span>대분류 × 질문유형 × 금융토픽 ${cells.length}개 셀 중 ${weakCount}개는 n&lt;${reliabilityMinimums.threeD}로 신뢰도 부족입니다.</span>
     </div>
     ${table(["대분류", "질문유형", "금융토픽", "케이스", "점수", "통과율", "신뢰도"], previewRows)}
@@ -6410,7 +7689,7 @@ function renderExploratory(caseData) {
     );
   if (!rows.length) {
     setHtml("exploratoryKpis", emptyState("탐색/분석용 결과가 없습니다."));
-    setHtml("exploratoryTable", emptyState("이 탭은 배포 차단 대상이 아닌 분석용 행, Shadow 행, 수동 검토 대상 행을 표시합니다."));
+    setHtml("exploratoryTable", emptyState("이 탭은 배포 차단 대상이 아닌 분석용 행, 섀도우 행, 수동 검토 대상 행을 표시합니다."));
     return;
   }
   const uniqueCases = new Set(rows.map((row) => row.question_id));
@@ -6421,9 +7700,9 @@ function renderExploratory(caseData) {
   setHtml("exploratoryKpis", [
     kpi("탐색 케이스", uniqueCases.size.toLocaleString(), "배포 차단 제외"),
     kpi("벤치마크 행", benchmarkRows.length.toLocaleString(), "분석 전용 포함"),
-    kpi("Shadow 행", shadowRows.length.toLocaleString(), "미검증/초안"),
+    kpi("섀도우 행", shadowRows.length.toLocaleString(), "미검증/초안"),
     kpi("검토 필요", reviewRows.length.toLocaleString(), "수동 검토 대기열"),
-    kpi("평균 점수", avgScore.toFixed(1), "분석 전용"),
+    kpi("평균 점수", scoreValueLabel(avgScore), "분석 전용"),
   ].join(""));
   const sorted = [...rows]
     .sort((a, b) => Number(isTrue(b.human_review_required)) - Number(isTrue(a.human_review_required)) || caseOverallScore(a) - caseOverallScore(b))
@@ -6461,7 +7740,7 @@ function renderHumanReviewQueue(caseData) {
     kpi("검토 케이스", uniqueCases.size.toLocaleString(), "고유 케이스"),
     kpi("높은 우선순위", highPriority.length.toLocaleString(), "차단/실패/치명"),
     kpi("미검증", rows.filter((row) => !isTrue(row.gold_verified)).length.toLocaleString(), "모범답안 필요"),
-    kpi("Judge 오류", rows.filter((row) => row.llm_judge_status === "error").length.toLocaleString(), "감사"),
+    kpi("Judge 오류", rows.filter((row) => row.llm_judge_status === "error").length.toLocaleString(), "점검 필요"),
     kpi("미해결 Judge 충돌", rows.filter((row) => row.llm_judge_unresolved_conflict).length.toLocaleString(), "수동 검토"),
   ].join(""));
   setHtml("reviewQueueTable", table(
@@ -6475,7 +7754,7 @@ function renderHumanReviewQueue(caseData) {
       errorBadge(row.error_type),
       suggestedReviewAction(row),
       row.llm_judge_unresolved_conflict
-        ? `Judge 충돌: ${humanJudgeConflictReason(row.llm_judge_conflict_reason) || "상위 Judge 재평가 권장"}`
+        ? `Judge 충돌: ${humanJudgeConflictReason(row.llm_judge_conflict_reason) || "중재 Judge 재평가 권장"}`
         : row.llm_judge_reason || row.judge_reason,
     ])
   ));
@@ -6520,6 +7799,19 @@ function renderFailures(caseData) {
   const sorted = [...failures].sort((a, b) => caseOverallScore(a) - caseOverallScore(b));
   const limit = Number(state.failureLimit || 40);
   const visible = sorted.slice(0, limit);
+  const worst = sorted[0];
+  const affectedModelCount = new Set(failures.map((row) => row.version || row.model).filter(Boolean)).size;
+  const averageFailScore = failures.length
+    ? failures.reduce((sum, row) => sum + caseOverallScore(row), 0) / failures.length
+    : 0;
+  const failureSummary = failures.length ? `
+    <div class="failure-overview-summary">
+      <div><span>최다 유형</span><strong>${escapeHtml(labelErrorType(counts[0]?.key))}</strong><em>${Number(counts[0]?.count || 0).toLocaleString()}건</em></div>
+      <div><span>평균 실패 점수</span><strong>${scoreValueLabel(averageFailScore)}</strong><em>0-1 기준</em></div>
+      <div><span>영향 모델</span><strong>${affectedModelCount.toLocaleString()}개</strong><em>${failures.length.toLocaleString()}개 결과</em></div>
+      <div><span>최저 점수 문항</span><strong title="${escapeHtml(worst?.question_id || "-")}">${escapeHtml(worst?.question_id || "-")}</strong><em>${scoreValueLabel(caseOverallScore(worst))}</em></div>
+    </div>
+  ` : "";
 
   setHtml("failureChart", counts.map((d) => `
     <div class="failure-type-row" title="오른쪽 대표 오류 사례에서 상세 내용을 확인하세요.">
@@ -6527,10 +7819,11 @@ function renderFailures(caseData) {
       <div class="bar-track"><div class="bar-fill" style="width:${clamp((d.count / max) * 100, 0, 100)}%"></div></div>
       <strong>${d.count}</strong>
     </div>
-  `).join("") || emptyState("현재 필터 기준 과락 항목이 없습니다."));
+  `).join("") + failureSummary || emptyState("현재 필터 기준 과락 항목이 없습니다."));
 
   setHtml("failureCases", visible.length ? `
     <div class="case-list-meta">과락 ${sorted.length.toLocaleString()}개 중 ${visible.length.toLocaleString()}개 표시</div>
+    <div class="failure-case-grid">
     ${visible.map((d) => `
     <div class="case">
       <strong>${escapeHtml(d.question_id)} · ${escapeHtml(labelErrorType(failureErrorType(d)))} · ${escapeHtml(labelSource(d.source_type))}</strong>
@@ -6543,11 +7836,12 @@ function renderFailures(caseData) {
       <p>${escapeHtml(d.question)}</p>
       <p><b>모델 답변:</b> ${escapeHtml(d.answer_excerpt || "-")}</p>
       <p><b>기대 모범답안:</b> ${escapeHtml(shortLabel(d.output || d.gold_excerpt || d.ground_truth_doc || "-", 520))}</p>
-      <p><b>규칙 기반:</b> ${escapeHtml(d.static_overall_score || d.overall_score || "-")} · <b>LLM:</b> ${escapeHtml(d.llm_judge_overall_score || "-")}</p>
-      ${(d.llm_judge_conflict_detected || d.llm_judge_conflict) ? `<p><b>Judge 충돌:</b> ${escapeHtml(humanJudgeConflictReason(d.llm_judge_conflict_reason) || "상위 Judge 재평가 권장")}</p>` : ""}
-      <p><b>Judge:</b> ${escapeHtml(d.llm_judge_reason || d.judge_reason)}</p>
+      <p><b>규칙 기반:</b> ${escapeHtml(scoreValueLabel(firstPresentValue(d.static_overall_score, d.overall_score)))} · <b>LLM:</b> ${escapeHtml(scoreValueLabel(d.llm_judge_overall_score))}</p>
+      ${(d.llm_judge_conflict_detected || d.llm_judge_conflict) ? `<p><b>Judge 충돌:</b> ${escapeHtml(humanJudgeConflictReason(d.llm_judge_conflict_reason) || "중재 Judge 재평가 권장")}</p>` : ""}
+      <p><b>Judge:</b> ${escapeHtml(humanJudgeReasonText(d.llm_judge_reason || d.judge_reason) || "-")}</p>
     </div>
   `).join("")}
+    </div>
     ${visible.length < sorted.length ? `<button id="showMoreFailures" type="button" class="link-button">더 보기 (${Math.min(40, sorted.length - visible.length).toLocaleString()}개)</button>` : ""}
   ` : emptyState("과락 항목이 없습니다."));
   const more = document.getElementById("showMoreFailures");
@@ -6584,25 +7878,33 @@ function renderExplorer(caseData) {
 
   const rows = caseData.filter((d) => d.question_id === state.selectedQuestion);
   const first = rows[0];
+  const metaParts = first ? [
+    displayMetaValue(first.scenario_tag, "시나리오 없음"),
+    labelSeverity(displayMetaValue(first.difficulty, "난이도 미분류")),
+    labelSource(first.source_type),
+    labelQuestionType(displayMetaValue(first.question_type, "질문유형 미분류")),
+    displayMetaValue(first.regression_suite, "회귀셋 아님"),
+  ].filter((value) => value && value !== "-") : [];
+  const evidenceLabel = first
+    ? displayMetaValue(first.ground_truth_doc || first.source_title, "근거 문서 없음")
+    : "";
   setHtml("questionDetail", first ? `
     <div class="question-box">
       <strong>${escapeHtml(first.question)}</strong>
       <span>
-        ${escapeHtml(first.scenario_tag)} · ${escapeHtml(labelSeverity(first.difficulty))} ·
-        ${escapeHtml(labelSource(first.source_type))} · ${escapeHtml(first.question_type)} · ${escapeHtml(first.regression_suite)} ·
-        근거 문서: ${escapeHtml(first.ground_truth_doc || first.source_title || "")}
+        ${escapeHtml(metaParts.join(" · "))} · 근거 문서: ${escapeHtml(evidenceLabel)}
       </span>
     </div>
     ${table(
-    ["모델", "응답 요약", "규칙 기반", "LLM 평가", "최종", "결과", "채점 사유"],
+    ["모델", "응답 요약", "규칙 기반", "LLM 평가", "반영", "결과", "채점 사유"],
       rows.map((d) => [
         modelCell(d.version, d.model),
-        d.answer_excerpt,
+        clampedTableText(d.answer_excerpt, "answer-summary"),
         scoreBadgeOrBlank(firstPresentValue(d.static_overall_score, d.overall_score)),
         scoreBadgeOrBlank(d.llm_judge_overall_score),
         scoreBadgeOrBlank(d.overall_score),
         passFailBadge(d.pass_fail),
-        d.llm_judge_reason || d.judge_reason,
+        clampedTableText(humanJudgeReasonText(d.llm_judge_reason || d.judge_reason), "judge-reason"),
       ])
     )}
   ` : emptyState("선택 가능한 질문이 없습니다."));
@@ -6611,8 +7913,8 @@ function renderExplorer(caseData) {
   setHtml("tagSummary", grouped.map((d) => `
     <div class="bar-row wide">
       <span>${escapeHtml(labelSource(d.key))}</span>
-      <div class="bar-track"><div class="bar-fill" style="width:${clamp(d.score, 0, 100)}%"></div></div>
-      <strong>${d.score.toFixed(1)}</strong>
+      <div class="bar-track"><div class="bar-fill" style="width:${clamp(d.score * 100, 0, 100)}%"></div></div>
+      <strong>${scoreValueLabel(d.score)}</strong>
     </div>
   `).join(""));
 }
@@ -6654,11 +7956,14 @@ function renderGlobalSearch(caseData) {
         row.question,
         row.answer_excerpt,
         row.llm_judge_reason,
+        humanJudgeReasonText(row.llm_judge_reason),
         row.judge_reason,
+        humanJudgeReasonText(row.judge_reason),
         row.static_reason,
         row.error_type,
         labelErrorType(row.error_type),
         row.llm_judge_conflict_reason,
+        humanJudgeConflictReason(row.llm_judge_conflict_reason),
         row.version,
         modelLabelForVersion(row.version),
       ].some((value) => String(value ?? "").toLowerCase().includes(query));
@@ -6666,7 +7971,8 @@ function renderGlobalSearch(caseData) {
     .sort((a, b) => Number(isFailureCell(b)) - Number(isFailureCell(a)) || caseOverallScore(a) - caseOverallScore(b));
   const rows = matchedRows.slice(0, 120);
   if (!query && !state.globalSearchModel) {
-    resultTarget.innerHTML = emptyState("검색어를 입력하거나 모델을 선택하세요.");
+    resultTarget.innerHTML = searchEmptyState();
+    bindSearchEmptyActions(resultTarget);
     return;
   }
   resultTarget.innerHTML = rows.length ? `
@@ -6674,7 +7980,7 @@ function renderGlobalSearch(caseData) {
     <div class="case-list search-result-list">
       ${rows.map((row) => `
         <div class="case">
-          <strong>${escapeHtml(row.question_id)} · ${escapeHtml(modelLabelForVersion(row.version))} · ${caseOverallScore(row).toFixed(1)} / 100</strong>
+          <strong>${escapeHtml(row.question_id)} · ${escapeHtml(modelLabelForVersion(row.version))} · ${scoreValueLabel(caseOverallScore(row))}</strong>
           <div class="case-badge-row">
             ${formatCell(scoreBadge(caseOverallScore(row)))}
             ${formatCell(passFailBadge(row.pass_fail))}
@@ -6682,12 +7988,39 @@ function renderGlobalSearch(caseData) {
             ${formatCell(errorBadge(row.error_type))}
           </div>
           <p>${escapeHtml(row.question)}</p>
-          <p><b>응답:</b> ${escapeHtml(row.answer_excerpt || "-")}</p>
-          <p><b>Judge:</b> ${escapeHtml(row.llm_judge_reason || row.judge_reason || row.static_reason || "-")}</p>
+          <p><b>응답 요약:</b> ${escapeHtml(row.answer_excerpt || "-")}</p>
+          <p><b>Judge:</b> ${escapeHtml(humanJudgeReasonText(row.llm_judge_reason || row.judge_reason || row.static_reason) || "-")}</p>
         </div>
       `).join("")}
     </div>
   ` : emptyState("검색 결과가 없습니다.");
+}
+
+function searchEmptyState() {
+  return `
+    <div class="search-empty-panel">
+      <div>
+        <strong>검색 기준을 선택하세요.</strong>
+        <span>모델을 먼저 고르면 해당 모델의 낮은 점수 문항이 바로 표시됩니다.</span>
+      </div>
+      <div class="search-empty-actions">
+        <button type="button" data-search-example="근거 없는 주장">근거 없는 주장</button>
+        <button type="button" data-search-example="부분적 부정확">부분적 부정확</button>
+        <button type="button" data-search-example="Judge 충돌">Judge 충돌</button>
+      </div>
+    </div>
+  `;
+}
+
+function bindSearchEmptyActions(root) {
+  root.querySelectorAll("[data-search-example]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = document.getElementById("globalSearchInput");
+      state.globalSearch = String(button.dataset.searchExample || "").trim().toLowerCase();
+      if (input) input.value = button.dataset.searchExample || "";
+      renderGlobalSearch(filteredCases());
+    });
+  });
 }
 
 function groupCount(items, key) {
@@ -6773,9 +8106,9 @@ function aggregateScoreRows(items, key) {
 }
 
 function averageMetric(row) {
-  const keys = row.utl_applicable ? metricCols : metricCols.filter((key) => key !== "utl");
-  const raw = keys.reduce((acc, key) => acc + Number(row[key] || 0), 0);
-  return keys.length ? (raw / (keys.length * 20)) * 100 : 0;
+  const keys = coreMetricCols.filter((key) => metricAvailable(row, key));
+  const raw = keys.reduce((acc, key) => acc + metricNumber(row, key), 0);
+  return keys.length ? raw / keys.length : 0;
 }
 
 function caseOverallScore(row) {
@@ -6791,15 +8124,16 @@ function badgeCell(label, tone = "", title = "") {
   };
 }
 
-function scoreBadge(value, maxScore = 100) {
+function scoreBadge(value, maxScore = SCORE_SCALE_MAX) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return badgeCell("N/A", "muted");
   const percent = clamp((numeric / Math.max(Number(maxScore) || 1, 1)) * 100, 0, 100);
-  const tone = percent >= 80 ? "pass" : percent >= 60 ? "review" : "fail";
-  const suffix = maxScore === 100 ? "점" : `/${maxScore}`;
+  const tone = numeric >= SCORE_PASS_THRESHOLD ? "pass" : numeric >= SCORE_REVIEW_THRESHOLD ? "review" : "fail";
+  const suffix = maxScore === SCORE_SCALE_MAX ? "" : `/${scoreValueLabel(maxScore, 0)}`;
+  const label = scoreValueLabel(numeric);
   return {
     [rawHtml]: true,
-    value: `<span class="ui-badge score ${tone}" title="${escapeHtml(`${numeric.toFixed(1)} / ${maxScore}`)}"><b style="width:${percent}%"></b>${escapeHtml(numeric.toFixed(1))}${escapeHtml(suffix)}</span>`,
+    value: `<span class="ui-badge score ${tone}" title="${escapeHtml(`${label} / ${scoreValueLabel(maxScore, 0)}`)}"><b style="width:${percent}%"></b>${escapeHtml(label)}${escapeHtml(suffix)}</span>`,
   };
 }
 
@@ -6807,7 +8141,7 @@ function firstPresentValue(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
 }
 
-function scoreBadgeOrBlank(value, maxScore = 100) {
+function scoreBadgeOrBlank(value, maxScore = SCORE_SCALE_MAX) {
   return value === undefined || value === null || String(value).trim() === "" ? "" : scoreBadge(value, maxScore);
 }
 
@@ -6898,6 +8232,14 @@ function tableText(value, className = "") {
   };
 }
 
+function clampedTableText(value, className = "") {
+  const text = String(value ?? "");
+  return {
+    [rawHtml]: true,
+    value: `<div class="table-text-clamp ${escapeHtml(className)}" title="${escapeHtml(text)}">${escapeHtml(text || "-")}</div>`,
+  };
+}
+
 function displayPath(value) {
   return String(value ?? "").replace(/\\/g, "/");
 }
@@ -6908,7 +8250,7 @@ function bindThreshold() {
   threshold.oninput = () => {
     state.threshold = Number(threshold.value);
     const label = document.getElementById("thresholdValue");
-    if (label) label.textContent = threshold.value;
+    if (label) label.textContent = scoreValueLabel(state.threshold, 2);
     renderAll();
   };
 }
@@ -6977,9 +8319,9 @@ function labelQuestionType(value) {
 function labelTaskType(value) {
   const text = String(value ?? "").trim();
   const compact = text.toLowerCase().replace(/[\s_-]+/g, "");
-  if (!text) return "단일추론(사실추출)";
+  if (!text) return "단일 추론(사실 추출)";
   if (finalQuestionTypes.includes(text)) return text;
-  if (includesAny(compact, ["groundedqa", "qa", "fact", "single"])) return "단일추론(사실추출)";
+  if (includesAny(compact, ["groundedqa", "qa", "fact", "single"])) return "단일 추론(사실 추출)";
   if (includesAny(compact, ["comparison", "compare"])) return "비교대조";
   if (includesAny(compact, ["multihop", "complex"])) return "복합추론";
   if (includesAny(compact, ["numeric", "calculation"])) return "수치추론/계산";
@@ -7040,6 +8382,12 @@ function canonicalQaTopic(category, value) {
 function valueOrUnknown(value) {
   const text = String(value ?? "").trim();
   return text || "unknown";
+}
+
+function displayMetaValue(value, fallback = "미분류") {
+  const text = String(value ?? "").trim();
+  if (!text || text.toLowerCase() === "unknown") return fallback;
+  return text;
 }
 
 function unique(values) {

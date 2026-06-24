@@ -24,11 +24,11 @@
     <!-- 핵심 수치 3개 — 항상 노출 -->
     <div class="top-header-kpis">
       <div class="header-kpi">
-        <span class="header-kpi-label">벤치마크</span>
+        <span class="header-kpi-label">벤치마크 문항</span>
         <span id="headerBenchmarkCount" class="header-kpi-value">-</span>
       </div>
       <div class="header-kpi">
-        <span class="header-kpi-label">회귀</span>
+        <span class="header-kpi-label">회귀 문항</span>
         <span id="headerRegressionCount" class="header-kpi-value">-</span>
       </div>
       <div class="header-kpi">
@@ -78,8 +78,8 @@
 
       <hr class="sidebar-divider result-only-filter">
 
-      <label for="threshold" class="result-only-filter">기준 미달 판단선 <span id="thresholdValue">80</span>점</label>
-      <input id="threshold" class="result-only-filter" type="range" min="50" max="95" value="80">
+      <label for="threshold" class="result-only-filter">기준 미달 판단선 <span id="thresholdValue">0.60</span></label>
+      <input id="threshold" class="result-only-filter" type="range" min="0" max="1" step="0.01" value="0.6">
       <p class="sidebar-health-hint result-only-filter">결과·통과/실패 문항 개요에서 실패 여부를 판단하는 기준입니다.</p>
 
     </aside>
@@ -224,7 +224,7 @@
         <article class="card judge-registry-panel">
           <div class="card-head">
             <h2>채점 모델 관리</h2>
-            <span>LLM 평가 모델 / HAL LoRA 모델 등록</span>
+            <span>LLM 평가 모델 / OmniEval v2 Judge 등록</span>
           </div>
           <div class="prompt-variant-builder judge-copy-builder">
             <div class="prompt-variant-copy">
@@ -241,14 +241,14 @@
           <div class="prompt-variant-builder judge-api-preset-builder">
             <div class="prompt-variant-copy">
               <strong>상용 API Judge 프리셋</strong>
-              <span>상용 모델은 프리셋을 적용한 뒤 API key만 입력하면 바로 등록됩니다.</span>
+              <span>상용 모델은 프리셋을 적용한 뒤 API 키만 입력하면 바로 등록됩니다.</span>
             </div>
             <label>프리셋
               <select id="judgeApiPresetSelect"></select>
             </label>
             <button id="judgeApiPresetApply" type="button">프리셋 적용</button>
-            <button id="judgeApiPresetSave" type="button">현재 설정을 프리셋 추가</button>
-            <button id="judgeApiPresetDelete" type="button">커스텀 삭제</button>
+            <button id="judgeApiPresetSave" type="button">현재 설정을 프리셋으로 추가</button>
+            <button id="judgeApiPresetDelete" type="button">커스텀 프리셋 삭제</button>
           </div>
           <form id="judgeRegistryForm" class="model-form">
             <label>제공자
@@ -263,13 +263,13 @@
               </select>
             </label>
             <label>설정 ID
-              <input id="judgeRegistryConfigId" name="config_id" placeholder="qwen25_7b_hal_lora_judge" required>
+              <input id="judgeRegistryConfigId" name="config_id" placeholder="omnieval_v2_judge" required>
             </label>
             <label>표시 이름
-              <input id="judgeRegistryDisplayName" name="display_name" placeholder="Qwen2.5 7B HAL LoRA 채점 모델" required>
+              <input id="judgeRegistryDisplayName" name="display_name" placeholder="OmniEval v2 채점 모델" required>
             </label>
             <label>모델명
-              <input id="judgeRegistryModel" name="model" placeholder="Qwen2.5-7B-HAL-LoRA / HCX-007" required>
+              <input id="judgeRegistryModel" name="model" placeholder="HCX-007 / GPT / Gemini Judge" required>
             </label>
             <label>Base URL
               <input id="judgeRegistryBaseUrl" name="base_url" placeholder="https://host.example.com">
@@ -294,18 +294,18 @@
                 <label>최대 출력 토큰
                   <input id="judgeRegistryMaxTokens" name="max_completion_tokens" type="number" min="1" step="1" value="1024">
                 </label>
-                <label>Judge prompt preset
+                <label>Judge 프롬프트 프리셋
                   <select id="judgeRegistryPromptPreset" name="system_prompt_preset">
-                    <option value="judge_default_v1">표준 Judge prompt (잠금)</option>
-                    <option value="arbiter_conflict_v1">Arbiter 충돌 조정 prompt (잠금)</option>
+                    <option value="judge_default_v1">표준 Judge 프롬프트 (잠금)</option>
+                    <option value="arbiter_conflict_v1">중재 Judge 충돌 조정 프롬프트 (잠금)</option>
                     <option value="custom">직접 입력</option>
                   </select>
                 </label>
-                <label>prompt_version
-                  <input id="judgeRegistryPromptVersion" name="prompt_version" value="judge_v2_acc_com_utl_nac_hal">
+                <label>프롬프트 버전
+                  <input id="judgeRegistryPromptVersion" name="prompt_version" value="omnieval_metrics_config_v2">
                 </label>
-                <label>Judge system prompt
-                  <textarea id="judgeRegistrySystemPrompt" name="system_prompt" rows="7" placeholder="프리셋 prompt 내용을 표시합니다" readonly></textarea>
+                <label>Judge 시스템 프롬프트
+                  <textarea id="judgeRegistrySystemPrompt" name="system_prompt" rows="7" placeholder="프리셋 프롬프트 내용을 표시합니다" readonly></textarea>
                 </label>
                 <label>추가 옵션 JSON
                   <textarea id="judgeRegistryOptionsJson" name="options_json" rows="3" placeholder="{&quot;include_ai_filters&quot;:false}"></textarea>
@@ -400,7 +400,7 @@
                 </div>
                 <div class="scoring-mode-guide-row">
                   <strong>단일 Judge 채점</strong>
-                  <span>선택한 Judge 1개만 최종 점수로 사용</span>
+                  <span>선택한 Judge 1개만 반영 점수로 사용</span>
                   <span>Judge 100%</span>
                 </div>
                 <div class="scoring-mode-guide-row">
@@ -410,7 +410,7 @@
                 </div>
                 <div class="scoring-mode-guide-row">
                   <strong>Judge+규칙 혼합</strong>
-                  <span>Judge 점수와 Rule-based 점수를 혼합</span>
+                  <span>Judge 점수와 규칙 기반 점수를 혼합</span>
                   <span>Judge : Rule<br><small>사용자 지정 비율 · 기본값 = 50:50</small></span>
                 </div>
                 <div class="scoring-mode-guide-row">
@@ -456,7 +456,7 @@
             </div>
             <label hidden>규칙 점수와 LLM 점수 반영 비율
               <input id="evalJudgeBlendWeight" name="judge_blend_weight" type="range" min="0" max="1" step="0.05" value="0.5">
-              <small id="evalBlendWeightHelp" class="field-help">0.50 = LLM 50%, Rule 50%로 최종 점수에 반영합니다.</small>
+              <small id="evalBlendWeightHelp" class="field-help">0.50 = LLM 50%, Rule 50%로 반영 점수에 적용합니다.</small>
             </label>
             <label class="check-inline">
               <input id="evalDryRun" name="dry_run" type="checkbox">
@@ -489,7 +489,7 @@
               </label>
               <button id="evalRunSubmit" class="run-submit" type="button">
                 <span>2단계: 채점 포함 실행</span>
-                <small>선택 모델 답변 생성 후 평가까지 실행</small>
+                <small>선택한 모델의 답변 생성부터 평가까지 실행</small>
               </button>
             </div>
           </div>
@@ -500,7 +500,7 @@
         <details class="card advanced-action-card" id="judgeComparisonCard">
           <summary class="card-head">
             <h2>Judge 결과 비교 리포트</h2>
-            <span>기존 Judge 점수와 새 Judge run을 비교 · Arbiter 후보만 산출</span>
+            <span>기존 Judge 점수와 새 Judge 실행 결과를 비교 · 중재 Judge 후보만 산출</span>
           </summary>
           <form id="judgeComparisonForm" class="run-form judge-comparison-form">
             <label>기준 점수 소스
@@ -509,33 +509,36 @@
             <label>기준 Judge
               <select id="judgeCompareBaselineJudge"></select>
             </label>
-            <label>기존 Arbiter 결과
+            <label>기존 중재 Judge 결과
               <select id="judgeCompareExistingArbiter"></select>
             </label>
-            <label>비교 Judge run
+            <label>비교 Judge 실행
               <select id="judgeCompareCandidateRun"></select>
             </label>
-            <label>Arbiter 후보 점수 차이 기준값
+            <label>비교 Judge
+              <select id="judgeCompareCandidateJudge"></select>
+            </label>
+            <label>중재 Judge 후보 점수 차이 기준
               <input id="judgeCompareScoreGap" type="number" min="0" max="10000" step="1" value="30">
             </label>
             <label>점수 차이 기준 방식
               <select id="judgeCompareScoreGapMode">
-                <option value="points" selected>절대 점수차 / %p</option>
-                <option value="relative_percent">기준 Judge 대비 상대 차이 / %</option>
+                <option value="points" selected>절대 점수 차이 / %p</option>
+                <option value="relative_percent">기준 Judge 대비 상대 차이율 / %</option>
               </select>
             </label>
             <label class="check-inline">
               <input id="judgeCompareErrorType" type="checkbox">
-              fail 유형 불일치를 Arbiter 후보에 포함
+              실패 유형 불일치를 중재 Judge 후보에 포함
             </label>
             <label class="check-inline">
               <input id="judgeCompareNormalizeErrorType" type="checkbox" checked>
-              fail 유형 정규화 후 비교
+              실패 유형 정규화 후 비교
             </label>
           </form>
           <button id="judgeComparisonSubmit" class="secondary-action-button primary-action-button" type="button">
             <span>비교 리포트 생성</span>
-            <small>Arbiter는 실행하지 않음</small>
+            <small>중재 Judge 호출 없이 후보만 산출</small>
           </button>
           <div id="judgeComparisonMessage" class="form-message"></div>
           <div id="judgeComparisonResult" class="judge-comparison-result"></div>
@@ -564,7 +567,7 @@
         <details class="card advanced-action-card">
           <summary class="card-head">
             <h2>기존 실행 점수 재계산</h2>
-            <span>저장된 static/Judge 점수만 재조합 · 모델/Judge 재호출 없음</span>
+            <span>저장된 규칙/Judge 점수만 재조합 · 모델/Judge 재호출 없음</span>
           </summary>
           <form id="evalReblendForm" class="run-form">
             <label>원본 실행 선택
@@ -610,7 +613,7 @@
               <select id="resultRunSelect"></select>
             </label>
             <a id="resultUiReportLink" class="link-button report-link" href="#overview">화면용 리포트</a>
-            <a id="resultRawReportLink" class="link-button report-link" href="/report/raw_regression_report.html" target="_blank" rel="noreferrer">상세 HTML 보고서</a>
+            <a id="resultRawReportLink" class="link-button report-link" href="/report/raw_regression_report.html" target="_blank" rel="noreferrer" hidden>상세 HTML 보고서</a>
           </div>
           <div id="resultRunSummary" class="run-summary-strip"></div>
         </article>
@@ -621,9 +624,9 @@
             <span>결과 해석 기준</span>
           </summary>
           <div class="method-grid compact-method-grid">
-            <div><strong>총점</strong><p>RAG 대상은 ACC, COM, UTL, NAC, HAL 5개 지표를 사용하고, 비-RAG 대상은 UTL을 제외한 4개 지표를 100점으로 정규화합니다.</p></div>
-            <div><strong>규칙 기반</strong><p>토큰 overlap, 필수/금지 조건, 숫자/날짜/JSON 형식, 안전 패턴을 규칙 기반으로 점검합니다.</p></div>
-            <div><strong>LLM 평가</strong><p>선택한 채점 모델이 독립적으로 정확성, 완결성, 수치 정확성, 환각 억제를 평가하고 RAG 대상에서만 근거 활용을 반영합니다.</p></div>
+            <div><strong>총점</strong><p>ACC, COM, NAC, HAL_pass를 기본 4대 지표로 평균해 0-1 원 스케일로 표시합니다.</p></div>
+            <div><strong>제외 지표</strong><p>UTL, SAFE, FCT, FMT는 총점과 점수 바에서 제외합니다. 정책/안전 이슈는 오류 유형, Judge 사유, 배포 판정으로 확인합니다.</p></div>
+            <div><strong>LLM 평가</strong><p>Judge 응답은 OmniEval v2 기준으로 처리되며 산출 파일과 화면 표시 모두 0-1 스케일을 사용합니다.</p></div>
             <div><strong>비교</strong><p>동일 테스트셋과 동일 채점 방식 기준으로 모델, 프롬프트 변형, 채점 설정별 성능을 비교합니다.</p></div>
           </div>
         </details>
@@ -653,7 +656,7 @@
                 <option value="all">전체</option>
                 <option value="failures">실패 문항</option>
                 <option value="passes">통과 문항</option>
-                <option value="safety">HAL</option>
+                <option value="safety">정책/안전 이슈</option>
                 <option value="different">불일치</option>
                 <option value="review">검토</option>
               </select>
@@ -698,8 +701,8 @@
           </article>
           <article class="card">
             <div class="card-head">
-              <h2>5대 평가 지표</h2>
-              <span>최신 선택 모델 기준</span>
+              <h2>평가 지표</h2>
+              <span>ACC / COM / NAC / HAL_pass</span>
             </div>
             <div id="metricBars" class="metric-bars"></div>
           </article>
@@ -715,7 +718,7 @@
 
         <article class="card action-card">
           <div class="card-head">
-            <h2>최종 테스트셋</h2>
+            <h2>테스트셋</h2>
             <span>벤치마크와 회귀 문항셋을 확인합니다.</span>
           </div>
           <p class="action-copy">문항을 미리 보고, 필요한 테스트셋을 실행 탭으로 보낼 수 있습니다.</p>
@@ -731,7 +734,7 @@
           <article class="card">
             <div class="card-head">
               <h2>테스트 케이스 미리보기</h2>
-                <span>최종 벤치마크 / 확정 회귀 문항셋</span>
+                <span>벤치마크 / 회귀 문항셋</span>
             </div>
             <div class="control-row">
               <label for="datasetSelect">케이스 파일</label>
@@ -789,14 +792,14 @@
             <article class="card">
               <div class="card-head">
                 <h2>선택한 케이스 소스 분포</h2>
-                <span>최종 QA셋 대분류 기준</span>
+                <span>QA셋 대분류 기준</span>
               </div>
               <div id="questionlistSourceChart" class="metric-bars"></div>
             </article>
             <article class="card">
               <div class="card-head">
                 <h2>금융토픽 분포</h2>
-                <span>최종 QA셋 금융토픽 기준</span>
+                <span>QA셋 금융토픽 기준</span>
               </div>
               <div id="questionlistBehaviorChart" class="metric-bars"></div>
             </article>
@@ -828,8 +831,8 @@
       <section id="compare" class="panel" role="tabpanel" aria-labelledby="tab-compare">
         <article class="card">
           <div class="card-head">
-            <h2>모델별 5대 지표 비교</h2>
-            <span>각 지표 20점 만점, 총합 100점 만점</span>
+            <h2>모델별 평가 지표 비교</h2>
+            <span>각 지표와 종합 점수는 0-1 원 스케일</span>
           </div>
           <div id="compareControls" class="compare-controls"></div>
           <div id="compareChart" class="compare-chart"></div>
@@ -973,11 +976,11 @@
         <article class="card">
           <div class="card-head">
             <h2>전체 검색</h2>
-            <span>케이스 ID, 질문, 모델 답변, 채점 사유를 한 번에 검색합니다.</span>
+            <span>케이스 ID, 질문, 답변 요약, 채점 사유를 한 번에 검색합니다.</span>
           </div>
           <div class="control-row search-controls">
             <label class="search-query-field" for="globalSearchInput">검색
-              <input id="globalSearchInput" type="search" placeholder="케이스 ID, 질문, 답변, 채점 사유">
+              <input id="globalSearchInput" type="search" placeholder="케이스 ID, 질문, 답변 요약, 채점 사유">
             </label>
             <label class="search-model-field" for="globalSearchModel">모델
               <select id="globalSearchModel">

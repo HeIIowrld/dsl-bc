@@ -1,0 +1,49 @@
+{
+  "configs": [
+    {
+      "api_key_env": "",
+      "api_url": "/api/models/bc_llama31_finance_8b_q4_prompt_v1/eval",
+      "base_url": "http://afsd.iptime.org:11434",
+      "base_url_env": "OLLAMA_BASE_URL",
+      "cache_identity": "",
+      "candidate_role": "",
+      "chat_url": "",
+      "config_id": "bc_llama31_finance_8b_q4_prompt_v1",
+      "display_name": "BC Llama 3.1 Finance 8B Q4 · v1",
+      "eval_target": true,
+      "evaluation_role": "",
+      "experiment_tag": "v1",
+      "health_url": "/api/models/bc_llama31_finance_8b_q4_prompt_v1/health",
+      "include_evidence_context": true,
+      "judge_role": "",
+      "local_path": "",
+      "model": "bc-llama31-finance-8b:q4",
+      "model_group": "",
+      "options": {
+        "num_ctx": 4096,
+        "temperature": 0.6,
+        "top_p": 0.9
+      },
+      "prompt_prefix": "",
+      "prompt_suffix": "",
+      "prompt_template": "",
+      "prompt_variant_of": "bc_llama31_finance_8b_q4",
+      "prompt_version": "default_v1__v1",
+      "provider": "ollama",
+      "query_prompt_template": "",
+      "rag_config": null,
+      "response_path": "",
+      "responses_url": "",
+      "role_notes": "",
+      "run_preselected": false,
+      "safety_policy": null,
+      "system_prompt": "",
+      "system_prompt_preset": "",
+      "ui_visible": true,
+      "unload_after_health_check": true,
+      "upstream_chat_url": "",
+      "upstream_health_url": "",
+      "visibility_status": ""
+    }
+  ]
+}

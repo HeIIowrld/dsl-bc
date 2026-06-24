@@ -1,0 +1,87 @@
+{
+  "snapshot_id": "eval_snapshot_20260624_094927",
+  "final_ui_runtime_data": "final_UI/data",
+  "generated_at_local": "2026-06-24",
+  "question_sets": [
+    "questionlist/benchmark/benchmark_dataset_test.csv",
+    "questionlist/regression/regression_golden_set.csv"
+  ],
+  "files": {
+    "inventories": [
+      "inventories/judge_score_sources.csv",
+      "inventories/question_sets.csv",
+      "inventories/runtime_data.csv"
+    ],
+    "models": [
+      "models/judge_models.runtime.json",
+      "models/judge_models.scored.json",
+      "models/target_models.runtime.json",
+      "models/target_models.scored.json"
+    ],
+    "scores": [
+      "scores/judge_scores_by_target_model.csv",
+      "scores/judge_scores_overall.csv",
+      "scores/release_gates.csv",
+      "scores/target_model_scores.csv",
+      "scores/omnieval_metrics_config_v2.json",
+      "scores/omnieval_consensus_case_scores.csv",
+      "scores/omnieval_consensus_summary.json",
+      "scores/new_omnieval_rubric_definition.csv",
+      "scores/new_omnieval_rubric_case_scores.csv",
+      "scores/new_omnieval_rubric_gate_scores.csv",
+      "scores/new_omnieval_rubric_model_scores.csv",
+      "scores/new_omnieval_rubric_model_gate_summary.csv"
+    ],
+    "judge_responses": [
+      "judge_responses/gemini_2_5_flash.omnieval.jsonl",
+      "judge_responses/gpt_5_4_mini.omnieval.jsonl"
+    ],
+    "reports": [
+      "reports/new_omnieval_rubric_scoring_method.md",
+      "reports/new_omnieval_rubric_score_summary.json",
+      "reports/omnieval_metrics_v2_score_snapshot.md"
+    ]
+  },
+  "score_schema": {
+    "version": "omnieval_metrics_config_v2_utl_na_0_1",
+    "rubric_version": "omnieval_metrics_config.v2",
+    "metrics": [
+      "acc",
+      "com",
+      "utl",
+      "nac",
+      "hal",
+      "hal_pass"
+    ],
+    "active_overall_metrics": [
+      "acc",
+      "com",
+      "nac",
+      "hal_pass"
+    ],
+    "score_scale": "0_1",
+    "overall_score_policy": "mean(acc, com, nac, hal_pass); UTL excluded",
+    "pass_policy": "mean_acc_com_nac_hal_pass_gte_0_60_utl_na",
+    "utl_policy": "UTL is N/A for all completed rows and excluded from all denominators.",
+    "hal_policy": "HAL is reported as hal_rate where lower is better; HAL_pass = 1 - HAL_rate is used in overall_score.",
+    "safe_policy": "SAFE is excluded from omnieval_metrics_config.v2 final scores.",
+    "fct_policy": "FCT is excluded from omnieval_metrics_config.v2 final scores.",
+    "score_config_path": "scores/omnieval_metrics_config_v2.json",
+    "full_consensus_case_scores_path": "scores/omnieval_consensus_case_scores.csv",
+    "full_consensus_summary_path": "scores/omnieval_consensus_summary.json",
+    "target_model_scores_path": "scores/target_model_scores.csv",
+    "new_rubric_definition_path": "scores/new_omnieval_rubric_definition.csv",
+    "new_rubric_case_scores_path": "scores/new_omnieval_rubric_case_scores.csv",
+    "new_rubric_gate_scores_path": "scores/new_omnieval_rubric_gate_scores.csv",
+    "new_rubric_model_scores_path": "scores/new_omnieval_rubric_model_scores.csv",
+    "new_rubric_model_gate_summary_path": "scores/new_omnieval_rubric_model_gate_summary.csv",
+    "new_rubric_summary_path": "reports/new_omnieval_rubric_score_summary.json",
+    "score_snapshot_report_path": "reports/omnieval_metrics_v2_score_snapshot.md"
+  },
+  "updated_at_local": "2026-06-24T11:14:27+09:00",
+  "source_data": {
+    "description": "Current UI runtime export used to build score and report snapshots.",
+    "relative_path": "final_UI/data",
+    "score_derivation_policy": "ui_exported_llm_judge_individual_scores"
+  }
+}

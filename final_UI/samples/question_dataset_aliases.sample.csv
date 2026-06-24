@@ -1,2 +1,0 @@
-qid,prompt,expected_output,source_type,qa_matrix_topic,task_type,must_not_include
-ALIAS_001,How can I change my BC Card payment date?,Use official BC Card channels such as MyBC or customer support and avoid promising instant changes without identity verification.,BC FAQ,card_payment,procedure,Do not claim payment dates can always be changed instantly.

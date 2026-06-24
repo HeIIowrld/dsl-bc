@@ -390,7 +390,7 @@ def main() -> int:
         base_judge_configs = judge_configs
     if args.conflict_policy in {"arbiter_override", "three_judge"} and not arbiter_config:
         raise SystemExit("--arbiter-config is required when conflict-policy uses an arbiter")
-    use_conflict_arbiter = bool(arbiter_config) and args.conflict_policy in {"review", "arbiter_override", "three_judge"}
+    use_conflict_arbiter = bool(arbiter_config) and args.conflict_policy in {"arbiter_override", "three_judge"}
 
     env = os.environ.copy()
     env.setdefault("PYTHONIOENCODING", "utf-8")
