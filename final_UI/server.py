@@ -77,7 +77,8 @@ EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
 EVAL_ARCHIVE_ROOT = EVAL_RUNS_ROOT / "archive"
 WEB_JOBS_ROOT = EVAL_ARCHIVE_ROOT / "web_jobs"
 CURRENT_UI_DATA_RUN_ID = "__ui_runtime_data__"
-CURRENT_UI_DATA_RUN_ALIASES = {CURRENT_UI_DATA_RUN_ID, "__final_ui_data__"}
+LEGACY_UI_DATA_RUN_ID = "__final_ui_data__"
+CURRENT_UI_DATA_RUN_ALIASES = {CURRENT_UI_DATA_RUN_ID, LEGACY_UI_DATA_RUN_ID}
 CURRENT_UI_DATA_LABEL = "현재 내보낸 전체 결과"
 BENCHMARK_CSV_ROOT = PROJECT_ROOT / "questionlist" / "benchmark"
 REGRESSION_CSV_ROOT = PROJECT_ROOT / "questionlist" / "regression"
@@ -2950,6 +2951,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         except (OSError, csv.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
             self.send_json({"status": "error", "error": str(exc), "run_id": run_id}, status=500)
             return
+        if is_current_ui_data_run_id(run_id):
+            try:
+                self.send_json(self.eval_case_summary_payload(run_id))
+            except (OSError, csv.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                self.send_json({"status": "error", "error": str(exc), "run_id": run_id}, status=500)
+            return
         self.serve_path(cache_path, content_type="application/json; charset=utf-8")
 
     def handle_eval_case_detail(self, query: str = ""):
@@ -3007,7 +3014,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def eval_case_summary_cache_key(self, source: dict) -> tuple[str, dict]:
         source_key = {
             "version": UI_CASE_SUMMARY_CACHE_VERSION,
-            "run_id": source["run_id"],
+            "run_id": source.get("cache_run_id") or source["run_id"],
             "source_kind": source["source_kind"],
             "source_signature": source["source_signature"],
         }
@@ -3023,20 +3030,26 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         with UI_CASE_SUMMARY_CACHE_LOCK:
             cached = UI_CASE_SUMMARY_MEMORY_CACHE.get(cache_key)
         if cached is not None:
-            return cached
+            return self.normalize_eval_case_summary_payload(dict(cached), source)
 
         disk_payload = self.read_ui_case_summary_cache(cache_key)
         if disk_payload is not None:
+            normalized_payload = self.normalize_eval_case_summary_payload(dict(disk_payload), source)
             with UI_CASE_SUMMARY_CACHE_LOCK:
-                UI_CASE_SUMMARY_MEMORY_CACHE[cache_key] = disk_payload
+                UI_CASE_SUMMARY_MEMORY_CACHE[cache_key] = normalized_payload
                 self.trim_ui_case_summary_memory_cache()
-            return disk_payload
+            return normalized_payload
 
         payload = self.build_eval_case_summary_payload(source, cache_key)
         self.write_ui_case_summary_cache(cache_key, payload)
         with UI_CASE_SUMMARY_CACHE_LOCK:
             UI_CASE_SUMMARY_MEMORY_CACHE[cache_key] = payload
             self.trim_ui_case_summary_memory_cache()
+        return payload
+
+    def normalize_eval_case_summary_payload(self, payload: dict, source: dict) -> dict:
+        payload["run_id"] = source["run_id"]
+        payload["source_label"] = source.get("source_label", payload.get("source_label", ""))
         return payload
 
     def build_eval_case_summary_payload(self, source: dict, cache_key: str) -> dict:
@@ -3107,6 +3120,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 return None
             return {
                 "run_id": CURRENT_UI_DATA_RUN_ID,
+                "cache_run_id": LEGACY_UI_DATA_RUN_ID,
                 "source_kind": "file",
                 "source_label": "ui_runtime_data/question_cases.csv",
                 "path": path,

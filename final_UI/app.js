@@ -27,9 +27,6 @@ const metricLabels = {
   nac: "\uc218\uce58 \uc815\ud655\uc131(NAC)",
   hal_pass: "\ud658\uac01 \uc5b5\uc81c(HAL)",
   hal: "\ud658\uac01\ub960(HAL)",
-  fct: "\uc0ac\uc2e4\uc131(FCT)",
-  fmt: "\ud615\uc2dd \uc900\uc218(FMT)",
-  safe: "\uc548\uc804\uc131(SAFE)",
 };
 
 const severityLabels = {
@@ -309,6 +306,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   selectedRunId = initialRunIdFromUrl();
   const requestedRunId = selectedRunId;
   const requestedTab = tabIdFromLocation();
+  sanitizeCurrentRunIdInUrl();
   const shouldLoadQuestionlistImmediately = requestedTab === "caseSets";
 
   try {
@@ -461,6 +459,18 @@ function initialRunIdFromUrl() {
     return normalizeRunId(new URLSearchParams(window.location.search).get("run_id") || "");
   } catch {
     return "";
+  }
+}
+
+function sanitizeCurrentRunIdInUrl() {
+  try {
+    const url = new URL(window.location.href);
+    const runId = url.searchParams.get("run_id") || "";
+    if (!isCurrentUiDataRunId(runId)) return;
+    url.searchParams.delete("run_id");
+    history.replaceState(null, "", url.toString());
+  } catch {
+    // URL cleanup is best-effort; loading can continue without it.
   }
 }
 
@@ -886,16 +896,12 @@ function parseCsv(text) {
 
 function metricRawValue(row, key) {
   if (!row) return "";
-  if (key === "fct") {
-    return firstPresentValue(row.fct, row.hal, row.legacy_hal);
-  }
   return firstPresentValue(row[key]);
 }
 
 function metricAvailable(row, key) {
   const value = metricRawValue(row, key);
   if (value === undefined || value === null || String(value).trim() === "") return false;
-  if (key === "fmt" && String(row?.fmt_status || "").startsWith("not_applicable")) return false;
   return Number.isFinite(Number(value));
 }
 
@@ -910,8 +916,6 @@ function preserveScoreScaleForUi(row) {
 }
 
 function normalizeRun(d) {
-  const hasUtlFlag = d.utl_applicable !== undefined && d.utl_applicable !== "";
-  const hasUtlRate = d.utl_applicable_rate !== undefined && d.utl_applicable_rate !== "";
   [
     "total_questions",
     "scored_questions",
@@ -919,28 +923,16 @@ function normalizeRun(d) {
     "pass_rate",
     "scored_pass_rate",
     "overall_score",
-    "overall_with_safe",
     "scored_average",
     "acc",
     "com",
-    "utl",
     "nac",
     "hal",
     "hal_rate",
     "hal_pass",
-    "fct",
     "scored_acc",
     "scored_com",
-    "scored_utl",
     "scored_nac",
-    "scored_hal",
-    "scored_fct",
-    "utl_applicable_rate",
-    "fmt_applicable_rate",
-    "safe",
-    "safe_pass_rate",
-    "safe_review_rate",
-    "safe_block_rate",
     "answer_quality_score",
     "rag_quality_score",
     "avg_latency_ms",
@@ -949,10 +941,6 @@ function normalizeRun(d) {
     d[key] = Number(d[key] || 0);
   });
   preserveScoreScaleForUi(d);
-  d.fct = Number(firstPresentValue(d.fct, d.hal, 0));
-  d.fmt = metricAvailable(d, "fmt") ? metricNumber(d, "fmt") : "";
-  d.safe = metricAvailable(d, "safe") ? metricNumber(d, "safe") : "";
-  d.utl_applicable = hasUtlFlag ? !isFalse(d.utl_applicable) : (hasUtlRate ? d.utl_applicable_rate > 0 : true);
   d.version = d.version || "unknown";
   d.model = d.model || d.version;
   d.run_type = d.run_type || "eval";
@@ -964,13 +952,10 @@ function normalizeCase(d) {
     "acc",
     "com",
     "nac",
-    "fct",
-    "utl",
     "hal",
     "hal_rate",
     "hal_pass",
     "overall_score",
-    "overall_with_safe",
     "regression_delta",
     "score_denominator",
     "raw_metric_score",
@@ -985,10 +970,6 @@ function normalizeCase(d) {
     d[key] = Number(d[key] || 0);
   });
   preserveScoreScaleForUi(d);
-  d.fct = Number(firstPresentValue(d.fct, d.hal, d.legacy_hal, 0));
-  d.fmt = metricAvailable(d, "fmt") ? metricNumber(d, "fmt") : "";
-  d.safe = metricAvailable(d, "safe") ? metricNumber(d, "safe") : "";
-  d.utl_applicable = !isFalse(d.utl_applicable);
   d.version = d.version || "unknown";
   d.model = d.model || d.version;
   d.question = d.instruction || d.question || "";
@@ -3180,19 +3161,21 @@ function renderResultRunSelector() {
   const uiLink = document.getElementById("resultUiReportLink");
   const rawLink = document.getElementById("resultRawReportLink");
   if (!select) return;
-  const currentId = selectedRunId || latestRun?.run_id || "";
-  const displayRuns = evalRunHistory.filter((run) => run.run_id === currentId || resultRunHasRows(run));
+  const currentId = normalizeRunId(selectedRunId || latestRun?.run_id || "");
+  const displayRuns = evalRunHistory.filter((run) => normalizeRunId(run.run_id) === currentId || resultRunHasRows(run));
+  const currentOptionRun = displayRuns.find((run) => normalizeRunId(run.run_id) === currentId);
   const historyOptions = displayRuns.map((run) => {
     const hasRows = resultRunHasRows(run);
+    const selected = currentOptionRun && run.run_id === currentOptionRun.run_id;
     const label = [
       runDisplayLabel(run),
       run.eval_started_at ? formatDateTime(run.eval_started_at) : "",
       hasRows ? "" : "결과 행 없음",
     ].filter(Boolean).join(" · ");
-    return `<option value="${escapeHtml(run.run_id)}" ${run.run_id === currentId ? "selected" : ""} ${hasRows ? "" : "disabled"}>${escapeHtml(label)}</option>`;
+    return `<option value="${escapeHtml(run.run_id)}" ${selected ? "selected" : ""} ${hasRows ? "" : "disabled"}>${escapeHtml(label)}</option>`;
   }).join("");
   const hasExportedRows = Boolean(runs.length || (caseDataLoaded && cases.length));
-  const isPendingSelectedRun = Boolean(currentId && !displayRuns.some((run) => run.run_id === currentId));
+  const isPendingSelectedRun = Boolean(currentId && !currentOptionRun);
   select.innerHTML = historyOptions || (
     isPendingSelectedRun
       ? `<option value="${escapeHtml(currentId)}" selected>${escapeHtml(runDisplayLabel(latestRun) || "실행 정보 불러오는 중")}</option>`
@@ -3205,8 +3188,8 @@ function renderResultRunSelector() {
   select.title = historyOptions
     ? "과거 실행 결과 선택"
     : (hasExportedRows ? "data/*.csv로 내보낸 현재 결과입니다." : "선택 가능한 실행 결과가 없습니다.");
-  select.value = displayRuns.some((run) => run.run_id === currentId) ? currentId : "";
-  const current = evalRunHistory.find((run) => run.run_id === currentId) || {};
+  select.value = currentOptionRun?.run_id || (isPendingSelectedRun ? currentId : "");
+  const current = currentOptionRun || {};
   const currentTitle = isCurrentUiDataRunId(current.run_id) ? runDisplayLabel(current) : current.run_id;
   const loadedResultRows = caseDataLoaded ? resultRowCount(cases) : 0;
   const loadedModelCount = caseDataLoaded ? resultModelCount(cases, runs) : resultModelCount([], runs);
@@ -8280,11 +8263,13 @@ function releaseDecisionReason(value) {
   const labels = {
     no_active_gold_cases: "배포 판정용으로 확정된 골든 케이스가 없음",
     "no gate-eligible cases": "배포 판정 대상 문항이 없음",
+    "no gate-eligible release set in final benchmark": "현재 벤치마크에는 배포 판정 대상 문항이 없음",
+    final_benchmark: "현재 벤치마크",
     pass: "배포 기준 통과",
     review: "수동 검토 필요",
     block: "배포 보류 기준에 걸림",
   };
-  return parts.map((part) => labels[part] || part).join(" / ");
+  return parts.map((part) => labels[part] || part.replace(/\bfinal benchmark\b/gi, "현재 벤치마크")).join(" / ");
 }
 
 function labelSeverity(value) {

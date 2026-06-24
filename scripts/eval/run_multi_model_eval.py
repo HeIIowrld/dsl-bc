@@ -144,7 +144,9 @@ SCORING_MODES = {"static", "static_llm", "llm_override", "blend"}
 SCORE_METRIC_KEYS = ["acc", "com", "nac", "hal_pass"]
 NON_RAG_SCORE_METRIC_KEYS = list(SCORE_METRIC_KEYS)
 LEGACY_SCORE_METRIC_KEYS = ["acc", "com", "utl", "nac", "hal"]
-SCORE_METRIC_MAX = 20.0
+SCORE_METRIC_MAX = 1.0
+SCORE_PASS_THRESHOLD = 0.6
+JUDGE_CONFLICT_GAP_THRESHOLD = 0.3
 JUDGE_AGGREGATION_METHODS = {"auto", "weighted_mean", "mean", "trimmed_mean", "max", "min"}
 QA_SLICE_MIN_CASES = {"1d": 30, "2d": 30, "3d": 30}
 QA_CATEGORY_VALUES = {"BC FAQ", "금융정보", "카드상품"}
@@ -240,11 +242,11 @@ JUDGE_RESPONSE_SCHEMA = {
         "evidence_notes",
     ],
     "properties": {
-        "acc": {"type": "number", "description": "0-20 answer accuracy score"},
-        "com": {"type": "number", "description": "0-20 answer completeness score"},
-        "utl": {"type": "number", "description": "0-20 retrieval utilization score. Return 0 when UTL is marked not applicable."},
-        "nac": {"type": "number", "description": "0-20 numeric accuracy score"},
-        "hal": {"type": "number", "description": "0-20 non-hallucination score; higher means less hallucination"},
+        "acc": {"type": "number", "description": "0-1 answer accuracy score"},
+        "com": {"type": "number", "description": "0-1 answer completeness score"},
+        "utl": {"type": "number", "description": "0-1 retrieval utilization score. Return 0 when UTL is marked not applicable."},
+        "nac": {"type": "number", "description": "0-1 numeric accuracy score"},
+        "hal": {"type": "number", "description": "0-1 non-hallucination score; higher means less hallucination"},
         "pass": {"type": "boolean", "description": "Whether the answer should pass"},
         "critical_fail": {"type": "boolean", "description": "Whether this is a release-blocking critical failure"},
         "error_type": {
@@ -279,14 +281,14 @@ OMNIEVAL_JUDGE_RESPONSE_SCHEMA = {
             "type": "object",
             "required": ["acc", "com", "nac", "hal_pass"],
             "properties": {
-                "acc": {"type": "number", "description": "0-20 answer accuracy score"},
-                "com": {"type": "number", "description": "0-20 answer completeness score"},
-                "nac": {"type": "number", "description": "0-20 numeric accuracy score"},
-                "hal_pass": {"type": "number", "description": "0-20 non-hallucination score; higher means fewer unsupported, fabricated, or contradictory claims"},
+                "acc": {"type": "number", "description": "0-1 answer accuracy score"},
+                "com": {"type": "number", "description": "0-1 answer completeness score"},
+                "nac": {"type": "number", "description": "0-1 numeric accuracy score"},
+                "hal_pass": {"type": "number", "description": "0-1 non-hallucination score; higher means fewer unsupported, fabricated, or contradictory claims"},
             },
             "additionalProperties": False,
         },
-        "overall_score": {"type": "number", "description": "0-100 normalized judge-stage score over ACC, COM, NAC, and HAL_pass"},
+        "overall_score": {"type": "number", "description": "0-1 normalized judge-stage score over ACC, COM, NAC, and HAL_pass"},
         "critical_fail": {"type": "boolean", "description": "Whether this is a release-blocking critical failure"},
         "error_type": {
             "type": "string",
@@ -1082,7 +1084,7 @@ def metric_value(row: dict[str, Any], key: str, default: float = 0.0) -> float:
 
 def score20(value: Any) -> float:
     number = clamp_score(value)
-    return round(number / 5, 2) if number > SCORE_METRIC_MAX else number
+    return round(number / 100.0, 4) if number > SCORE_METRIC_MAX else round(number, 4)
 
 
 def is_false_like(value: Any) -> bool:
@@ -1103,13 +1105,13 @@ def score_total_from_metrics(row: dict[str, Any], utl_applicable: bool | None = 
     keys = metric_keys_for_score(utl_applicable)
     denominator = score_denominator(utl_applicable)
     raw = sum(metric_value(row, key) for key in keys)
-    return round((raw / denominator) * 100, 2) if denominator else 0.0
+    return round(raw / denominator, 4) if denominator else 0.0
 
 
 def raw_metric_score(row: dict[str, Any], utl_applicable: bool | None = None) -> float:
     if utl_applicable is None:
         utl_applicable = bool_from_metadata(row.get("utl_applicable"), True)
-    return round(sum(metric_value(row, key) for key in metric_keys_for_score(utl_applicable)), 2)
+    return round(sum(metric_value(row, key) for key in metric_keys_for_score(utl_applicable)), 4)
 
 
 def sum_metric_scores(row: dict[str, Any]) -> float:
@@ -3612,14 +3614,14 @@ DEFAULT_JUDGE_SYSTEM_PROMPT = (
     "You are an expert LLM-as-a-judge for Korean business and finance QA. "
     "Evaluate only the provided question, expected answer, evidence, required conditions, forbidden claims, and model answer. "
     "Do not copy, imitate, or anchor on static/deterministic scorer results. "
-    "Follow the score_policy and judge_rubric in the user payload. For OmniEval v2 scoring, score ACC, COM, NAC, and HAL_pass independently on a 0-20 judge-stage scale. "
+    "Follow the score_policy and judge_rubric in the user payload. For OmniEval v2 scoring, score ACC, COM, NAC, and HAL_pass independently on a 0-1 scale. "
     "ACC measures factual/logical correctness against the expected answer and required facts. "
     "COM measures coverage of required conditions, steps, limits, and exceptions. "
-    "NAC measures exact amounts, rates, dates, codes, identifiers, and calculations; give 20 when no numeric judgment is required and no numeric error exists. "
+    "NAC measures exact amounts, rates, dates, codes, identifiers, and calculations; give 1.0 when no numeric judgment is required and no numeric error exists. "
     "HAL_pass measures absence of unsupported claims, fabricated details, contradictions, and policy hallucinations; higher means fewer hallucination issues. "
     "Use all-zero scoring only for blank/unparseable answers, mostly unrelated answers with unsupported core claims, or safety-critical failures. "
     "Do not return UTL, SAFE, FCT, FMT, or pass/fail. Expose safety risk only through critical_fail, error_type, reason, and evidence_notes. "
-    "The pipeline derives quality pass from recomputed overall_score >= 60 at judge stage and stores the final snapshot on a 0-1 scale. "
+    "The pipeline derives quality pass from recomputed overall_score >= 0.6. "
     "Use exactly one allowed error_type value: "
     f"{', '.join(ERROR_TYPE_VALUES)}. "
     "The reason should be concise Korean reasoning grounded in the rubric. Return exactly one JSON object."
@@ -3629,7 +3631,7 @@ ARBITER_JUDGE_SYSTEM_PROMPT = (
     "You are an arbiter LLM-as-a-judge for cases where base judges disagree. "
     "Review the original question, expected answer, evidence, model answer, and arbiter_review context with base judge scores and reasons. "
     "Do not average base judge conclusions mechanically. Decide which score is best supported by the evidence and rubric. "
-    "Use the same OmniEval v2 scoring contract as the base judge: ACC, COM, NAC, and HAL_pass are independent 0-20 judge-stage scores; UTL, SAFE, FCT, FMT, and pass/fail are excluded. "
+    "Use the same OmniEval v2 scoring contract as the base judge: ACC, COM, NAC, and HAL_pass are independent 0-1 scores; UTL, SAFE, FCT, FMT, and pass/fail are excluded. "
     "Return exactly one JSON object and explain the final arbitration reason concisely in Korean."
 )
 
@@ -3764,15 +3766,15 @@ def judge_messages_for_case(
             "metric_max": SCORE_METRIC_MAX,
             "applicable_metrics": metric_keys_for_score(utl_applicable),
             "denominator": score_denominator(utl_applicable),
-            "final_score": "sum(applicable metric scores) / denominator * 100",
+            "final_score": "sum(applicable metric scores) / denominator",
             "utl_note": "If utl_applicable is false, return utl=0; the evaluator excludes UTL from final_score.",
         },
         "judge_rubric": {
-            "acc": "0-20. Accuracy: the answer matches the expected output and required facts. Give partial credit for correct facts even when other parts are wrong.",
-            "com": "0-20. Completeness: the answer covers all necessary parts without material omissions. Give partial credit for covered elements.",
-            "utl": "0-20. Retrieval utilization: the answer uses the intended evidence/source correctly. If utl_applicable=false, return 0.",
-            "nac": "0-20. Numeric accuracy: amounts, rates, counts, dates, codes, phone numbers, and calculations are exact. Give 20 if no numeric reasoning is needed, no required numeric/code/identifier fact is omitted, and no numeric error exists. Absence of numeric information is not by itself a reason for NAC=0. Do not lower NAC merely because ACC/COM is low.",
-            "hal": "0-20. Hallucination control: the answer avoids unsupported, fabricated, contradictory, or unsafe claims. Higher means less hallucination. Do not set HAL to 0 for simple omission alone.",
+            "acc": "0-1. Accuracy: the answer matches the expected output and required facts. Give partial credit for correct facts even when other parts are wrong.",
+            "com": "0-1. Completeness: the answer covers all necessary parts without material omissions. Give partial credit for covered elements.",
+            "utl": "0-1. Retrieval utilization: the answer uses the intended evidence/source correctly. If utl_applicable=false, return 0.",
+            "nac": "0-1. Numeric accuracy: amounts, rates, counts, dates, codes, phone numbers, and calculations are exact. Give 1.0 if no numeric reasoning is needed, no required numeric/code/identifier fact is omitted, and no numeric error exists. Absence of numeric information is not by itself a reason for NAC=0. Do not lower NAC merely because ACC/COM is low.",
+            "hal": "0-1. Hallucination control: the answer avoids unsupported, fabricated, contradictory, or unsafe claims. Higher means less hallucination. Do not set HAL to 0 for simple omission alone.",
             "critical_fail": "true for privacy leak, unsafe financial instruction, forbidden claim, or severe unsupported answer.",
             "pass": "true only when no critical_fail and the answer is usable for the expected_behavior.",
             "all_zero": "Set all metrics to 0 only for blank/unparseable answers, safety-critical failure, or mostly unrelated content with unsupported core claims. Do not all-zero partial inaccuracy, omission, or simple refusal; score NAC/HAL independently.",
@@ -3800,18 +3802,18 @@ def judge_messages_for_case(
             "metric_max": SCORE_METRIC_MAX,
             "applicable_metrics": ["acc", "com", "nac", "hal_pass"],
             "excluded_metrics": ["utl", "safe", "fct", "fmt"],
-            "denominator": 80,
-            "final_score": "sum(applicable metric scores) / denominator * 100",
-            "snapshot_score": "The snapshot builder converts judge-stage 0-20 metrics and 0-100 overall_score to 0-1 output files.",
+            "denominator": 4,
+            "final_score": "sum(applicable metric scores) / denominator",
+            "snapshot_score": "The evaluator stores 0-1 metric and overall scores directly.",
             "excluded_note": "Do not return UTL, SAFE, FCT, or FMT score fields in this OmniEval v2 judge response.",
         }
         judge_input["judge_rubric"] = {
-            "acc": "0-20. Accuracy: factual and logical match to the expected answer and required facts.",
-            "com": "0-20. Completeness: coverage of required conditions, steps, limits, and exceptions.",
-            "nac": "0-20. Numeric accuracy: exact amounts, rates, dates, codes, identifiers, and calculations. Give 20 when no numeric judgment is required and no numeric error exists.",
-            "hal_pass": "0-20. Hallucination pass: avoids unsupported claims, policy hallucination, contradiction, and fabricated details. Higher means fewer hallucination issues. Do not set HAL_pass to 0 for simple omission alone.",
+            "acc": "0-1. Accuracy: factual and logical match to the expected answer and required facts.",
+            "com": "0-1. Completeness: coverage of required conditions, steps, limits, and exceptions.",
+            "nac": "0-1. Numeric accuracy: exact amounts, rates, dates, codes, identifiers, and calculations. Give 1.0 when no numeric judgment is required and no numeric error exists.",
+            "hal_pass": "0-1. Hallucination pass: avoids unsupported claims, policy hallucination, contradiction, and fabricated details. Higher means fewer hallucination issues. Do not set HAL_pass to 0 for simple omission alone.",
             "excluded_metrics": "UTL, SAFE, FCT, and FMT are excluded from OmniEval v2 scoring and must not be returned as score fields.",
-            "pass": "Do not return pass/fail. The evaluator derives quality pass from recomputed overall_score >= 60.",
+            "pass": "Do not return pass/fail. The evaluator derives quality pass from recomputed overall_score >= 0.6.",
             "critical_fail": "true for privacy leak, unsafe financial instruction, forbidden claim, or severe unsupported answer.",
             "json_output": "Return one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, evidence_notes.",
             "error_type": {
@@ -4003,8 +4005,8 @@ def validate_llm_judge_payload(payload: dict[str, Any]) -> None:
         value = payload.get("overall_score")
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             raise ValueError("LLM judge field must be numeric: overall_score")
-        if not 0 <= float(value) <= 100:
-            raise ValueError("LLM judge overall_score must be in 0-100.")
+        if not 0 <= float(value) <= 1:
+            raise ValueError("LLM judge overall_score must be in 0-1.")
     if not isinstance(payload.get("critical_fail"), bool):
         raise ValueError("LLM judge field must be boolean: critical_fail")
     if not is_omnieval and "pass" in payload and not isinstance(payload.get("pass"), bool):
@@ -4097,7 +4099,7 @@ def run_llm_judge(
         "omnieval_metrics_config_v2" if uses_omnieval_core else "legacy_acc_com_utl_nac_hal_v1"
     )
     if uses_omnieval_core:
-        normalized["pass"] = normalized["answer_quality_score"] >= 60.0
+        normalized["pass"] = normalized["answer_quality_score"] >= SCORE_PASS_THRESHOLD
     normalized["raw_response"] = raw
     normalized["model"] = model
     normalized["provider"] = provider_name
@@ -4121,13 +4123,10 @@ def score_uses_zero_one_scale(score: dict[str, Any]) -> bool:
 
 
 def score_to_points(value: Any, score: dict[str, Any]) -> float:
-    number = safe_float(value)
-    if score_uses_zero_one_scale(score) and 0 <= number <= 1:
-        return round(number * 100.0, 4)
-    return number
+    return score20(value)
 
 
-def score_policy_pass(score: dict[str, Any], pass_threshold: float = 60.0) -> bool:
+def score_policy_pass(score: dict[str, Any], pass_threshold: float = SCORE_PASS_THRESHOLD) -> bool:
     overall = score.get("overall_score")
     if overall in {"", None}:
         overall = llm_judge_overall(score)
@@ -4174,8 +4173,8 @@ def judge_conflict_summary(judge_scores: list[dict[str, Any]]) -> tuple[bool, st
     reasons = []
     if len(pass_values) > 1:
         reasons.append("judge pass/fail disagreement")
-    if overall_scores and max(overall_scores) - min(overall_scores) >= 30:
-        reasons.append(f"judge score gap {max(overall_scores) - min(overall_scores):.1f}")
+    if overall_scores and max(overall_scores) - min(overall_scores) >= JUDGE_CONFLICT_GAP_THRESHOLD:
+        reasons.append(f"judge score gap {max(overall_scores) - min(overall_scores):.3f}")
     if len(error_types) > 1:
         reasons.append("judge error-type disagreement: " + ", ".join(sorted(error_types)))
     return bool(reasons), "; ".join(reasons)
@@ -5501,7 +5500,7 @@ def main() -> None:
             allow_shadow_fallback=args.allow_shadow_fallback,
         )
     baseline_config = eval_run.get("baseline_config") if eval_run.get("baseline_config") in {c["config_id"] for c in configs} else configs[0]["config_id"]
-    pass_threshold = safe_float(eval_run.get("pass_threshold"), 60)
+    pass_threshold = safe_float(eval_run.get("pass_threshold"), SCORE_PASS_THRESHOLD)
     run_id = args.run_id or f"{eval_run.get('run_id_prefix', 'RUN')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     control_file = Path(args.control_file) if args.control_file else None
     run_dir = Path(args.out_root) / run_id
