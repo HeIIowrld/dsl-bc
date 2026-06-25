@@ -734,6 +734,35 @@ details:not([open]) > :not(summary) {
   grid-column: 1 / -1;
 }
 
+.run-form > label,
+.run-form > .field-block {
+  min-width: 0;
+}
+
+#evalJudgeConfigBlock,
+#evalArbiterConfigBlock {
+  grid-column: 1 / -1;
+}
+
+#evalArbiterConfigBlock {
+  max-width: min(720px, 100%);
+}
+
+#evalArbiterConfigId {
+  border-color: var(--border-mid);
+  box-shadow: none;
+}
+
+#evalArbiterConfigId:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+#evalDryRun,
+#evalExportFinalUi {
+  width: auto;
+}
+
 .scoring-mode-guide {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -785,10 +814,6 @@ details:not([open]) > :not(summary) {
   color: var(--text-dim);
   font-size: 10px;
   font-weight: 600;
-}
-
-#evalJudgeConfigBlock {
-  grid-column: 1 / -1;
 }
 
 .model-form label.check-inline,
