@@ -5538,6 +5538,8 @@ def score_with_optional_llm_judge(
     config: dict[str, Any] | None = None,
     judge_score_weights: dict[str, float] | None = None,
     judge_aggregation_method: str = "auto",
+    arbiter_judge_context: dict[str, Any] | None = None,
+    conflict_policy: str = "review",
     arbiter_context: dict[str, Any] | None = None,
     log_context: dict[str, Any] | None = None,
     judge_cache_enabled: bool = True,
