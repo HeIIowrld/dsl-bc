@@ -458,48 +458,50 @@
             </label>
           </form>
           <div id="evalCustomPools" class="custom-pools"></div>
-          <div class="eval-grid">
-            <div>
-              <h3>모델 선택</h3>
-              <div id="evalConfigFilters" class="check-list"></div>
-            </div>
-          </div>
-          <div class="button-row run-button-row">
-            <button id="answerOnlyRunSubmit" type="button">
-              <span>1단계: 답변만 생성</span>
-              <small>LLM 평가 없이 답변 파일 저장</small>
-            </button>
-            <div class="run-step-two-action">
-              <div class="run-cache-options" aria-label="재사용 옵션">
-                <label class="run-cache-option">
-                  <input id="evalAnswerCacheEnabled" name="answer_cache" type="checkbox" checked>
-                  <span>
-                    <strong>답변 재사용</strong>
-                    <small>동일 모델/동일 질문이면 이전 답변 사용</small>
-                  </span>
-                </label>
-                <label class="run-cache-option">
-                  <input id="evalJudgeCacheEnabled" name="judge_cache" type="checkbox" checked>
-                  <span>
-                    <strong>채점 답변 재사용</strong>
-                    <small>동일 모델 답변/동일 Judge면 이전 채점 사용</small>
-                  </span>
-                </label>
-                <label class="run-cache-option">
-                  <input id="evalArbiterCacheEnabled" name="arbiter_cache" type="checkbox" checked>
-                  <span>
-                    <strong>Arbiter 답변 재사용</strong>
-                    <small>동일 충돌 맥락/동일 Arbiter면 이전 중재 사용</small>
-                  </span>
-                </label>
-              </div>
-              <button id="evalRunSubmit" class="run-submit" type="button">
-                <span>2단계: 채점 포함 실행</span>
-                <small>선택한 모델의 답변 생성부터 평가까지 실행</small>
+          <div class="run-controls-panel">
+            <div class="button-row run-button-row">
+              <button id="answerOnlyRunSubmit" type="button">
+                <span>1단계: 답변만 생성</span>
+                <small>LLM 평가 없이 답변 파일 저장</small>
               </button>
+              <div class="run-step-two-action">
+                <div class="run-cache-options" aria-label="재사용 옵션">
+                  <label class="run-cache-option">
+                    <input id="evalAnswerCacheEnabled" name="answer_cache" type="checkbox" checked>
+                    <span>
+                      <strong>답변 재사용</strong>
+                      <small>동일 모델/동일 질문이면 이전 답변 사용</small>
+                    </span>
+                  </label>
+                  <label class="run-cache-option">
+                    <input id="evalJudgeCacheEnabled" name="judge_cache" type="checkbox" checked>
+                    <span>
+                      <strong>채점 재사용</strong>
+                      <small>동일 모델 답변/동일 Judge면 이전 채점 사용</small>
+                    </span>
+                  </label>
+                  <label class="run-cache-option">
+                    <input id="evalArbiterCacheEnabled" name="arbiter_cache" type="checkbox" checked>
+                    <span>
+                      <strong>중재 재사용</strong>
+                      <small>동일 충돌 맥락/동일 Arbiter면 이전 중재 사용</small>
+                    </span>
+                  </label>
+                </div>
+                <button id="evalRunSubmit" class="run-submit" type="button">
+                  <span>2단계: 채점 포함 실행</span>
+                  <small>선택한 모델의 답변 생성부터 평가까지 실행</small>
+                </button>
+              </div>
             </div>
+            <div class="eval-grid">
+              <div>
+                <h3>모델 선택</h3>
+                <div id="evalConfigFilters" class="check-list"></div>
+              </div>
+            </div>
+            <div id="evalRunMessage" class="form-message"></div>
           </div>
-          <div id="evalRunMessage" class="form-message"></div>
         </article>
 
         <!-- 2-3. Judge 결과 비교 리포트 -->

@@ -1064,6 +1064,12 @@ button.run-submit small {
   display: block;
 }
 
+.button-row button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .button-row button small {
   margin-top: 2px;
   color: var(--text-dim);
@@ -1111,8 +1117,11 @@ button.run-submit small {
 }
 
 .run-cache-option strong {
+  overflow: hidden;
   font-size: 12px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .run-cache-option small {
@@ -2454,9 +2463,17 @@ body[data-active-tab="search"] .run-context-filter {
   grid-column: 1;
 }
 
-.benchmark-config-card.profile-run .eval-grid {
+.benchmark-config-card.profile-run .run-controls-panel {
   grid-column: 2;
   grid-row: 2;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.benchmark-config-card.profile-run .eval-grid {
   grid-template-columns: 1fr;
   min-width: 0;
   margin-top: 0;
@@ -2467,27 +2484,33 @@ body[data-active-tab="search"] .run-context-filter {
 }
 
 .benchmark-config-card.profile-run .run-button-row {
-  grid-column: 2;
-  grid-row: 3;
-  grid-template-columns: minmax(152px, .9fr) minmax(190px, 1.1fr);
+  grid-template-columns: minmax(220px, .9fr) minmax(320px, 1.1fr);
   min-width: 0;
   margin-top: 0;
-  padding-top: 8px;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .benchmark-config-card.profile-run #evalRunMessage {
-  grid-column: 2;
-  grid-row: 4;
   min-width: 0;
 }
 
 .benchmark-config-card.profile-run .run-cache-option {
   min-height: 38px;
-  padding: 6px 8px;
+  gap: 5px;
+  padding: 6px 7px;
 }
 
 .benchmark-config-card.profile-run .run-cache-option small {
   display: none;
+}
+
+.benchmark-config-card.profile-run .run-cache-option strong {
+  font-size: 11px;
+}
+
+.benchmark-config-card.profile-run .model-picker #evalConfigFilters {
+  max-height: 250px;
 }
 
 .eval-grid h3 {
@@ -5358,6 +5381,12 @@ pre,
 }
 
 /* ── RESPONSIVE ──────────────────────────────────────────── */
+@media (max-width: 1450px) {
+  .benchmark-config-card.profile-run .run-button-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1100px) {
   .eval-viewer-grid { grid-template-columns: 1fr; }
   .result-detail-card { max-height: 400px; }
@@ -5365,11 +5394,14 @@ pre,
   .benchmark-config-card.profile-run {
     display: block;
   }
+  .benchmark-config-card.profile-run .run-controls-panel {
+    margin-top: 10px;
+  }
   .benchmark-config-card.profile-run .eval-grid {
-    margin-top: 16px;
+    margin-top: 0;
   }
   .benchmark-config-card.profile-run .run-button-row {
-    margin-top: 10px;
+    margin-top: 0;
   }
 }
 
