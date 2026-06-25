@@ -1088,6 +1088,7 @@ button.run-submit small {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 7px;
+  width: 100%;
   min-width: 0;
 }
 
@@ -1095,6 +1096,8 @@ button.run-submit small {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
+  width: 100%;
+  min-width: 0;
 }
 
 .run-cache-option {
@@ -1109,6 +1112,11 @@ button.run-submit small {
   background: var(--bg-muted);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.run-cache-option span {
+  min-width: 0;
 }
 
 .run-cache-option strong,
@@ -2484,7 +2492,7 @@ body[data-active-tab="search"] .run-context-filter {
 }
 
 .benchmark-config-card.profile-run .run-button-row {
-  grid-template-columns: minmax(220px, .9fr) minmax(320px, 1.1fr);
+  grid-template-columns: 1fr;
   min-width: 0;
   margin-top: 0;
   padding-top: 0;
@@ -5382,8 +5390,8 @@ pre,
 
 /* ── RESPONSIVE ──────────────────────────────────────────── */
 @media (max-width: 1450px) {
-  .benchmark-config-card.profile-run .run-button-row {
-    grid-template-columns: 1fr;
+  .benchmark-config-card.profile-run .run-cache-options {
+    gap: 6px;
   }
 }
 
