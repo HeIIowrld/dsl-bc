@@ -1547,9 +1547,11 @@ function initializeResultViewerControls() {
 }
 
 function initializeResultRunControls() {
-  const select = document.getElementById("resultRunSelect");
-  if (!select) return;
-  select.onchange = () => loadSelectedRun(select.value, { targetTab: activeTabId() });
+  ["overviewRunSelect", "resultRunSelect"].forEach((id) => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    select.onchange = () => loadSelectedRun(select.value, { targetTab: activeTabId() });
+  });
 }
 
 function initializeSearchControls() {
@@ -3487,11 +3489,21 @@ function resultModelCount(rows = cases, fallbackRuns = runs) {
 }
 
 function renderResultRunSelector() {
-  const select = document.getElementById("resultRunSelect");
-  const summary = document.getElementById("resultRunSummary");
-  const uiLink = document.getElementById("resultUiReportLink");
-  const rawLink = document.getElementById("resultRawReportLink");
-  if (!select) return;
+  const controls = [
+    {
+      select: document.getElementById("overviewRunSelect"),
+      summary: document.getElementById("overviewRunSummary"),
+      uiLink: document.getElementById("overviewUiReportLink"),
+      rawLink: document.getElementById("overviewRawReportLink"),
+    },
+    {
+      select: document.getElementById("resultRunSelect"),
+      summary: document.getElementById("resultRunSummary"),
+      uiLink: document.getElementById("resultUiReportLink"),
+      rawLink: document.getElementById("resultRawReportLink"),
+    },
+  ].filter((control) => control.select);
+  if (!controls.length) return;
   const currentId = normalizeRunId(selectedRunId || latestRun?.run_id || "");
   const displayRuns = evalRunHistory.filter((run) => normalizeRunId(run.run_id) === currentId || resultRunHasRows(run));
   const currentOptionRun = displayRuns.find((run) => normalizeRunId(run.run_id) === currentId);
@@ -3507,7 +3519,7 @@ function renderResultRunSelector() {
   }).join("");
   const hasExportedRows = Boolean(runs.length || (caseDataLoaded && cases.length));
   const isPendingSelectedRun = Boolean(currentId && !currentOptionRun);
-  select.innerHTML = historyOptions || (
+  const selectHtml = historyOptions || (
     isPendingSelectedRun
       ? `<option value="${escapeHtml(currentId)}" selected>${escapeHtml(runDisplayLabel(latestRun) || "실행 정보 불러오는 중")}</option>`
       :
@@ -3515,19 +3527,18 @@ function renderResultRunSelector() {
       ? `<option value="">현재 내보낸 결과</option>`
       : `<option value="">결과 없음</option>`
   );
-  select.disabled = !displayRuns.length;
-  select.title = historyOptions
+  const selectDisabled = !displayRuns.length;
+  const selectTitle = historyOptions
     ? "과거 실행 결과 선택"
     : (hasExportedRows ? "data/*.csv로 내보낸 현재 결과입니다." : "선택 가능한 실행 결과가 없습니다.");
-  select.value = currentOptionRun?.run_id || (isPendingSelectedRun ? currentId : "");
+  const selectValue = currentOptionRun?.run_id || (isPendingSelectedRun ? currentId : "");
   const current = currentOptionRun || (normalizeRunId(latestRun?.run_id) === currentId ? latestRun : {});
   const currentTitle = isCurrentUiDataRunId(current.run_id) ? runDisplayLabel(current) : current.run_id;
   const loadedResultRows = caseDataLoaded ? resultRowCount(cases) : 0;
   const loadedModelCount = caseDataLoaded ? resultModelCount(cases, runs) : resultModelCount([], runs);
   const currentDisplayLabel = runDisplayLabel(current);
   const currentJudgeLabel = runJudgeDisplayLabel(current) || scoringModeLabel("static");
-  if (summary) {
-    summary.innerHTML = current.run_id ? `
+  const summaryHtml = current.run_id ? `
       <span title="${escapeHtml(currentTitle || currentDisplayLabel || current.run_id)}"><strong>${escapeHtml(currentDisplayLabel || current.run_id)}</strong></span>
       <span>${escapeHtml(runTypeDisplayLabel(current) || "-")}</span>
       <span>${escapeHtml(reportRunSourceStatus(current))}</span>
@@ -3560,15 +3571,20 @@ function renderResultRunSelector() {
         `
         : emptyState("선택 가능한 과거 결과가 없습니다.")
     );
-  }
-  if (uiLink) {
-    uiLink.href = reportUiHref(current.run_id ? current : { run_id: currentId });
-  }
-  if (rawLink) {
-    const rawReportHref = reportRawHref(current);
-    rawLink.hidden = !rawReportHref;
-    if (rawReportHref) rawLink.href = rawReportHref;
-  }
+  const uiHref = reportUiHref(current.run_id ? current : { run_id: currentId });
+  const rawReportHref = reportRawHref(current);
+  controls.forEach(({ select, summary, uiLink, rawLink }) => {
+    select.innerHTML = selectHtml;
+    select.disabled = selectDisabled;
+    select.title = selectTitle;
+    select.value = selectValue;
+    if (summary) summary.innerHTML = summaryHtml;
+    if (uiLink) uiLink.href = uiHref;
+    if (rawLink) {
+      rawLink.hidden = !rawReportHref;
+      if (rawReportHref) rawLink.href = rawReportHref;
+    }
+  });
 }
 
 function renderReportsTab() {

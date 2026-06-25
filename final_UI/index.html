@@ -609,6 +609,21 @@
            ════════════════════════════════════════ -->
       <section id="overview" class="panel eval-viewer-panel" role="tabpanel" aria-labelledby="tab-overview">
 
+        <article class="card result-history-card">
+          <div class="card-head">
+            <h2>현재 결과 실행</h2>
+            <span>표시 중인 실행을 확인하거나 이전 실행 결과로 전환합니다.</span>
+          </div>
+          <div class="control-row result-history-controls">
+            <label for="overviewRunSelect">실행
+              <select id="overviewRunSelect"></select>
+            </label>
+            <a id="overviewUiReportLink" class="link-button report-link" href="#overview">화면용 리포트</a>
+            <a id="overviewRawReportLink" class="link-button report-link" href="/report/raw_regression_report.html" target="_blank" rel="noreferrer" hidden>상세 HTML 보고서</a>
+          </div>
+          <div id="overviewRunSummary" class="run-summary-strip"></div>
+        </article>
+
         <!-- 4-1. KPI (제일 먼저) -->
         <div id="kpis" class="kpi-grid"></div>
         <div id="runGateKpis" class="kpi-grid compact"></div>
