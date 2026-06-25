@@ -744,6 +744,7 @@ def main() -> None:
     config_by_id = {str(config.get("config_id") or ""): config for config in configs}
     control_file = Path(args.control_file) if args.control_file else None
     judge_cache_dir = Path(args.judge_cache_dir)
+    judge_cache_active = bool(judge_configs and (args.judge_cache or args.arbiter_cache))
     judge_cache_by_key = load_judge_cache(
         judge_cache_dir,
         include_judge=bool(args.judge_cache),
@@ -751,7 +752,7 @@ def main() -> None:
         target_configs=configs,
         judge_configs=judge_configs,
         default_base_url=args.base_url,
-    ) if judge_configs else {}
+    ) if judge_cache_active else {}
     judge_cache_lock = threading.Lock()
 
     eval_started_at = datetime.now().isoformat(timespec="seconds")
@@ -769,8 +770,8 @@ def main() -> None:
         "judge_aggregation_method": args.judge_aggregation_method,
         "judge_configs": [config.get("config_id") for config in judge_configs],
         "judge_cache": {
-            "judge_enabled": bool(args.judge_cache),
-            "arbiter_enabled": bool(args.arbiter_cache),
+            "judge_enabled": bool(args.judge_cache and judge_configs),
+            "arbiter_enabled": bool(args.arbiter_cache and judge_configs),
             "dir": str(judge_cache_dir),
             "entries_loaded": len(judge_cache_by_key),
         },

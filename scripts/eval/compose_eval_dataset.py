@@ -6,28 +6,21 @@ import csv
 import hashlib
 import json
 import random
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CATALOG = ROOT / "config" / "eval_dataset_catalog.yaml"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-
-def load_config(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            import yaml  # type: ignore
-        except ImportError as exc:
-            raise RuntimeError(f"{path} is not JSON and PyYAML is not installed") from exc
-        payload = yaml.safe_load(text)
-    if not isinstance(payload, dict):
-        raise ValueError(f"{path} must contain an object")
-    return payload
+from scripts.eval.eval_dataset_catalog import (  # noqa: E402
+    DEFAULT_CATALOG,
+    build_runtime_eval_dataset_catalog,
+    load_config,
+)
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -588,6 +581,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", default=None)
     parser.add_argument("--case-status", choices=["active", "shadow", "all"], default="all")
     parser.add_argument("--allow-shadow-fallback", action="store_true")
+    parser.add_argument(
+        "--runtime-catalog",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include runtime-discovered questionlist CSV datasets and UI-configured dataset defaults.",
+    )
+    parser.add_argument(
+        "--static-catalog",
+        action="store_true",
+        help="Use only the catalog file without runtime-discovered questionlist datasets.",
+    )
     return parser.parse_args()
 
 
@@ -595,6 +599,8 @@ def main() -> None:
     try:
         args = parse_args()
         catalog = load_config(resolve_path(args.catalog))
+        if args.runtime_catalog and not args.static_catalog:
+            catalog = build_runtime_eval_dataset_catalog(catalog)
         overrides = parse_pool_overrides(args.pool)
         seed = int(catalog.get("default_seed", 42) if args.seed is None else args.seed)
         cases, summary = compose_dataset(

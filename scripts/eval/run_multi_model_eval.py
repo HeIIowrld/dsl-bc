@@ -6651,6 +6651,7 @@ def main() -> None:
         )
     )
     judge_cache_dir = Path(args.judge_cache_dir)
+    judge_cache_active = bool(judge_configs and (args.judge_cache or args.arbiter_cache) and not args.skip_scoring)
     judge_cache_by_key = (
         load_judge_cache(
             judge_cache_dir,
@@ -6660,20 +6661,21 @@ def main() -> None:
             judge_configs=judge_configs,
             default_base_url=args.base_url,
         )
-        if (args.judge_cache or args.arbiter_cache) and not args.skip_scoring
+        if judge_cache_active
         else {}
     )
     judge_cache_lock = threading.Lock()
-    print(
-        "judge_cache="
-        + (
+    if args.skip_scoring:
+        judge_cache_status = "skipped"
+    elif judge_configs:
+        judge_cache_status = (
             f"judge={'enabled' if args.judge_cache else 'disabled'} "
             f"arbiter={'enabled' if args.arbiter_cache else 'disabled'} "
             f"dir={judge_cache_dir} entries={len(judge_cache_by_key)}"
-            if not args.skip_scoring
-            else "skipped"
         )
-    )
+    else:
+        judge_cache_status = "disabled"
+    print("judge_cache=" + judge_cache_status)
     score_fingerprints = {}
     if not args.skip_scoring:
         score_fingerprints = {
@@ -7186,8 +7188,8 @@ def main() -> None:
             "identity_rule": "cache_identity if present, otherwise strict provider/model/endpoint",
         },
         "judge_cache": {
-            "judge_enabled": bool(args.judge_cache),
-            "arbiter_enabled": bool(args.arbiter_cache),
+            "judge_enabled": bool(args.judge_cache and judge_configs),
+            "arbiter_enabled": bool(args.arbiter_cache and judge_configs),
             "dir": str(judge_cache_dir),
             "entries_loaded": len(judge_cache_by_key),
             "identity_rule": "cache_identity if present, otherwise strict provider/model/endpoint plus full judge prompt payload",

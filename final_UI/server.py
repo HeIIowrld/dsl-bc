@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import copy
 import base64
 import gzip
 import hashlib
@@ -33,8 +32,17 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from scripts.eval.compose_eval_dataset import (  # noqa: E402
     compose_dataset,
-    load_config as load_eval_catalog_config,
     write_jsonl as write_composed_jsonl,
+)
+from scripts.eval.eval_dataset_catalog import (  # noqa: E402
+    build_runtime_eval_dataset_catalog,
+    dataset_id_matches_role as runtime_dataset_id_matches_role,
+    load_config as load_eval_catalog_config,
+    load_question_dataset_settings as runtime_load_question_dataset_settings,
+    question_dataset_defaults as runtime_question_dataset_defaults,
+    question_dataset_pool_quota as runtime_question_dataset_pool_quota,
+    question_dataset_pool_specs as runtime_question_dataset_pool_specs,
+    write_question_dataset_settings as runtime_write_question_dataset_settings,
 )
 from scripts.eval.run_multi_model_eval import (  # noqa: E402
     DEFAULT_REFUSAL_KEYWORDS,
@@ -102,20 +110,6 @@ QUESTIONLIST_CSV_DIRS = [
     USER_UPLOAD_CSV_ROOT / "benchmark",
     USER_UPLOAD_CSV_ROOT / "regression",
 ]
-QUESTION_DATASET_ROLES = ("benchmark", "regression")
-FALLBACK_DEFAULT_DATASET_BY_ROLE = {
-    "benchmark": "benchmark_final_full",
-    "regression": "regression_golden_full",
-}
-DEFAULT_PROFILE_BY_ROLE = {
-    "benchmark": "benchmark_default_full",
-    "regression": "regression_default_full",
-}
-REGISTERED_ALL_PROFILE_BY_ROLE = {
-    "benchmark": "benchmark_registered_all",
-    "regression": "regression_registered_all",
-}
-
 
 def is_current_ui_data_run_id(run_id: str) -> bool:
     return str(run_id or "").strip() in CURRENT_UI_DATA_RUN_ALIASES
@@ -5742,31 +5736,6 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             composed_summary_path = str(summary_path)
         else:
             cases_path = QUESTIONLIST_DATASET_FILES.get(dataset_id)
-            discovered_csv = self.discover_question_csv_datasets().get(dataset_id)
-            if discovered_csv:
-                cases_path = log_dir / f"{job_id}_{self.safe_run_id(dataset_id)}_cases.jsonl"
-                csv_cases = list(
-                    self.iter_case_rows(
-                        discovered_csv["path"],
-                        dataset_id=discovered_csv["id"],
-                        role=discovered_csv["role"],
-                    )
-                )
-                write_composed_jsonl(cases_path, csv_cases)
-                summary_path = cases_path.with_suffix(".summary.json")
-                composed_summary = {
-                    "profile_id": dataset_id,
-                    "source_format": "csv",
-                    "source_path": self.display_path(discovered_csv["path"]),
-                    "case_count": len(csv_cases),
-                }
-                summary_path.write_text(
-                    json.dumps(composed_summary, ensure_ascii=False, indent=2, sort_keys=True)
-                    + "\n",
-                    encoding="utf-8",
-                )
-                composed_summary_path = str(summary_path)
-                is_composed_run = True
             if not cases_path:
                 pool = self.catalog_pool(dataset_id)
                 if pool:
@@ -7560,186 +7529,29 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return self.augment_eval_dataset_catalog(self.load_eval_dataset_catalog_file())
 
     def augment_eval_dataset_catalog(self, catalog: dict):
-        runtime_catalog = copy.deepcopy(catalog if isinstance(catalog, dict) else {})
-        runtime_catalog.setdefault("default_seed", 42)
-        runtime_catalog["pools"] = self.question_dataset_pool_specs(runtime_catalog)
-        profiles = runtime_catalog.get("profiles") if isinstance(runtime_catalog.get("profiles"), dict) else {}
-        profiles = copy.deepcopy(profiles)
-
-        # Keep legacy fixed-file profiles callable by ID but remove them from the main UI.
-        for legacy_profile in ("benchmark_final_full", "regression_golden_full"):
-            if isinstance(profiles.get(legacy_profile), dict):
-                profiles[legacy_profile]["ui_visible"] = False
-
-        defaults = self.question_dataset_defaults(runtime_catalog["pools"])
-        for role in QUESTION_DATASET_ROLES:
-            default_dataset_id = defaults.get(role, "")
-            default_profile_id = DEFAULT_PROFILE_BY_ROLE[role]
-            all_profile_id = REGISTERED_ALL_PROFILE_BY_ROLE[role]
-            role_label = "벤치마크" if role == "benchmark" else "회귀"
-            default_quota = self.question_dataset_pool_quota(runtime_catalog["pools"].get(default_dataset_id, {}))
-            if default_dataset_id and default_quota > 0:
-                profiles[default_profile_id] = {
-                    "label": f"기본 {role_label} 셋",
-                    "description": f"기본으로 지정된 {role_label} 테스트셋 전체를 실행합니다.",
-                    "pools": {default_dataset_id: default_quota},
-                    "ui_visible": True,
-                    "role": role,
-                    "default_dataset_id": default_dataset_id,
-                }
-
-            all_pools = {
-                pool_id: self.question_dataset_pool_quota(pool)
-                for pool_id, pool in sorted(runtime_catalog["pools"].items())
-                if isinstance(pool, dict)
-                and str(pool.get("role") or "").lower() == role
-                and bool(pool.get("registered_all_eligible", True))
-                and self.question_dataset_pool_quota(pool) > 0
-            }
-            if all_pools:
-                profiles[all_profile_id] = {
-                    "label": f"등록된 {role_label} 전체",
-                    "description": f"현재 등록되어 있는 {role_label} 테스트셋을 모두 합쳐 실행합니다.",
-                    "pools": all_pools,
-                    "ui_visible": True,
-                    "role": role,
-                    "all_registered": True,
-                }
-
-        profiles.setdefault(
-            "custom_seeded_mix",
-            {"label": "직접 구성", "pools": {}, "ui_visible": True},
+        return build_runtime_eval_dataset_catalog(
+            catalog if isinstance(catalog, dict) else {},
+            settings_path=QUESTION_DATASET_SETTINGS_PATH,
         )
-        runtime_catalog["profiles"] = profiles
-        return runtime_catalog
 
     def question_dataset_pool_specs(self, catalog: dict):
-        pools = catalog.get("pools") if isinstance(catalog.get("pools"), dict) else {}
-        specs = {}
-        catalog_paths = {}
-        for pool_id, pool in pools.items():
-            if not isinstance(pool, dict) or not pool.get("path"):
-                continue
-            try:
-                path = self.resolve_project_path(str(pool.get("path") or ""))
-            except ValueError:
-                continue
-            if not self.catalog_dataset_visible(pool, path):
-                continue
-            role = self.normalize_question_dataset_role(pool.get("role"))
-            summary = self.summarize_case_file(path, filters=pool.get("filters"), dataset_id=str(pool_id), role=role)
-            quota = int(summary.get("total") or pool.get("default_quota") or 0)
-            spec = copy.deepcopy(pool)
-            spec.update(
-                {
-                    "label": str(pool.get("label") or path.name),
-                    "path": self.display_path(path),
-                    "role": role,
-                    "default_quota": quota,
-                    "total": quota,
-                    "gate_eligible": bool(pool.get("gate_eligible", role != "benchmark")),
-                    "dataset_version": str(pool.get("dataset_version") or datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y%m%d_%H%M%S")),
-                    "registered_all_eligible": optional_bool(pool.get("registered_all_eligible")) is not False,
-                }
-            )
-            specs[str(pool_id)] = spec
-            catalog_paths[str(path.resolve()).lower()] = str(pool_id)
-
-        for dataset in self.discover_question_csv_datasets().values():
-            path = dataset["path"]
-            resolved_key = str(path.resolve()).lower()
-            if resolved_key in catalog_paths:
-                continue
-            role = self.normalize_question_dataset_role(dataset["role"])
-            summary = self.summarize_case_file(path, dataset_id=dataset["id"], role=role)
-            quota = int(summary.get("total") or 0)
-            specs[dataset["id"]] = {
-                "label": dataset["name"],
-                "path": self.display_path(path),
-                "role": role,
-                "default_quota": quota,
-                "total": quota,
-                "gate_eligible": role != "benchmark",
-                "release_gate_eligible_default": role == "regression",
-                "case_status_default": "active" if role == "regression" else "shadow",
-                "gold_verified_default": role == "regression",
-                "dataset_version": dataset["version"],
-                "is_public": not bool(dataset.get("user_uploaded")),
-                "ui_visible": True,
-                "source_format": "csv",
-                "source_directory": dataset["directory"],
-                "auto_discovered": True,
-                "user_uploaded": bool(dataset.get("user_uploaded")),
-                "registered_all_eligible": True,
-                "case_id_prefix": dataset["id"],
-            }
-        return specs
+        return runtime_question_dataset_pool_specs(catalog if isinstance(catalog, dict) else {})
 
     def question_dataset_pool_quota(self, pool: dict):
-        try:
-            return max(0, int(pool.get("total") or pool.get("default_quota") or 0))
-        except (TypeError, ValueError):
-            return 0
+        return runtime_question_dataset_pool_quota(pool if isinstance(pool, dict) else {})
 
     def question_dataset_defaults(self, pools: dict | None = None):
-        pools = pools if isinstance(pools, dict) else self.question_dataset_pool_specs(self.load_eval_dataset_catalog_file())
-        configured = self.load_question_dataset_settings().get("defaults", {})
-        defaults = {}
-        for role in QUESTION_DATASET_ROLES:
-            candidate = str(configured.get(role) or "").strip()
-            if candidate and self.dataset_id_matches_role(candidate, role, pools):
-                defaults[role] = candidate
-                continue
-            fallback = FALLBACK_DEFAULT_DATASET_BY_ROLE.get(role, "")
-            if fallback and self.dataset_id_matches_role(fallback, role, pools):
-                defaults[role] = fallback
-                continue
-            defaults[role] = next(
-                (
-                    pool_id
-                    for pool_id, pool in sorted(pools.items())
-                    if isinstance(pool, dict)
-                    and str(pool.get("role") or "").lower() == role
-                    and self.question_dataset_pool_quota(pool) > 0
-                ),
-                "",
-            )
-        return defaults
+        pool_specs = pools if isinstance(pools, dict) else self.question_dataset_pool_specs(self.load_eval_dataset_catalog_file())
+        return runtime_question_dataset_defaults(pool_specs, settings_path=QUESTION_DATASET_SETTINGS_PATH)
 
     def dataset_id_matches_role(self, dataset_id: str, role: str, pools: dict):
-        pool = pools.get(dataset_id) if isinstance(pools, dict) else None
-        return isinstance(pool, dict) and str(pool.get("role") or "").lower() == role and self.question_dataset_pool_quota(pool) > 0
+        return runtime_dataset_id_matches_role(dataset_id, role, pools if isinstance(pools, dict) else {})
 
     def load_question_dataset_settings(self):
-        if not QUESTION_DATASET_SETTINGS_PATH.exists():
-            return {"defaults": {}}
-        try:
-            raw = self.load_structured_file(QUESTION_DATASET_SETTINGS_PATH)
-        except (OSError, json.JSONDecodeError, RuntimeError):
-            return {"defaults": {}}
-        defaults = raw.get("defaults") if isinstance(raw, dict) and isinstance(raw.get("defaults"), dict) else {}
-        return {
-            "defaults": {
-                role: str(defaults.get(role) or "").strip()
-                for role in QUESTION_DATASET_ROLES
-                if str(defaults.get(role) or "").strip()
-            }
-        }
+        return runtime_load_question_dataset_settings(QUESTION_DATASET_SETTINGS_PATH)
 
     def write_question_dataset_settings(self, settings: dict):
-        defaults = settings.get("defaults") if isinstance(settings.get("defaults"), dict) else {}
-        payload = {
-            "defaults": {
-                role: str(defaults.get(role) or "").strip()
-                for role in QUESTION_DATASET_ROLES
-                if str(defaults.get(role) or "").strip()
-            }
-        }
-        QUESTION_DATASET_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        QUESTION_DATASET_SETTINGS_PATH.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        runtime_write_question_dataset_settings(settings, QUESTION_DATASET_SETTINGS_PATH)
 
     def catalog_pool(self, pool_id: str):
         pools = self.load_eval_dataset_catalog().get("pools")
