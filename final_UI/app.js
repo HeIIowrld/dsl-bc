@@ -1942,6 +1942,14 @@ function primaryJudgeModelIds() {
   return judgeModelIds().filter((id) => !isArbiterJudgeSpec(modelRegistry[id]));
 }
 
+function arbiterJudgeModelIds() {
+  return judgeModelIds().filter((id) => isArbiterJudgeSpec(modelRegistry[id]));
+}
+
+function selectedArbiterConfigId() {
+  return document.getElementById("evalArbiterConfigId")?.value || "";
+}
+
 const judgePromptPresets = {
   judge_default_v1: {
     label: "Standard Judge prompt",
@@ -2157,6 +2165,35 @@ function updateJudgeWeightSummary() {
       : (status.valid
         ? "이 비중으로 여러 Judge 점수를 가중 평균한 뒤 반영 채점에 사용합니다."
         : "실행하려면 Judge별 비중 합계가 1이어야 합니다.");
+  }
+}
+
+function renderArbiterConfigOptions() {
+  const block = document.getElementById("evalArbiterConfigBlock");
+  const select = document.getElementById("evalArbiterConfigId");
+  const help = document.getElementById("evalArbiterConfigHelp");
+  if (!block || !select) return;
+  const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
+  const baseJudgeIds = selectedJudgeConfigIds();
+  const visible = scoringMode !== "static" && baseJudgeIds.length > 1;
+  block.hidden = !visible;
+  block.classList.toggle("field-hidden", !visible);
+  const previous = select.value;
+  const arbiters = arbiterJudgeModelIds();
+  select.innerHTML = [
+    `<option value="">선택 안 함 - 충돌 시 검토 필요</option>`,
+    ...arbiters.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(modelLabelForVersion(id))}</option>`),
+  ].join("");
+  if (previous && arbiters.includes(previous)) {
+    select.value = previous;
+  }
+  select.disabled = !visible || !arbiters.length;
+  if (help) {
+    help.textContent = !visible
+      ? "여러 1차 Judge를 선택하면 중재 Judge를 지정할 수 있습니다."
+      : arbiters.length
+        ? "1차 Judge 점수가 충돌할 때만 선택한 Arbiter를 호출해 최종 점수로 반영합니다."
+        : "설정 탭에서 Arbiter conflict prompt로 중재 전용 Judge를 등록하세요.";
   }
 }
 
@@ -4669,6 +4706,7 @@ function renderJudgeRegistry() {
   enforceJudgeSelectionForScoringMode();
   syncJudgeAggregationControls();
   renderJudgeWeightInputs();
+  renderArbiterConfigOptions();
   updateJudgeHealthCheckButtonState();
   if (!list) return;
   if (!ids.length) {
@@ -6923,6 +6961,7 @@ function initializeJudgeControls() {
     updateJudgePlaceholders();
     syncJudgeAggregationControls();
     renderJudgeWeightInputs();
+    renderArbiterConfigOptions();
     renderEvalRunSummary();
     updateHeaderJudgeStatus();
   };
@@ -6932,6 +6971,7 @@ function initializeJudgeControls() {
   if (scoringMode) {
     scoringMode.addEventListener("change", refresh);
   }
+  document.getElementById("evalArbiterConfigId")?.addEventListener("change", refresh);
   ["evalJudgeBlendWeight"].forEach((id) => {
     document.getElementById(id)?.addEventListener("input", () => {
       renderEvalRunSummary();
@@ -6946,6 +6986,7 @@ function initializeJudgeControls() {
   updateJudgePlaceholders();
   syncJudgeAggregationControls();
   renderJudgeWeightInputs();
+  renderArbiterConfigOptions();
 }
 
 function updateJudgePlaceholders() {
@@ -6968,6 +7009,7 @@ function updateJudgePlaceholders() {
   if (registeredJudge) {
     renderJudgeRegistry();
   }
+  renderArbiterConfigOptions();
   if (blend) {
     blend.disabled = scoringMode !== "blend";
   }
@@ -7079,6 +7121,7 @@ function renderEvalRunSummary() {
   const answerCacheEnabled = document.getElementById("evalAnswerCacheEnabled")?.checked !== false;
   const judgeCacheEnabled = document.getElementById("evalJudgeCacheEnabled")?.checked !== false;
   const arbiterCacheEnabled = document.getElementById("evalArbiterCacheEnabled")?.checked !== false;
+  const arbiterConfigId = selectedArbiterConfigId();
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
   const runId = document.getElementById("evalRunId")?.value.trim() || "";
   const staticEmbeddingEnabled = Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
@@ -7109,6 +7152,7 @@ function renderEvalRunSummary() {
       judgeCount ? `Judge ${judgeCount}개` : "",
       judgeCount > 1 ? judgeAggregationLabels[aggregationMethod] : "",
       judgeWeightStatus ? `Judge 비중 ${judgeWeightStatus.total.toFixed(2)}` : "",
+      scoringMode !== "static" && judgeCount > 1 ? `Arbiter ${arbiterConfigId ? modelLabelForVersion(arbiterConfigId) : "선택 안 함"}` : "",
       answerCacheEnabled ? "답변 캐시 사용" : "새 답변 생성",
       scoringMode !== "static" ? (judgeCacheEnabled ? "채점 캐시 사용" : "새 채점 생성") : "",
       scoringMode !== "static" && judgeCount > 1 ? (arbiterCacheEnabled ? "Arbiter 캐시 사용" : "새 Arbiter 생성") : "",
@@ -7227,6 +7271,7 @@ function confirmEvalRunStart({
   limit,
   selectedScoringMode,
   judgeConfigIds,
+  arbiterConfigId,
   customPlan,
   answerCacheEnabled,
   judgeCacheEnabled,
@@ -7255,6 +7300,7 @@ function confirmEvalRunStart({
     `대상 모델: ${configs.length.toLocaleString()}개`,
     `채점 방식: ${scoringLabel}`,
     selectedScoringMode !== "static" ? `Judge: ${judgeConfigIds.length.toLocaleString()}개` : "",
+    selectedScoringMode !== "static" && judgeConfigIds.length > 1 ? `Arbiter: ${arbiterConfigId ? modelLabelForVersion(arbiterConfigId) : "선택 안 함"}` : "",
     answerCacheEnabled ? "답변 캐시: 사용" : "답변 캐시: 사용 안 함",
     selectedScoringMode !== "static" ? (judgeCacheEnabled ? "채점 답변 캐시: 사용" : "채점 답변 캐시: 사용 안 함") : "",
     selectedScoringMode !== "static" && judgeConfigIds.length > 1 ? (arbiterCacheEnabled ? "Arbiter 답변 캐시: 사용" : "Arbiter 답변 캐시: 사용 안 함") : "",
@@ -7285,6 +7331,7 @@ async function startEvalRun(options = {}) {
   const staticEmbeddingBaseUrl = document.getElementById("evalStaticEmbeddingBaseUrl")?.value || "";
   const judgeProvider = "registered";
   const judgeConfigIds = selectedJudgeConfigIds();
+  const arbiterConfigId = selectedScoringMode !== "static" && judgeConfigIds.length > 1 ? selectedArbiterConfigId() : "";
   const judgeAggregationMethod = selectedJudgeAggregationMethod();
   const judgeModel = "";
   const judgeApiKey = "";
@@ -7350,6 +7397,7 @@ async function startEvalRun(options = {}) {
     limit,
     selectedScoringMode,
     judgeConfigIds,
+    arbiterConfigId,
     customPlan,
     answerCacheEnabled,
     judgeCacheEnabled,
@@ -7398,6 +7446,8 @@ async function startEvalRun(options = {}) {
         blend_weight: judgeBlendWeight,
         aggregation_method: judgeAggregationMethod,
         score_weights: judgeAggregationMethod === "weighted_mean" ? collectJudgeScoreWeights(judgeConfigIds) : {},
+        conflict_policy: arbiterConfigId ? "arbiter_override" : "review",
+        arbiter_config_id: arbiterConfigId,
       },
       dry_run: dryRun,
       export_final_ui: exportFinalUi,
@@ -7509,6 +7559,7 @@ function renderEvalJob(job) {
       ${job.composed_summary_path ? `<span>요약: ${escapeHtml(job.composed_summary_path)}</span>` : ""}
       ${job.static_embedding_model ? `<span>임베딩: ${escapeHtml(job.static_embedding_model)}${job.static_embedding_base_url ? ` · ${escapeHtml(job.static_embedding_base_url)}` : ""}</span>` : ""}
       ${job.judge_config ? `<span>Judge: ${escapeHtml(job.judge_config)} ${escapeHtml(job.judge_mode || "")}</span>` : ""}
+      ${job.arbiter_config_id ? `<span>Arbiter: ${escapeHtml(job.arbiter_config_id)}</span>` : ""}
       ${job.answer_cache !== undefined ? `<span>답변 캐시: ${job.answer_cache ? "사용" : "꺼짐"}</span>` : ""}
       ${job.judge_config ? `<span>채점 캐시: ${job.judge_cache ? "사용" : "꺼짐"}</span>` : ""}
       ${job.judge_config && (job.judge_config_ids || []).length > 1 ? `<span>Arbiter 캐시: ${job.arbiter_cache ? "사용" : "꺼짐"}</span>` : ""}

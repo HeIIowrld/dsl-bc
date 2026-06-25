@@ -440,6 +440,10 @@
               <div id="evalJudgeWeights" class="judge-weights"></div>
               <small id="evalJudgeWeightsHelp" class="field-help">선택한 채점 모델 점수 비중의 합계가 1이 되도록 입력합니다.</small>
             </div>
+            <label id="evalArbiterConfigBlock" hidden>중재 Judge
+              <select id="evalArbiterConfigId" name="arbiter_config_id"></select>
+              <small id="evalArbiterConfigHelp" class="field-help">1차 Judge가 충돌할 때만 선택한 Arbiter를 호출해 최종 점수로 반영합니다.</small>
+            </label>
             <label hidden>규칙 점수와 LLM 점수 반영 비율
               <input id="evalJudgeBlendWeight" name="judge_blend_weight" type="range" min="0" max="1" step="0.05" value="0.5">
               <small id="evalBlendWeightHelp" class="field-help">0.50 = LLM 50%, Rule 50%로 반영 점수에 적용합니다.</small>

@@ -5832,6 +5832,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         judge_config_label = ""
         judge_score_weights = {}
         judge_aggregation_method = self.judge_aggregation_method_from_payload(judge_payload)
+        conflict_policy = str(judge_payload.get("conflict_policy") or "review").strip()
+        if conflict_policy not in {"review", "arbiter_override", "three_judge"}:
+            self.send_json({"error": f"unknown conflict_policy: {conflict_policy}"}, status=400)
+            return
+        arbiter_config_id = self.safe_config_id(judge_payload.get("arbiter_config_id") or "")
         judge_mode = {
             "static_llm": "audit",
             "llm_override": "override",
@@ -5868,6 +5873,25 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 if weight_error:
                     self.send_json({"error": weight_error}, status=400)
                     return
+            if len(judge_config_ids) > 1 and arbiter_config_id:
+                if arbiter_config_id not in registry:
+                    self.send_json({"error": f"unknown arbiter config: {arbiter_config_id}"}, status=400)
+                    return
+                arbiter_config = registry[arbiter_config_id]
+                token, api_key_env = self.provider_api_key_value(arbiter_config)
+                if token and api_key_env:
+                    subprocess_env[api_key_env] = token
+                if arbiter_config.get("provider") != "ollama" and api_key_env and not dry_run and not subprocess_env.get(api_key_env):
+                    self.send_json({"error": f"API key is required for arbiter config {arbiter_config_id}."}, status=400)
+                    return
+                if conflict_policy == "review":
+                    conflict_policy = "arbiter_override"
+            elif len(judge_config_ids) <= 1:
+                arbiter_config_id = ""
+                conflict_policy = "review"
+            elif conflict_policy in {"arbiter_override", "three_judge"}:
+                self.send_json({"error": "Arbiter conflict handling requires an arbiter config."}, status=400)
+                return
             judge_config_label = ", ".join(judge_config_ids)
             runner_config_path = judge_result.get("runner_config_path", "")
 
@@ -5956,6 +5980,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     cmd.extend(["--judge-config", selected_judge_config_id])
                 cmd.extend(["--judge-mode", judge_mode])
                 cmd.extend(["--judge-aggregation-method", judge_aggregation_method])
+                cmd.extend(["--conflict-policy", conflict_policy])
+                if arbiter_config_id:
+                    cmd.extend(["--arbiter-config", arbiter_config_id])
                 if judge_aggregation_method == "weighted_mean" and len(judge_score_weights) > 1:
                     cmd.extend(["--judge-score-weights", json.dumps(judge_score_weights, ensure_ascii=False, sort_keys=True)])
                 if scoring_mode == "blend":
@@ -5994,6 +6021,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "judge_blend_weight": judge_blend_weight if judge_config_ids else "",
             "judge_aggregation_method": judge_aggregation_method if judge_config_ids else "",
             "judge_score_weights": judge_score_weights if judge_config_ids else {},
+            "conflict_policy": conflict_policy if judge_config_ids else "",
+            "arbiter_config_id": arbiter_config_id if judge_config_ids else "",
             "dry_run": dry_run,
             "export_final_ui": export_final_ui,
             "prediction_file": resolved_prediction_file or prediction_file,

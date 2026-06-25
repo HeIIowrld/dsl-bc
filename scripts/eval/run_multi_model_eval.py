@@ -1504,6 +1504,8 @@ def score_fingerprint(
     static_similarity: dict[str, Any],
     judge_score_weights: dict[str, float] | None = None,
     judge_aggregation_method: str = "auto",
+    arbiter_judge_context: dict[str, Any] | None = None,
+    conflict_policy: str = "review",
     arbiter_context: dict[str, Any] | None = None,
 ) -> str:
     return fingerprint_payload(
@@ -1520,6 +1522,12 @@ def score_fingerprint(
                 for key, value in sorted((judge_score_weights or {}).items())
             },
             "judge_configs": [sanitize_runner_registry_config(config) for config in judge_configs],
+            "conflict_policy": conflict_policy,
+            "arbiter_judge_config": (
+                sanitize_runner_registry_config(arbiter_judge_context.get("judge_config", {}))
+                if isinstance(arbiter_judge_context, dict)
+                else {}
+            ),
             "arbiter_context": arbiter_context or {},
             "pass_threshold": round(safe_float(pass_threshold), 6),
             "refusal_keywords": refusal_keywords,
@@ -4840,6 +4848,126 @@ def judge_conflict_summary(judge_scores: list[dict[str, Any]]) -> tuple[bool, st
     return bool(reasons), "; ".join(reasons)
 
 
+def judge_identity(score: dict[str, Any]) -> str:
+    return str(score.get("config_id") or score.get("model") or score.get("provider") or "").strip()
+
+
+def judge_gap_fields(
+    judge_scores: list[dict[str, Any]],
+    *,
+    base_judge_scores: list[dict[str, Any]] | None = None,
+    arbiter_score: dict[str, Any] | None = None,
+    arbiter_config_id: str = "",
+    arbiter_override: bool = False,
+) -> dict[str, Any]:
+    if not judge_scores:
+        return {}
+    totals = [safe_float(score.get("overall_score")) for score in judge_scores]
+    pass_values = [score_policy_pass(score) for score in judge_scores]
+    base_scores = base_judge_scores or judge_scores
+    base_totals = [safe_float(score.get("overall_score")) for score in base_scores]
+    score_min = min(totals)
+    score_max = max(totals)
+    return {
+        "judge_score_gap": round(score_max - score_min, 2),
+        "judge_score_min": round(score_min, 2),
+        "judge_score_max": round(score_max, 2),
+        "judge_pass_mismatch": len(set(pass_values)) > 1,
+        "judge_base_average_score": round(sum(base_totals) / len(base_totals), 2) if base_totals else "",
+        "judge_arbiter_score": round(llm_judge_overall(arbiter_score), 2) if arbiter_score else "",
+        "judge_arbiter_override": arbiter_override,
+        "judge_arbiter_config_id": arbiter_config_id,
+    }
+
+
+def judge_individual_score_entry(score: dict[str, Any], *, role: str = "judge") -> dict[str, Any]:
+    return {
+        "role": role,
+        "config_id": score.get("config_id"),
+        "provider": score.get("provider"),
+        "model": score.get("model"),
+        "target_config_id": score.get("target_config_id", ""),
+        "target_provider": score.get("target_provider", ""),
+        "target_model": score.get("target_model", ""),
+        "target_output_fingerprint": score.get("target_output_fingerprint", ""),
+        "prompt_version": score.get("prompt_version"),
+        "prompt_hash": score.get("prompt_hash"),
+        "system_prompt_preset": score.get("system_prompt_preset"),
+        "score_schema": score.get("score_schema", ""),
+        "omnieval_accuracy": score.get("omnieval_accuracy"),
+        "omnieval_completeness": score.get("omnieval_completeness"),
+        "omnieval_numerical_accuracy": score.get("omnieval_numerical_accuracy"),
+        "omnieval_hallucination": score.get("omnieval_hallucination"),
+        "omnieval_scores": score.get("omnieval_scores"),
+        "hal": score.get("hal"),
+        "hal_rate": score.get("hal_rate"),
+        **{key: score.get(key) for key in SCORE_METRIC_KEYS},
+        "applicable_metrics": score.get("applicable_metrics", ",".join(metric_keys_for_score(score))),
+        "score_denominator": score.get("score_denominator", score_denominator(score)),
+        "raw_metric_score": score.get("raw_metric_score", raw_metric_score(score)),
+        "answer_quality_score": score.get("answer_quality_score", score_total_from_metrics(score)),
+        "rag_quality_score": score.get("rag_quality_score", score_total_from_metrics(score)),
+        "overall_score": llm_judge_overall(score),
+        "pass": score_policy_pass(score),
+        "critical_fail": score.get("critical_fail"),
+        "error_type": score.get("error_type"),
+        "reason": score.get("reason"),
+        "raw_response_text": score.get("raw_response_text", ""),
+        "raw_response_excerpt": score.get(
+            "raw_response_excerpt",
+            response_excerpt(score.get("raw_response_text", "")),
+        ),
+        "raw_response_fingerprint": score.get("raw_response_fingerprint", ""),
+        "judge_attempt_count": score.get("judge_attempt_count", 1),
+        "judge_retry_count": score.get("judge_retry_count", 0),
+        "judge_cache_key": score.get("judge_cache_key", ""),
+        "judge_cache_hit": score.get("judge_cache_hit", ""),
+        "judge_cache_role": score.get("judge_cache_role", ""),
+        "judge_cache_source_stored_at": score.get("judge_cache_source_stored_at", ""),
+        "judge_cache_source_target_config_id": score.get("judge_cache_source_target_config_id", ""),
+        "judge_cache_source_target_provider": score.get("judge_cache_source_target_provider", ""),
+        "judge_cache_source_target_model": score.get("judge_cache_source_target_model", ""),
+        "judge_cache_source_target_output_fingerprint": score.get("judge_cache_source_target_output_fingerprint", ""),
+    }
+
+
+def arbiter_context_from_judge_score(judge_score: dict[str, Any]) -> dict[str, Any]:
+    individual_scores = judge_score.get("individual_scores")
+    if not isinstance(individual_scores, list):
+        individual_scores = []
+    base_judges = []
+    for score in individual_scores:
+        if not isinstance(score, dict):
+            continue
+        base_judges.append(
+            {
+                "role": score.get("role") or "judge",
+                "config_id": score.get("config_id"),
+                "provider": score.get("provider"),
+                "model": score.get("model"),
+                "overall_score": score.get("overall_score"),
+                "pass": score.get("pass"),
+                "critical_fail": score.get("critical_fail"),
+                "error_type": score.get("error_type"),
+                "reason": score.get("reason"),
+                "acc": score.get("acc"),
+                "com": score.get("com"),
+                "nac": score.get("nac"),
+                "hal_pass": score.get("hal_pass"),
+                "prompt_version": score.get("prompt_version"),
+                "prompt_hash": score.get("prompt_hash"),
+            }
+        )
+    return {
+        "conflict_reason": judge_score.get("judge_conflict_reason", ""),
+        "score_gap": judge_score.get("judge_score_gap", ""),
+        "score_min": judge_score.get("judge_score_min", ""),
+        "score_max": judge_score.get("judge_score_max", ""),
+        "pass_mismatch": judge_score.get("judge_pass_mismatch", ""),
+        "base_judges": base_judges,
+    }
+
+
 def parse_judge_score_weights(value: Any) -> dict[str, float]:
     if not value:
         return {}
@@ -4936,6 +5064,7 @@ def aggregate_llm_judge_scores(
             "individual_scores",
             [
                 {
+                    "role": score.get("role", "judge"),
                     "config_id": score.get("config_id"),
                     "provider": score.get("provider"),
                     "model": score.get("model"),
@@ -5139,8 +5268,10 @@ def aggregate_llm_judge_scores(
             ),
             "judge_conflict": conflict,
             "judge_conflict_reason": conflict_reason,
+            **judge_gap_fields(judge_scores),
             "individual_scores": [
                 {
+                    "role": score.get("role", "judge"),
                     "config_id": score.get("config_id"),
                     "provider": score.get("provider"),
                     "model": score.get("model"),
@@ -5288,6 +5419,14 @@ def apply_llm_judge(
             "llm_judge_conflict_reason": judge_score.get("judge_conflict_reason", ""),
             "llm_judge_conflict_resolution_policy": judge_score.get("judge_conflict_resolution_policy", ""),
             "llm_judge_arbiter_config_id": judge_score.get("judge_arbiter_config_id", ""),
+            "llm_judge_arbitration_status": judge_score.get("judge_arbitration_status", ""),
+            "llm_judge_score_gap": judge_score.get("judge_score_gap", ""),
+            "llm_judge_score_min": judge_score.get("judge_score_min", ""),
+            "llm_judge_score_max": judge_score.get("judge_score_max", ""),
+            "llm_judge_pass_mismatch": judge_score.get("judge_pass_mismatch", False),
+            "llm_judge_base_average_score": judge_score.get("judge_base_average_score", ""),
+            "llm_judge_arbiter_score": judge_score.get("judge_arbiter_score", ""),
+            "llm_judge_arbiter_override": bool(judge_score.get("judge_arbiter_override", False)),
             "llm_judge_scores": json.dumps(
                 {
                     "normalized": {
@@ -5482,11 +5621,16 @@ def score_with_optional_llm_judge(
                 flush=True,
             )
 
-        def score_judge_context(context: dict[str, Any]) -> dict[str, Any]:
+        def score_judge_context(
+            context: dict[str, Any],
+            *,
+            arbiter_context_override: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
             parse_retry_count = 0
             max_parse_attempts = 2
             for attempt in range(1, max_parse_attempts + 1):
                 try:
+                    effective_arbiter_context = arbiter_context_override if arbiter_context_override is not None else arbiter_context
                     score = run_llm_judge(
                         case=case,
                         output=output,
@@ -5497,7 +5641,7 @@ def score_with_optional_llm_judge(
                         api_provider=api_provider,
                         keep_alive=keep_alive,
                         installed_models=context.get("installed_models", set()),
-                        arbiter_context=arbiter_context,
+                        arbiter_context=effective_arbiter_context,
                         judge_cache_enabled=judge_cache_enabled,
                         arbiter_cache_enabled=arbiter_cache_enabled,
                         judge_cache_dir=judge_cache_dir,
@@ -5621,6 +5765,10 @@ def score_with_optional_llm_judge(
             aggregation_method=judge_aggregation_method,
         )
         judge_score["judge_success_count"] = len(judge_scores)
+        if judge_score.get("judge_conflict"):
+            judge_score["judge_conflict_detected"] = True
+            judge_score["judge_unresolved_conflict"] = True
+            judge_score["judge_conflict_resolution_policy"] = "review"
         if judge_failures:
             failure_reason = "; ".join(
                 f"{failure.get('config_id') or failure.get('model')}: {failure.get('reason')}"
@@ -5641,6 +5789,121 @@ def score_with_optional_llm_judge(
                 ]
                 if item
             )
+        normalized_conflict_policy = str(conflict_policy or "review").strip()
+        if normalized_conflict_policy not in {"review", "arbiter_override", "three_judge"}:
+            normalized_conflict_policy = "review"
+        if (
+            judge_score.get("judge_conflict")
+            and normalized_conflict_policy in {"arbiter_override", "three_judge"}
+            and arbiter_judge_context
+        ):
+            arbiter_config = arbiter_judge_context.get("judge_config") if isinstance(arbiter_judge_context.get("judge_config"), dict) else {}
+            arbiter_config_id = str(arbiter_config.get("config_id") or arbiter_config.get("model") or "").strip()
+            arbiter_review_context = arbiter_context_from_judge_score(judge_score)
+            try:
+                arbiter_score = score_judge_context(
+                    arbiter_judge_context,
+                    arbiter_context_override=arbiter_review_context,
+                )
+                arbiter_score["role"] = "arbiter"
+                if normalized_conflict_policy == "three_judge":
+                    three_judge_weights = (
+                        judge_score_weights
+                        if arbiter_config_id and arbiter_config_id in (judge_score_weights or {})
+                        else None
+                    )
+                    resolved_score = aggregate_llm_judge_scores(
+                        [*judge_scores, arbiter_score],
+                        score_weights=three_judge_weights,
+                        aggregation_method=judge_aggregation_method,
+                    )
+                    resolved_score["individual_scores"] = [
+                        *[
+                            {**item, "role": item.get("role") or "judge"}
+                            for item in judge_score.get("individual_scores", [])
+                            if isinstance(item, dict)
+                        ],
+                        judge_individual_score_entry(arbiter_score, role="arbiter"),
+                    ]
+                    resolved_score["judge_conflict_reason"] = "; ".join(
+                        item
+                        for item in [
+                            str(judge_score.get("judge_conflict_reason") or "").strip(),
+                            "resolved by 3-judge aggregation including arbiter",
+                        ]
+                        if item
+                    )
+                    arbiter_override = False
+                else:
+                    resolved_score = dict(arbiter_score)
+                    resolved_score["judge_count"] = len(judge_scores) + 1
+                    resolved_score["individual_scores"] = [
+                        *[
+                            {**item, "role": item.get("role") or "judge"}
+                            for item in judge_score.get("individual_scores", [])
+                            if isinstance(item, dict)
+                        ],
+                        judge_individual_score_entry(arbiter_score, role="arbiter"),
+                    ]
+                    resolved_score["judge_conflict_reason"] = "; ".join(
+                        item
+                        for item in [
+                            str(judge_score.get("judge_conflict_reason") or "").strip(),
+                            f"resolved by arbiter override: {arbiter_config_id or judge_identity(arbiter_score)}",
+                        ]
+                        if item
+                    )
+                    arbiter_override = True
+                resolved_score.update(
+                    {
+                        "judge_conflict": True,
+                        "judge_conflict_detected": True,
+                        "judge_unresolved_conflict": False,
+                        "judge_conflict_resolution_policy": normalized_conflict_policy,
+                        "judge_arbitration_status": "arbiter_applied",
+                        **judge_gap_fields(
+                            [*judge_scores, arbiter_score],
+                            base_judge_scores=judge_scores,
+                            arbiter_score=arbiter_score,
+                            arbiter_config_id=arbiter_config_id,
+                            arbiter_override=arbiter_override,
+                        ),
+                    }
+                )
+                judge_score = resolved_score
+            except ProviderPolicyRefusalError as exc:
+                judge_score["judge_arbitration_status"] = "refused_by_provider_policy"
+                judge_score["judge_arbiter_config_id"] = arbiter_config_id
+                judge_score["judge_unresolved_conflict"] = True
+                judge_score["judge_conflict_resolution_policy"] = "review"
+                judge_score["judge_conflict_reason"] = "; ".join(
+                    item
+                    for item in [
+                        str(judge_score.get("judge_conflict_reason") or "").strip(),
+                        f"arbiter refused by provider policy: {exc}",
+                    ]
+                    if item
+                )
+            except (
+                urllib.error.HTTPError,
+                urllib.error.URLError,
+                TimeoutError,
+                json.JSONDecodeError,
+                RuntimeError,
+                ValueError,
+            ) as exc:
+                judge_score["judge_arbitration_status"] = "error"
+                judge_score["judge_arbiter_config_id"] = arbiter_config_id
+                judge_score["judge_unresolved_conflict"] = True
+                judge_score["judge_conflict_resolution_policy"] = "review"
+                judge_score["judge_conflict_reason"] = "; ".join(
+                    item
+                    for item in [
+                        str(judge_score.get("judge_conflict_reason") or "").strip(),
+                        f"arbiter failed; manual review required: {exc}",
+                    ]
+                    if item
+                )
         if uses_omnieval_quality_gate_score(judge_score):
             judge_score["pass"] = score_policy_pass(judge_score, pass_threshold)
         judge_config = {
@@ -6465,6 +6728,17 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="How to combine multiple judge scores: weighted_mean, mean, trimmed_mean, max, min, or auto.",
     )
+    parser.add_argument(
+        "--conflict-policy",
+        choices=["review", "arbiter_override", "three_judge"],
+        default="review",
+        help="How to handle base judge conflicts when multiple judges are selected.",
+    )
+    parser.add_argument(
+        "--arbiter-config",
+        default="",
+        help="Optional judge config_id to call only for conflicting multi-judge cases.",
+    )
     parser.add_argument("--static-embedding-model", default=None, help="Optional Ollama embedding model for static semantic similarity.")
     parser.add_argument("--static-embedding-base-url", default=None, help="Optional Ollama base URL for static embedding similarity.")
     parser.add_argument(
@@ -6498,6 +6772,30 @@ def main() -> None:
         judge_score_weights = parse_judge_score_weights(
             args.judge_score_weights or judge_settings.get("score_weights") or {}
         )
+    conflict_policy = str(args.conflict_policy or "review").strip()
+    if conflict_policy not in {"review", "arbiter_override", "three_judge"}:
+        conflict_policy = "review"
+    arbiter_config_id = str(args.arbiter_config or "").strip()
+    arbiter_judge_config: dict[str, Any] | None = None
+    if not args.skip_scoring and judge_configs:
+        by_id = registry_by_id(registry)
+        if arbiter_config_id:
+            if arbiter_config_id not in by_id:
+                raise SystemExit(f"Unknown arbiter config_id in model registry: {arbiter_config_id}")
+            arbiter_judge_config = by_id[arbiter_config_id]
+            judge_configs = [
+                config
+                for config in judge_configs
+                if str(config.get("config_id") or "") != arbiter_config_id
+            ]
+        if conflict_policy in {"arbiter_override", "three_judge"}:
+            if not arbiter_judge_config:
+                raise SystemExit("--arbiter-config is required when conflict-policy uses an arbiter")
+            if len(judge_configs) < 2:
+                raise SystemExit("arbiter conflict handling requires at least two base judge configs")
+        else:
+            arbiter_judge_config = None
+            arbiter_config_id = ""
     suites = suites_for_run(args.suites, eval_run.get("suites"), has_cases_file=bool(args.cases_file))
     if args.cases_file:
         cases, case_source = load_cases_file(Path(args.cases_file), suites=suites, limit=args.limit)
@@ -6539,6 +6837,8 @@ def main() -> None:
         if judge_score_weights:
             print("judge_score_weights=" + json.dumps(judge_score_weights, ensure_ascii=False, sort_keys=True))
         print(f"judge_aggregation_method={judge_aggregation_method}")
+        if arbiter_judge_config:
+            print(f"judge_conflict_policy={conflict_policy} arbiter_config={arbiter_config_id}")
     print(f"checkpoint_dir={run_dir}")
     print(f"resume={'enabled' if args.resume else 'disabled'}")
 
@@ -6568,7 +6868,8 @@ def main() -> None:
         timeout=args.timeout,
     )
     api_provider = HttpChatProvider(timeout=args.timeout)
-    ollama_configs = configs + [config for config in judge_configs if config.get("provider") == "ollama"]
+    arbiter_ollama_configs = [arbiter_judge_config] if arbiter_judge_config and arbiter_judge_config.get("provider") == "ollama" else []
+    ollama_configs = configs + [config for config in judge_configs if config.get("provider") == "ollama"] + arbiter_ollama_configs
     installed_models_by_base_url = ensure_ollama_models_by_endpoint(
         configs=ollama_configs,
         provider_cache=provider_cache,
@@ -6691,6 +6992,12 @@ def main() -> None:
                 static_similarity=static_similarity_summary,
                 judge_score_weights=judge_score_weights,
                 judge_aggregation_method=judge_aggregation_method,
+                arbiter_judge_context=(
+                    {"judge_config": arbiter_judge_config}
+                    if arbiter_judge_config
+                    else None
+                ),
+                conflict_policy=conflict_policy,
             )
             for key, output_hash in output_fingerprints.items()
         }
@@ -6850,6 +7157,26 @@ def main() -> None:
                         f"JUDGE_START [{config['config_id']}] {index}/{len(cases)} "
                         f"{case['case_id']} judges={len(judge_configs)}"
                     )
+                arbiter_judge_context = None
+                if arbiter_judge_config:
+                    arbiter_provider = (
+                        ollama_provider_for_config(arbiter_judge_config, provider_cache, default_base_url=args.base_url, timeout=args.timeout)
+                        if arbiter_judge_config.get("provider") == "ollama"
+                        else provider
+                    )
+                    arbiter_installed_models = (
+                        installed_models_by_base_url.get(
+                            ollama_base_url_for_config(arbiter_judge_config, default_base_url=args.base_url),
+                            set(),
+                        )
+                        if arbiter_judge_config.get("provider") == "ollama"
+                        else set()
+                    )
+                    arbiter_judge_context = {
+                        "judge_config": arbiter_judge_config,
+                        "provider": arbiter_provider,
+                        "installed_models": arbiter_installed_models,
+                    }
                 score = score_with_optional_llm_judge(
                     case=case,
                     output=output,
@@ -6861,6 +7188,8 @@ def main() -> None:
                     judge_blend_weight=judge_blend_weight,
                     judge_score_weights=judge_score_weights,
                     judge_aggregation_method=judge_aggregation_method,
+                    arbiter_judge_context=arbiter_judge_context,
+                    conflict_policy=conflict_policy,
                     scoring_mode=scoring_mode,
                     api_provider=api_provider,
                     keep_alive=args.keep_alive,
@@ -7154,6 +7483,8 @@ def main() -> None:
         "static_similarity": static_similarity_summary,
         "judge_aggregation_method": judge_aggregation_method,
         "judge_score_weights": judge_score_weights,
+        "judge_conflict_policy": conflict_policy if judge_configs else "",
+        "judge_arbiter_config_id": arbiter_config_id if arbiter_judge_config else "",
         "baseline_config": baseline_config,
         "configs": [config.get("config_id") for config in configs],
         "case_count": len(cases),
@@ -7178,6 +7509,8 @@ def main() -> None:
             "judge_aggregation_method": judge_aggregation_method,
             "judge_score_weights": judge_score_weights,
             "judge_configs": [config.get("config_id") for config in judge_configs],
+            "judge_conflict_policy": conflict_policy if judge_configs else "",
+            "judge_arbiter_config_id": arbiter_config_id if arbiter_judge_config else "",
             "pass_threshold": pass_threshold,
             "static_similarity": static_similarity_summary,
         },
@@ -7189,7 +7522,7 @@ def main() -> None:
         },
         "judge_cache": {
             "judge_enabled": bool(args.judge_cache and judge_configs),
-            "arbiter_enabled": bool(args.arbiter_cache and judge_configs),
+            "arbiter_enabled": bool(args.arbiter_cache and arbiter_judge_config),
             "dir": str(judge_cache_dir),
             "entries_loaded": len(judge_cache_by_key),
             "identity_rule": "cache_identity if present, otherwise strict provider/model/endpoint plus full judge prompt payload",
