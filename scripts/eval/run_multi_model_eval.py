@@ -1355,17 +1355,21 @@ def load_judge_cache(
     include_arbiter: bool = True,
     target_configs: list[dict[str, Any]] | None = None,
     judge_configs: list[dict[str, Any]] | None = None,
+    arbiter_configs: list[dict[str, Any]] | None = None,
     default_base_url: str = DEFAULT_OLLAMA_BASE_URL,
 ) -> dict[str, dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     targets = target_configs or []
     judges = judge_configs or []
+    arbiter_configs_provided = arbiter_configs is not None
+    arbiters = arbiter_configs if arbiter_configs_provided else judges
+    arbiters = arbiters or []
 
-    if targets and judges:
+    if targets and (judges or arbiters or arbiter_configs_provided):
         for target_config in targets:
             target_ns = answer_cache_namespace(target_config, default_base_url=default_base_url)
             target_root = cache_dir / "by_answer_model" / target_ns
-            if include_judge:
+            if include_judge and judges:
                 for judge_config in judges:
                     judge_ns = judge_model_namespace(judge_config, role="judge", default_base_url=default_base_url)
                     root = target_root / "by_judge" / judge_ns
@@ -1374,9 +1378,9 @@ def load_judge_cache(
                             key = str(row.get("judge_cache_key") or row.get("cache_key") or "")
                             if key and cacheable_judge_score(row):
                                 rows[key] = row
-            if include_arbiter:
-                for judge_config in judges:
-                    arbiter_ns = judge_model_namespace(judge_config, role="arbiter", default_base_url=default_base_url)
+            if include_arbiter and arbiters:
+                for arbiter_config in arbiters:
+                    arbiter_ns = judge_model_namespace(arbiter_config, role="arbiter", default_base_url=default_base_url)
                     for path in sorted((target_root / "by_judge_set").glob(f"*/by_arbiter/{arbiter_ns}/shards/*.jsonl")):
                         for row in iter_jsonl_dicts(path):
                             key = str(row.get("judge_cache_key") or row.get("cache_key") or "")
@@ -1390,6 +1394,7 @@ def load_judge_cache(
                     key = str(row.get("judge_cache_key") or row.get("cache_key") or "")
                     if key and cacheable_judge_score(row):
                         rows[key] = row
+    if not targets or (not arbiters and not arbiter_configs_provided):
         if include_arbiter:
             for path in sorted((cache_dir / "by_answer_model").glob("*/by_judge_set/*/by_arbiter/*/shards/*.jsonl")):
                 for row in iter_jsonl_dicts(path):
@@ -6960,6 +6965,7 @@ def main() -> None:
             include_arbiter=bool(args.arbiter_cache),
             target_configs=configs,
             judge_configs=judge_configs,
+            arbiter_configs=[arbiter_judge_config] if arbiter_judge_config else [],
             default_base_url=args.base_url,
         )
         if judge_cache_active

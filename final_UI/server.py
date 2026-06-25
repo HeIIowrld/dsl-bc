@@ -6191,7 +6191,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                     return
             if conflict_policy in {"arbiter_override", "three_judge"} and len(judge_config_ids) > 1:
                 if not arbiter_config_id:
-                    arbiter_config_id = "openai_gpt55_judge"
+                    self.send_json({"error": "Arbiter conflict handling requires an arbiter config."}, status=400)
+                    return
                 if arbiter_config_id not in registry:
                     self.send_json({"error": f"unknown arbiter config: {arbiter_config_id}"}, status=400)
                     return
