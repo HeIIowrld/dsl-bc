@@ -21,11 +21,15 @@ from scripts.eval.run_multi_model_eval import (
     apply_llm_judge,
     load_cases_file,
     load_config,
+    normalize_pass_threshold,
     normalized_judge_score_weights,
     parse_judge_score_weights,
+    raw_metric_score,
     read_jsonl,
     safe_float,
+    score_denominator,
     score_fingerprint,
+    score_total_from_metrics,
     write_csv,
     write_jsonl,
 )
@@ -111,64 +115,42 @@ def truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
 
-def score_uses_zero_one_scale(score: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(score.get(field) or "")
-        for field in (
-            "score_scale",
-            "source_score_scale",
-            "score_schema",
-            "prompt_version",
-            "llm_judge_prompt_version",
-            "system_prompt_preset",
-        )
-    ).lower()
-    return "0_1" in text or "utl_na_0_1" in text
-
-
-def score_to_points(value: Any, score: dict[str, Any]) -> float:
-    number = safe_float(value)
-    if score_uses_zero_one_scale(score) and 0 <= number <= 1:
-        return round(number * 100.0, 4)
-    return number
-
-
-def metric_to_points(value: Any, score: dict[str, Any]) -> float:
-    number = safe_float(value)
-    if score_uses_zero_one_scale(score) and 0 <= number <= 1:
-        return round(number * 20.0, 4)
-    return number
-
-
-def normalize_judge_score_scale(score: dict[str, Any], source_row: dict[str, Any] | None = None) -> dict[str, Any]:
-    source_row = source_row or {}
-    merged = {**source_row, **score}
+def normalize_judge_score(score: dict[str, Any], source_row: dict[str, Any] | None = None) -> dict[str, Any]:
     normalized = dict(score)
+    omnieval_scores = parse_json_field(normalized.get("omnieval_scores"), {})
+    if not normalized.get("applicable_metrics") and isinstance(omnieval_scores, dict):
+        applicable_metrics = ["acc"]
+        if safe_float(omnieval_scores.get("completeness"), -1) >= 0:
+            applicable_metrics.append("com")
+        if safe_float(omnieval_scores.get("numerical_accuracy"), -1) >= 0:
+            applicable_metrics.append("nac")
+        applicable_metrics.append("hal_pass")
+        normalized["applicable_metrics"] = ",".join(applicable_metrics)
     for key in SCORE_METRIC_KEYS:
-        normalized[key] = metric_to_points(normalized.get(key), merged)
-    normalized.setdefault("score_denominator", len(SCORE_METRIC_KEYS) * 20)
-    normalized["raw_metric_score"] = sum(safe_float(normalized.get(key)) for key in SCORE_METRIC_KEYS)
+        normalized[key] = safe_float(normalized.get(key))
+    if normalized.get("score_denominator") in {"", None}:
+        normalized["score_denominator"] = score_denominator(normalized)
+    normalized["raw_metric_score"] = raw_metric_score(normalized)
     if normalized.get("overall_score") in {"", None}:
-        denominator = safe_float(normalized.get("score_denominator")) or len(SCORE_METRIC_KEYS) * 20
-        normalized["overall_score"] = round(normalized["raw_metric_score"] / denominator * 100.0, 4)
+        normalized["overall_score"] = score_total_from_metrics(normalized)
     else:
-        normalized["overall_score"] = score_to_points(normalized.get("overall_score"), merged)
+        normalized["overall_score"] = safe_float(normalized.get("overall_score"))
     if normalized.get("answer_quality_score") not in {"", None}:
-        normalized["answer_quality_score"] = score_to_points(normalized.get("answer_quality_score"), merged)
+        normalized["answer_quality_score"] = safe_float(normalized.get("answer_quality_score"))
     if normalized.get("rag_quality_score") not in {"", None}:
-        normalized["rag_quality_score"] = score_to_points(normalized.get("rag_quality_score"), merged)
+        normalized["rag_quality_score"] = safe_float(normalized.get("rag_quality_score"))
     normalized["pass"] = score_policy_pass(normalized)
     return normalized
 
 
-def score_policy_pass(score: dict[str, Any], pass_threshold: float = 60.0) -> bool:
+def score_policy_pass(score: dict[str, Any], pass_threshold: float = 0.6) -> bool:
     overall = score.get("overall_score")
     if overall in {"", None}:
         raw = safe_float(score.get("raw_metric_score"))
         denominator = safe_float(score.get("score_denominator"))
-        overall = round((raw / denominator) * 100, 4) if denominator else 0.0
+        overall = round(raw / denominator, 4) if denominator else 0.0
     else:
-        overall = score_to_points(overall, score)
+        overall = safe_float(overall)
     return safe_float(overall) >= pass_threshold and not truthy(score.get("critical_fail"))
 
 
@@ -231,7 +213,6 @@ def deterministic_from_score(row: dict[str, Any]) -> dict[str, Any]:
             "critical_fail": row.get("static_critical_fail", row.get("critical_fail")),
             "error_type": row.get("static_error_type", row.get("error_type", "normal")),
             "reason": row.get("static_reason", row.get("reason", "")),
-            "utl_applicable": row.get("utl_applicable", True),
             "applicable_metrics": row.get("applicable_metrics", ",".join(SCORE_METRIC_KEYS)),
             "answer_quality_score": row.get("answer_quality_score"),
             "rag_quality_score": row.get("rag_quality_score"),
@@ -252,11 +233,11 @@ def individual_scores_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
             if not isinstance(score, dict):
                 continue
             item = dict(score)
-            item.setdefault("utl_applicable", row.get("utl_applicable", True))
+            item.setdefault("applicable_metrics", row.get("llm_judge_applicable_metrics", row.get("applicable_metrics")))
             item.setdefault("score_denominator", row.get("llm_judge_score_denominator", row.get("score_denominator")))
             item.setdefault("raw_metric_score", sum(safe_float(item.get(key)) for key in SCORE_METRIC_KEYS))
             item.setdefault("confidence", row.get("llm_judge_confidence", 0))
-            scores.append(normalize_judge_score_scale(item, row))
+            scores.append(normalize_judge_score(item, row))
         return scores
 
     item = {
@@ -277,11 +258,16 @@ def individual_scores_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
             "error_type": row.get("llm_judge_error_type", row.get("error_type", "normal")),
             "reason": row.get("llm_judge_reason", ""),
             "confidence": row.get("llm_judge_confidence", 0),
-            "utl_applicable": row.get("utl_applicable", True),
+            "applicable_metrics": row.get("llm_judge_applicable_metrics", row.get("applicable_metrics")),
             "score_denominator": row.get("llm_judge_score_denominator", row.get("score_denominator")),
+            "omnieval_accuracy": row.get("llm_judge_omnieval_accuracy", ""),
+            "omnieval_completeness": row.get("llm_judge_omnieval_completeness", ""),
+            "omnieval_numerical_accuracy": row.get("llm_judge_omnieval_numerical_accuracy", ""),
+            "omnieval_hallucination": row.get("llm_judge_omnieval_hallucination", ""),
+            "omnieval_scores": parse_json_field(row.get("llm_judge_omnieval_scores"), {}),
         }
     )
-    return [normalize_judge_score_scale(item, row)]
+    return [normalize_judge_score(item, row)]
 
 
 def judge_identity(score: dict[str, Any]) -> str:
@@ -289,7 +275,6 @@ def judge_identity(score: dict[str, Any]) -> str:
 
 
 def individual_score_entry(score: dict[str, Any], *, role: str = "judge") -> dict[str, Any]:
-    utl_applicable = score.get("utl_applicable", True)
     return {
         "role": role,
         "weight": score.get("weight", ""),
@@ -299,8 +284,12 @@ def individual_score_entry(score: dict[str, Any], *, role: str = "judge") -> dic
         "prompt_version": score.get("prompt_version"),
         "prompt_hash": score.get("prompt_hash"),
         "system_prompt_preset": score.get("system_prompt_preset"),
+        "omnieval_accuracy": score.get("omnieval_accuracy"),
+        "omnieval_completeness": score.get("omnieval_completeness"),
+        "omnieval_numerical_accuracy": score.get("omnieval_numerical_accuracy"),
+        "omnieval_hallucination": score.get("omnieval_hallucination"),
+        "omnieval_scores": score.get("omnieval_scores"),
         **{key: score.get(key) for key in SCORE_METRIC_KEYS},
-        "utl_applicable": utl_applicable,
         "applicable_metrics": score.get("applicable_metrics"),
         "score_denominator": score.get("score_denominator"),
         "raw_metric_score": score.get("raw_metric_score"),
@@ -332,10 +321,10 @@ def judge_gap_summary(
     arbiter_config_id: str,
     resolved_policy: str,
 ) -> dict[str, Any]:
-    totals = [score_to_points(score.get("overall_score"), score) for score in judge_scores]
+    totals = [safe_float(score.get("overall_score")) for score in judge_scores]
     pass_values = [score_policy_pass(score) for score in judge_scores]
-    base_totals = [score_to_points(score.get("overall_score"), score) for score in base_judge_scores]
-    arbiter_totals = [score_to_points(score.get("overall_score"), score) for score in arbiter_scores]
+    base_totals = [safe_float(score.get("overall_score")) for score in base_judge_scores]
+    arbiter_totals = [safe_float(score.get("overall_score")) for score in arbiter_scores]
     score_min = min(totals) if totals else 0.0
     score_max = max(totals) if totals else 0.0
     return {
@@ -491,10 +480,11 @@ def main() -> None:
     judge_score_weights = parse_judge_score_weights(
         args.judge_score_weights or resolved.get("judge_score_weights") or {}
     )
-    pass_threshold = (
+    pass_threshold = normalize_pass_threshold(
         args.pass_threshold
         if args.pass_threshold is not None
-        else safe_float(resolved.get("pass_threshold") or source_config.get("pass_threshold"), 60.0)
+        else resolved.get("pass_threshold") or source_config.get("pass_threshold"),
+        0.6,
     )
     baseline_config = str(source_config.get("baseline_config") or (configs[0].get("config_id") if configs else ""))
     release_gate_config = (

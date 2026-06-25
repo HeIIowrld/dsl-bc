@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.eval.run_multi_model_eval import (
     DEFAULT_FINAL_UI_DATA,
+    DEFAULT_JUDGE_CACHE_DIR,
     DEFAULT_MATRIX,
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_OUT_ROOT,
@@ -28,6 +29,7 @@ from scripts.eval.run_multi_model_eval import (
     DEFAULT_SEEDED_TARGET_MODELS,
     EvalCancelled,
     HttpChatProvider,
+    SCORE_PASS_THRESHOLD,
     aggregate_release_gates,
     aggregate_runs,
     append_jsonl,
@@ -37,7 +39,9 @@ from scripts.eval.run_multi_model_eval import (
     export_final_ui,
     load_cases_file,
     load_config,
+    load_judge_cache,
     load_model_registry,
+    normalize_pass_threshold,
     ollama_base_url_for_config,
     ollama_provider_for_config,
     output_fingerprint,
@@ -556,6 +560,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--static-embedding-keep-alive", default="0")
     parser.add_argument("--workers", type=int, default=1, help="Number of saved-answer judge rows to score concurrently.")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True, help="Reuse completed judge_scores rows in the same run directory.")
+    parser.add_argument("--judge-cache", action=argparse.BooleanOptionalAction, default=True, help="Reuse globally cached base judge responses when inputs match.")
+    parser.add_argument("--arbiter-cache", action=argparse.BooleanOptionalAction, default=True, help="Reuse globally cached arbiter judge responses when inputs match.")
+    parser.add_argument("--judge-cache-dir", default=str(DEFAULT_JUDGE_CACHE_DIR))
     parser.add_argument("--retry-transient", type=int, default=2, help="Retry transient judge API failures per row.")
     parser.add_argument("--retry-sleep-seconds", type=float, default=2.0, help="Base sleep between transient judge retries.")
     parser.add_argument("--rate-limit-max-retries", type=int, default=0, help="Max 429 retries per row. 0 means keep waiting/retrying.")
@@ -693,7 +700,10 @@ def main() -> None:
     if not eval_run:
         eval_run = matrix_from_file.get("eval_run") if isinstance(matrix_from_file.get("eval_run"), dict) else {}
     release_gate_config = eval_run.get("release_gates") if isinstance(eval_run.get("release_gates"), dict) else {}
-    pass_threshold = args.pass_threshold if args.pass_threshold is not None else safe_float(eval_run.get("pass_threshold"), 60.0)
+    pass_threshold = normalize_pass_threshold(
+        args.pass_threshold if args.pass_threshold is not None else eval_run.get("pass_threshold"),
+        SCORE_PASS_THRESHOLD,
+    )
     baseline_config = (
         str(source_config.get("baseline_config") or "")
         or str(eval_run.get("baseline_config") or "")
@@ -733,6 +743,16 @@ def main() -> None:
     case_by_id = {str(case.get("case_id") or ""): case for case in cases}
     config_by_id = {str(config.get("config_id") or ""): config for config in configs}
     control_file = Path(args.control_file) if args.control_file else None
+    judge_cache_dir = Path(args.judge_cache_dir)
+    judge_cache_by_key = load_judge_cache(
+        judge_cache_dir,
+        include_judge=bool(args.judge_cache),
+        include_arbiter=bool(args.arbiter_cache),
+        target_configs=configs,
+        judge_configs=judge_configs,
+        default_base_url=args.base_url,
+    ) if judge_configs else {}
+    judge_cache_lock = threading.Lock()
 
     eval_started_at = datetime.now().isoformat(timespec="seconds")
     run_type = "imported_answers" if payload.get("imported_answers_csv") else "judge_saved_answers"
@@ -748,6 +768,12 @@ def main() -> None:
         "judge_score_weights": judge_score_weights,
         "judge_aggregation_method": args.judge_aggregation_method,
         "judge_configs": [config.get("config_id") for config in judge_configs],
+        "judge_cache": {
+            "judge_enabled": bool(args.judge_cache),
+            "arbiter_enabled": bool(args.arbiter_cache),
+            "dir": str(judge_cache_dir),
+            "entries_loaded": len(judge_cache_by_key),
+        },
         "pass_threshold": pass_threshold,
         "baseline_config": baseline_config,
         "configs": [config.get("config_id") for config in configs],
@@ -805,6 +831,17 @@ def main() -> None:
         "llm_judge="
         + (
             ",".join(str(config.get("config_id") or "") for config in judge_configs)
+            if judge_configs
+            else "disabled"
+        ),
+        flush=True,
+    )
+    print(
+        "judge_cache="
+        + (
+            f"judge={'enabled' if args.judge_cache else 'disabled'} "
+            f"arbiter={'enabled' if args.arbiter_cache else 'disabled'} "
+            f"dir={judge_cache_dir} entries={len(judge_cache_by_key)}"
             if judge_configs
             else "disabled"
         ),
@@ -911,6 +948,18 @@ def main() -> None:
                 keep_alive=None,
                 similarity_scorer=similarity_scorer,
                 arbiter_context=arbiter_context,
+                log_context={
+                    "target_config_id": config_id,
+                    "case_index": task["index"],
+                    "case_total": task["total"],
+                    "case_id": case_id,
+                },
+                judge_cache_enabled=bool(args.judge_cache),
+                arbiter_cache_enabled=bool(args.arbiter_cache),
+                judge_cache_dir=judge_cache_dir,
+                judge_cache_by_key=judge_cache_by_key,
+                judge_cache_lock=judge_cache_lock,
+                default_base_url=args.base_url,
             )
             score["output_fingerprint"] = output.get("output_fingerprint", "")
             score["score_fingerprint"] = score_fingerprint(

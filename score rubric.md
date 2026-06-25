@@ -1,53 +1,49 @@
-omnieval_metrics_config.v2.json
+# Score Rubric
 
-윤서 파일명 `omnieval_judge_config.v1.json` —> `omnieval_metrics_config.v2.json`로 수정
+## Active Metric Contract
 
----
+The current evaluation system uses OmniEval metrics config v2 only.
 
-## 1. 개요 및 변경 배경
+Required judge metrics:
 
-- **배경**: 기존에는 OmniEval에서 5대 지표의 명칭만 차용하고, 평가 프롬프트와 점수 계산 방식은 자체적으로 임의 제작하여 사용하였음. 이에 대해 BC카드 측에서 OmniEval의 벤치마크 방식(프롬프트 및 채점 로직)을 그대로 반영해 달라는 피드백이 있어 이를 전면 수용함.
-- **변경 목적**: OmniEval의 원본 코드(`prompts.py`, `judger.py`)에서 평가 프롬프트 템플릿과 채점 로직을 직접 추출하고 한국어로 번역하여, 평가의 객관성과 벤치마크와의 정합성을 확보함.
-- **평가 범위 한정**: 본 프로젝트는 검색(Retrieval) 단계가 아닌 **생성된 최종 답변(Generation) 품질만 평가**하므로, OmniEval Stage 2, 3 중 관련 없는 검색/순위 지표(relevance, necessity, MRR, MAP) 및 ACC와 의미가 중복되는 factuality 지표는 평가에서 제외함.
+| Metric | Meaning | Scale | Direction |
+| --- | --- | --- | --- |
+| ACC | Factual and logical accuracy | 0-1 | Higher is better |
+| COM | Completeness against required facts and constraints | 0-1 | Higher is better |
+| NAC | Numeric accuracy for dates, amounts, codes, identifiers, and calculations | 0-1 | Higher is better |
+| HAL_pass | Hallucination control pass score | 0-1 | Higher is better |
 
-## 2. 5대 평가 지표 및 프롬프트 개편
+`HAL_rate` is a diagnostic display value calculated as `1 - HAL_pass`. It is not part of the score denominator.
 
-OmniEval `generation_prompt_map`에서 추출한 5개 지표를 적용하며, Judge LLM(Claude API)에 전달할 `system_prompt`와 `user_prompt`를 원본과 동일한 구조로 한국어 번역하여 적용함.
+## Overall Score
 
-| 지표 코드 | 지표명 | 핵심 질문 | 검색 문서 필요 여부 | 평가 방향 |
-| --- | --- | --- | --- | --- |
-| **ACC** | 정확성 | 답변 내용이 사실과 맞는가? | X | 높을수록 우수 |
-| **COM** | 완결성 | 질문의 모든 측면을 온전히 답했는가? | X | 높을수록 우수 |
-| **UTL** | 검색 활용도 | 검색 문서를 실제로 활용했는가? | O | 높을수록 우수 |
-| **NAC** | 수치 정확성 | 금리, 수수료, 날짜 등 수치가 맞는가? | X | 높을수록 우수 |
-| **HAL** | 환각 탐지 | 문서에 없는 내용을 지어내지 않았는가? | O | 낮을수록 우수 |
-- **검색 문서 의존 지표 처리**: UTL과 HAL은 검색 문서(`doc_str`)가 있어야만 평가 가능함. 검색 문서가 없을 경우 기본 만점을 주어 전체 평균을 왜곡하는 대신, **평가 비대상(N/A)으로 처리하여 집계에서 제외**함.
+`overall_score = mean(ACC, COM, NAC, HAL_pass)`
 
-## 3. 채점 및 집계 로직 변경 (OmniEval `judger.py` 기반)
+The system stores and displays the 0-1 score directly. It does not convert scores to a larger total scale.
 
-- **Step 1 (LLM 호출)**: 각 지표의 프롬프트 포맷에 맞춰 파라미터(`question`, `answers`, `prediction`, `doc_str`)를 주입하고 Judge LLM을 호출함.
-- **Step 2 (파싱)**: `json_repair`를 통해 출력 파싱. `prediction` 키를 추출하며, 파싱 실패 시 `1`을 반환함.
-- **Step 3 (정규화)**:
-    - `ACC`, `COM`, `UTL`: 원점수(`0, 1, 2` 등)를 2로 나누어 `[0.0, 1.0]` 스케일로 정규화함.
-    - `NAC`, `HAL`: 정규화 없이 원점수(`[-1, 0, 1]`, `[0, 1]`)를 그대로 사용함.
-- **Step 4 (집계)**: `get_valid_mean` 로직을 적용하여, **음수(-1)를 받은 샘플은 평균 계산 시 분모에서 완전히 제외**함. (기존 100점 합산 총점 개념은 폐기하고 5개 지표 각각을 독립적인 0~1 척도로 보고함).
+## Pass Policy
 
-## 4. HAL(환각) 지표 방향성 통일 및 회귀 임계값 (Option B 채택)
+A row passes when:
 
-- **문제점**: HAL은 `1 = 환각 있음`으로 낮을수록 우수한 반면, 나머지 4개 지표는 높을수록 우수하여 파이프라인의 회귀 테스트(게이트 통과/실패) 로직 적용 시 부호 충돌이 발생함.
-- **해결책 (Option B 적용)**: 파이프라인 내부 로직 단일화를 위해 **`HAL_pass = 1 - HAL_rate`** 라는 파생 지표를 생성함.
-    - 이를 통해 모든 지표를 **"높을수록 우수, 하락 시(Negative Delta) 악화"** 방향으로 통일함.
-    - **회귀 임계값**:
-        - `ACC / COM / NAC`: Warn $\Delta < -0.05$, Fail $\Delta < -0.10$
-        - `HAL_pass`: Warn $\Delta < -0.02$, Fail $\Delta < -0.03$ (환각 도메인 규제 리스크를 고려하여 엄격하게 설정)
-    - 대시보드 표시 시에는 파이프라인 게이트용(`HAL_pass`)과 리포트용(`HAL_rate %`)을 분리하여 직관성을 높임.
+`overall_score >= 0.60 and critical_fail is false`
 
-## 5. 기존 방식 vs 변경 방식 요약
+Judge prompts must not return a separate pass/fail decision. The pipeline derives pass/fail from the normalized metrics and critical failure flag.
 
-| 항목 | 기존 방식 | 변경 방식 (OmniEval 완전 도입) |
-| --- | --- | --- |
-| **평가 프롬프트** | 자체 제작 | OmniEval `prompts.py` 구조 완벽 차용 (한국어 번역) |
-| **점수 체계** | 20점 x 5 = 100점 합산 | 지표별 독립 `[0,1]` 스케일 |
-| **정규화/집계** | 임의 계산 | 원본 `judger.py`의 `divide_by_2` 및 `get_valid_mean` 로직 |
-| **평가 비대상(-1)** | 0점 처리 또는 감점 | 집계 제외(N/A) 처리로 전체 평균 왜곡 방지 |
-| **HAL 방향 처리** | 미정 | `Option B` 채택 (`HAL_pass` 파생 지표 생성) |
+## Judge JSON Shape
+
+```json
+{
+  "scores": {
+    "acc": 0.0,
+    "com": 0.0,
+    "nac": 0.0,
+    "hal_pass": 0.0
+  },
+  "overall_score": 0.0,
+  "critical_fail": false,
+  "error_type": "normal",
+  "reason": "Concise Korean reasoning.",
+  "confidence": 0.0,
+  "evidence_notes": []
+}
+```

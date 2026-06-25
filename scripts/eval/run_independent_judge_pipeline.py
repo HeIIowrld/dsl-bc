@@ -79,6 +79,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--static-embedding-base-url", default="")
     parser.add_argument("--static-embedding-keep-alive", default="0")
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--judge-cache", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--arbiter-cache", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--judge-cache-dir", default="")
     parser.add_argument("--retry-transient", type=int, default=2)
     parser.add_argument("--retry-sleep-seconds", type=float, default=2.0)
     parser.add_argument("--rate-limit-max-retries", type=int, default=0)
@@ -186,9 +189,12 @@ def build_child_command(
     add_arg(cmd, "--static-embedding-base-url", args.static_embedding_base_url)
     add_arg(cmd, "--static-embedding-keep-alive", args.static_embedding_keep_alive)
     add_arg(cmd, "--judge-aggregation-method", args.judge_aggregation_method)
+    add_arg(cmd, "--judge-cache-dir", args.judge_cache_dir)
     if args.pass_threshold is not None:
         add_arg(cmd, "--pass-threshold", args.pass_threshold)
     add_repeated(cmd, "--config", args.config)
+    cmd.append("--judge-cache" if args.judge_cache else "--no-judge-cache")
+    cmd.append("--arbiter-cache" if args.arbiter_cache else "--no-arbiter-cache")
     if args.complete_only:
         cmd.append("--complete-only")
     if args.allow_missing:
@@ -315,10 +321,8 @@ def arbiter_context_from_merged_row(row: dict) -> dict:
                 "reason": score.get("reason"),
                 "acc": score.get("acc"),
                 "com": score.get("com"),
-                "utl": score.get("utl"),
                 "nac": score.get("nac"),
-                "hal": score.get("hal"),
-                "utl_applicable": score.get("utl_applicable"),
+                "hal_pass": score.get("hal_pass"),
                 "prompt_version": score.get("prompt_version"),
                 "prompt_hash": score.get("prompt_hash"),
             }

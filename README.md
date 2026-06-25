@@ -77,8 +77,6 @@ Important files:
 | `scores/omnieval_metrics_config_v2.json` | Active score metric scale, denominator, and pass-policy config |
 | `scores/omnieval_consensus_case_scores.csv` | 12,000-row OmniEval consensus case scores |
 | `scores/omnieval_consensus_summary.json` | Full 12,000-row consensus summary and agreement statistics |
-| `judge_responses/gemini_2_5_flash.omnieval.jsonl` | Normalized Gemini judge responses |
-| `judge_responses/gpt_5_4_mini.omnieval.jsonl` | Normalized GPT judge responses |
 | `inventories/runtime_data.csv` | Current UI data inventory |
 | `inventories/question_sets.csv` | Benchmark and regression question-set inventory |
 | `manifest.json` | Source run and summary file map |
@@ -87,9 +85,8 @@ Active score summaries are generated from the current UI runtime export. The
 UI evaluation run writes model answers and per-row `llm_judge_individual_scores`
 to `final_UI/data/question_cases.csv`; the score snapshot builder then rewrites
 the `scores/` and `reports/` files from that runtime data. The active OmniEval
-v2 denominator is `ACC`, `COM`, `NAC`, and `HAL_pass`; `UTL`, `SAFE`, `FCT`, and
-`FMT` are excluded from the final overall score unless a later rubric explicitly
-adds them back.
+v2 score contract uses `ACC`, `COM`, `NAC`, and `HAL_pass` on a 0-1 scale, and
+`overall_score` is their mean.
 
 Historical raw score sources are retained only as archived reference material.
 

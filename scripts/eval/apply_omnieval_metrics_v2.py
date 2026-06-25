@@ -24,10 +24,111 @@ SNAPSHOT_RUN_ID = "eval_snapshot_20260624_094927"
 SNAPSHOT_RUN_TYPE = "omnieval_metrics_v2_snapshot"
 RUBRIC_VERSION = "omnieval_metrics_config.v2"
 SCHEMA_VERSION = "omnieval_metrics_config_v2"
-PASS_POLICY = "mean_acc_com_nac_hal_pass_gte_0_60"
+PASS_POLICY = "valid_mean_applicable_acc_com_nac_hal_pass_gte_0_60_and_no_critical_fail"
 PASS_THRESHOLD = 0.60
 ACTIVE_METRICS = ("acc", "com", "nac", "hal_pass")
 SCORE_DERIVATION_POLICY = "ui_exported_llm_judge_individual_scores"
+QUESTION_CASE_OUTPUT_FIELDS = (
+    "question_id",
+    "qa_category",
+    "question_type",
+    "qa_topic",
+    "instruction",
+    "output",
+    "ground_truth_doc",
+    "source_type",
+    "expected_behavior",
+    "selection_mode",
+    "regression_suite",
+    "metamorphic_relation",
+    "dataset_pool_id",
+    "dataset_role",
+    "gate_eligible",
+    "release_gate_eligible",
+    "case_status",
+    "gold_verified",
+    "human_review_required",
+    "case_source",
+    "dataset_version",
+    "qa_matrix_topic",
+    "benchmark_group",
+    "source_hash",
+    "source_title",
+    "source_url",
+    "priority",
+    "task_type",
+    "model",
+    "version",
+    "answer_excerpt",
+    "model_answer",
+    "acc",
+    "com",
+    "nac",
+    "hal",
+    "hal_rate",
+    "hal_pass",
+    "applicable_metrics",
+    "score_denominator",
+    "raw_metric_score",
+    "canonical_metric_count",
+    "answer_quality_score",
+    "rag_quality_score",
+    "overall_score",
+    "pass_fail",
+    "score_schema",
+    "score_scale",
+    "metric_source_hal",
+    "scoring_mode",
+    "static_overall_score",
+    "static_pass_fail",
+    "llm_judge_count",
+    "llm_judge_overall_score",
+    "llm_judge_pass_fail",
+    "llm_judge_status",
+    "llm_judge_provider",
+    "llm_judge_model",
+    "llm_judge_prompt_version",
+    "llm_judge_prompt_hash",
+    "llm_judge_prompt_preset",
+    "llm_judge_hal_pass",
+    "llm_judge_omnieval_accuracy",
+    "llm_judge_omnieval_completeness",
+    "llm_judge_omnieval_numerical_accuracy",
+    "llm_judge_omnieval_hallucination",
+    "llm_judge_omnieval_scores",
+    "llm_judge_applicable_metrics",
+    "llm_judge_scores",
+    "llm_judge_individual_scores",
+    "llm_judge_conflict",
+    "llm_judge_conflict_detected",
+    "llm_judge_unresolved_conflict",
+    "llm_judge_conflict_reason",
+    "llm_judge_conflict_resolution_policy",
+    "llm_judge_arbiter_config_id",
+    "llm_judge_arbitration_status",
+    "llm_judge_provider_refused",
+    "llm_judge_provider_refusal_reason",
+    "llm_judge_sanitized_eval",
+    "llm_judge_score_gap",
+    "llm_judge_score_min",
+    "llm_judge_score_max",
+    "llm_judge_pass_mismatch",
+    "llm_judge_base_average_score",
+    "llm_judge_arbiter_score",
+    "llm_judge_arbiter_override",
+    "regression_delta",
+    "regression_type",
+    "release_gate",
+    "critical_fail",
+    "llm_judge_critical_fail",
+    "error_type",
+    "judge_reason",
+    "static_reason",
+    "llm_judge_reason",
+    "metric_source_acc",
+    "metric_source_com",
+    "metric_source_nac",
+)
 
 
 def ensure_inside(base: Path, target: Path) -> None:
@@ -125,11 +226,9 @@ def json_list_value(value: Any) -> list[Any]:
 
 def score01(value: Any) -> float | None:
     number = safe_float(value)
-    if number is None or number < 0:
+    if number is None or number < 0 or number > 1:
         return None
-    if number <= 1:
-        return round(number, 6)
-    return round(min(number, METRIC_MAX_OLD) / METRIC_MAX_OLD, 6)
+    return round(number, 6)
 
 
 def fmt(value: float | None, digits: int = 6) -> str:
@@ -152,8 +251,46 @@ def metric_mean(rows: list[dict[str, Any]], key: str) -> float:
     return round(sum(clean) / len(clean), 6) if clean else 0.0
 
 
-def pass_fail(overall: float) -> str:
-    return "Pass" if overall >= PASS_THRESHOLD else "Fail"
+def json_object_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def applicable_metric_keys(item: dict[str, Any]) -> list[str]:
+    value = item.get("applicable_metrics")
+    if isinstance(value, str):
+        keys = [part.strip() for part in value.split(",") if part.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        keys = [str(part).strip() for part in value if str(part).strip()]
+    else:
+        keys = []
+    keys = [key for key in keys if key in ACTIVE_METRICS]
+    if keys:
+        return keys
+    raw = json_object_value(item.get("omnieval_scores"))
+    if raw:
+        keys = ["acc"]
+        raw_com = safe_float(raw.get("completeness"))
+        raw_nac = safe_float(raw.get("numerical_accuracy"))
+        if raw_com is not None and int(raw_com) >= 0:
+            keys.append("com")
+        if raw_nac is not None and int(raw_nac) >= 0:
+            keys.append("nac")
+        keys.append("hal_pass")
+        return keys
+    present = [key for key in ACTIVE_METRICS if score01(first_present(item, key, key.replace("nac", "numeric_accuracy"))) is not None]
+    return present or list(ACTIVE_METRICS)
+
+
+def pass_fail(overall: float, critical_fail: bool = False) -> str:
+    return "Pass" if overall >= PASS_THRESHOLD and not critical_fail else "Fail"
 
 
 def agreement_status(overall_gap: float, pass_mismatch: bool) -> tuple[str, str]:
@@ -167,6 +304,10 @@ def agreement_status(overall_gap: float, pass_mismatch: bool) -> tuple[str, str]
 def canonical_error_type(value: Any) -> str:
     text = str(value or "").strip()
     return text or "normal"
+
+
+def clean_reason_text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 def judge_label(item: dict[str, Any], row: dict[str, Any], index: int) -> str:
@@ -183,19 +324,36 @@ def judge_label(item: dict[str, Any], row: dict[str, Any], index: int) -> str:
 
 
 def normalized_judge_item(item: dict[str, Any], row: dict[str, Any], index: int) -> dict[str, Any]:
-    acc = score01(first_present(item, "acc", "accuracy"))
-    com = score01(first_present(item, "com", "completeness"))
-    nac = score01(first_present(item, "nac", "numeric_accuracy"))
-    hal_pass = score01(item.get("hal_pass"))
-    if any(value is None for value in (acc, com, nac, hal_pass)):
+    raw = json_object_value(item.get("omnieval_scores"))
+    if raw:
+        raw_accuracy = safe_float(raw.get("accuracy"))
+        raw_completeness = safe_float(raw.get("completeness"))
+        raw_numerical_accuracy = safe_float(raw.get("numerical_accuracy"))
+        raw_hallucination = safe_float(raw.get("hallucination"))
+        acc = round(raw_accuracy / 2.0, 6) if raw_accuracy is not None else None
+        com = None if raw_completeness is None or raw_completeness < 0 else round(raw_completeness / 2.0, 6)
+        nac = None if raw_numerical_accuracy is None or raw_numerical_accuracy < 0 else round(raw_numerical_accuracy, 6)
+        hal_pass = round(1.0 - raw_hallucination, 6) if raw_hallucination is not None else None
+    else:
+        acc = score01(first_present(item, "acc", "accuracy"))
+        com = score01(first_present(item, "com", "completeness"))
+        nac = score01(first_present(item, "nac", "numeric_accuracy"))
+        hal_pass = score01(item.get("hal_pass"))
+    applicable_metrics = applicable_metric_keys({**item, "omnieval_scores": raw} if raw else item)
+    values_by_metric = {
+        "acc": acc,
+        "com": com,
+        "nac": nac,
+        "hal_pass": hal_pass,
+    }
+    if any(values_by_metric.get(key) is None for key in applicable_metrics):
         question = row.get("question_id") or row.get("case_id") or "-"
         target = row.get("version") or row.get("target_config_id") or "-"
         raise RuntimeError(f"Missing OmniEval judge score for {target}/{question}")
-    hal_rate = round(1.0 - hal_pass, 6)
-    values = [acc, com, nac, hal_pass]
-    overall = score01(item.get("overall_score"))
-    if overall is None:
-        overall = mean(values) or 0.0
+    hal_rate = round(1.0 - (hal_pass or 0.0), 6)
+    applicable_values = [values_by_metric[key] for key in applicable_metrics]
+    overall = mean(applicable_values) or 0.0
+    critical_fail = bool_value(item.get("critical_fail"))
     config_id = str(first_present(item, "config_id", "judge_config_id") or row.get("llm_judge_config_id") or judge_label(item, row, index))
     provider = str(first_present(item, "provider", "judge_provider", "llm_judge_provider") or row.get("llm_judge_provider") or "")
     model = str(first_present(item, "model", "judge_model", "llm_judge_model") or row.get("llm_judge_model") or "")
@@ -208,17 +366,25 @@ def normalized_judge_item(item: dict[str, Any], row: dict[str, Any], index: int)
         "role": "judge",
         "target_config_id": row.get("version") or row.get("target_config_id") or "",
         "question_id": row.get("question_id") or row.get("case_id") or "",
+        "omnieval_accuracy": item.get("omnieval_accuracy", raw.get("accuracy", "")),
+        "omnieval_completeness": item.get("omnieval_completeness", raw.get("completeness", "")),
+        "omnieval_numerical_accuracy": item.get("omnieval_numerical_accuracy", raw.get("numerical_accuracy", "")),
+        "omnieval_hallucination": item.get("omnieval_hallucination", raw.get("hallucination", "")),
+        "omnieval_scores": raw,
         "acc": acc,
         "com": com,
         "nac": nac,
         "hal": hal_rate,
         "hal_rate": hal_rate,
         "hal_pass": hal_pass,
+        "applicable_metrics": ",".join(applicable_metrics),
+        "score_denominator": len(applicable_metrics),
+        "raw_metric_score": round(sum(value for value in applicable_values if value is not None), 6),
         "overall_score": overall,
-        "pass": overall >= PASS_THRESHOLD,
-        "critical_fail": bool_value(item.get("critical_fail")),
+        "pass": overall >= PASS_THRESHOLD and not critical_fail,
+        "critical_fail": critical_fail,
         "error_type": canonical_error_type(item.get("error_type")),
-        "reason": item.get("reason", ""),
+        "reason": clean_reason_text(item.get("reason", "")),
         "score_schema": SCHEMA_VERSION,
     }
 
@@ -247,25 +413,56 @@ def consensus_for(key: tuple[str, str], judge_scores: dict[tuple[str, str], list
     joined = judge_scores.get(key) or []
     if not joined:
         raise RuntimeError(f"Missing judge score for {key}")
-    acc = mean([row.get("acc") for row in joined])
-    com = mean([row.get("com") for row in joined])
-    nac = mean([row.get("nac") for row in joined])
-    hal_pass = mean([row.get("hal_pass") for row in joined])
+    def consensus_metric(metric: str) -> float | None:
+        return mean([
+            row.get(metric)
+            for row in joined
+            if metric in applicable_metric_keys(row)
+        ])
+
+    acc = consensus_metric("acc")
+    com = consensus_metric("com")
+    nac = consensus_metric("nac")
+    hal_pass = consensus_metric("hal_pass")
     hal_rate = round(1.0 - hal_pass, 6) if hal_pass is not None else None
-    values = [acc, com, nac, hal_pass]
+    applicable_metrics = [
+        metric
+        for metric, value in {
+            "acc": acc,
+            "com": com,
+            "nac": nac,
+            "hal_pass": hal_pass,
+        }.items()
+        if value is not None
+    ]
+    values = [
+        value
+        for value in [acc, com, nac, hal_pass]
+        if value is not None
+    ]
     overall = mean(values) or 0.0
     per_judge_overalls = [safe_float(row.get("overall_score")) or 0.0 for row in joined]
     overall_gap = round(max(per_judge_overalls) - min(per_judge_overalls), 6)
     metric_gaps = []
     for metric in ("acc", "com", "nac", "hal_pass"):
-        values_for_metric = [safe_float(row.get(metric)) or 0.0 for row in joined]
-        metric_gaps.append(max(values_for_metric) - min(values_for_metric))
+        values_for_metric = [
+            safe_float(row.get(metric))
+            for row in joined
+            if metric in applicable_metric_keys(row) and safe_float(row.get(metric)) is not None
+        ]
+        if values_for_metric:
+            metric_gaps.append(max(values_for_metric) - min(values_for_metric))
     metric_max_gap = round(max(metric_gaps), 6) if metric_gaps else 0.0
     pass_mismatch = len({row.get("pass") for row in joined}) > 1
+    critical_fail = any(bool_value(row.get("critical_fail")) for row in joined)
     status, priority = agreement_status(overall_gap, pass_mismatch)
     ordered = sorted(joined, key=lambda row: safe_float(row.get("overall_score")) or 0.0)
     error_type = next((row.get("error_type") for row in ordered if row.get("error_type") != "normal"), "normal")
-    reason = " | ".join(f"{row.get('label') or row.get('config_id')}: {row.get('reason', '')}" for row in joined if row.get("reason"))
+    reason = " | ".join(
+        f"{row.get('label') or row.get('config_id')}: {clean_reason_text(row.get('reason', ''))}"
+        for row in joined
+        if clean_reason_text(row.get("reason", ""))
+    )
     return {
         "acc": acc,
         "com": com,
@@ -274,9 +471,11 @@ def consensus_for(key: tuple[str, str], judge_scores: dict[tuple[str, str], list
         "hal_rate": hal_rate,
         "hal_pass": hal_pass,
         "raw_metric_score": round(sum(value for value in values if value is not None), 6),
-        "score_denominator": len(ACTIVE_METRICS),
+        "score_denominator": len(applicable_metrics),
+        "applicable_metrics": ",".join(applicable_metrics),
         "overall_score": overall,
-        "pass_fail": pass_fail(overall),
+        "pass_fail": pass_fail(overall, critical_fail),
+        "critical_fail": critical_fail,
         "overall_gap": overall_gap,
         "metric_max_gap": metric_max_gap,
         "pass_mismatch": pass_mismatch,
@@ -314,20 +513,11 @@ def update_question_rows(
             {
                 "acc": fmt(consensus["acc"]),
                 "com": fmt(consensus["com"]),
-                "utl": "",
-                "utl_applicable": "False",
                 "nac": fmt(consensus["nac"]),
                 "hal": fmt(consensus["hal"]),
                 "hal_rate": fmt(consensus["hal_rate"]),
                 "hal_pass": fmt(consensus["hal_pass"]),
-                "fct": "",
-                "fmt": "",
-                "safe": "",
-                "safe_status": "excluded_from_metrics_v2",
-                "safe_gate": "",
-                "safe_pass": "",
-                "overall_with_safe": "",
-                "applicable_metrics": ",".join(ACTIVE_METRICS),
+                "applicable_metrics": consensus["applicable_metrics"],
                 "score_denominator": str(consensus["score_denominator"]),
                 "raw_metric_score": fmt(consensus["raw_metric_score"]),
                 "canonical_metric_count": str(consensus["score_denominator"]),
@@ -346,6 +536,18 @@ def update_question_rows(
                 "llm_judge_hal_pass": fmt(consensus["hal_pass"]),
                 "llm_judge_pass_fail": consensus["pass_fail"],
                 "llm_judge_status": "ok",
+                "llm_judge_applicable_metrics": consensus["applicable_metrics"],
+                "llm_judge_omnieval_scores": json.dumps(
+                    [
+                        {
+                            "config_id": score.get("config_id", ""),
+                            "omnieval_scores": score.get("omnieval_scores", {}),
+                        }
+                        for score in consensus["individual_scores"]
+                        if score.get("omnieval_scores")
+                    ],
+                    ensure_ascii=False,
+                ),
                 "llm_judge_individual_scores": json.dumps(consensus["individual_scores"], ensure_ascii=False),
                 "llm_judge_score_gap": fmt(consensus["overall_gap"]),
                 "llm_judge_score_min": fmt(min(score["overall_score"] for score in consensus["individual_scores"])),
@@ -354,16 +556,15 @@ def update_question_rows(
                 "llm_judge_base_average_score": fmt(consensus["overall_score"]),
                 "llm_judge_arbiter_score": "",
                 "llm_judge_arbiter_override": "False",
+                "critical_fail": str(consensus["critical_fail"]).lower(),
+                "llm_judge_critical_fail": str(consensus["critical_fail"]).lower(),
                 "error_type": consensus["error_type"],
                 "judge_reason": consensus["judge_reason"],
                 "llm_judge_reason": consensus["judge_reason"],
-                "metric_source_acc": "judge_consensus_0_20_div_20",
-                "metric_source_com": "judge_consensus_0_20_div_20",
-                "metric_source_nac": "judge_consensus_0_20_div_20",
-                "metric_source_hal": "judge_consensus_hal_0_20_to_hal_rate_and_hal_pass",
-                "metric_source_fct": "excluded",
-                "metric_source_fmt": "excluded",
-                "metric_source_safe": "excluded",
+                "metric_source_acc": "judge_consensus_0_1",
+                "metric_source_com": "judge_consensus_0_1",
+                "metric_source_nac": "judge_consensus_0_1",
+                "metric_source_hal": "judge_consensus_hal_pass_to_hal_rate",
                 "score_scale": "0_1",
             }
         )
@@ -382,8 +583,6 @@ def compact_case_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         "expected_behavior",
         "acc",
         "com",
-        "utl",
-        "utl_applicable",
         "nac",
         "hal",
         "hal_rate",
@@ -407,7 +606,6 @@ def compact_case_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 **{field: row.get(field, "") for field in fields},
                 "target_config_id": row.get("version", ""),
-                "utl_applicable": "False",
                 "score_schema": SCHEMA_VERSION,
             }
         )
@@ -430,8 +628,6 @@ def aggregate_by_model(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "pass_rate": fmt(pass_count / len(items), 4),
                 "avg_acc": fmt(metric_mean(items, "acc")),
                 "avg_com": fmt(metric_mean(items, "com")),
-                "avg_utl": "",
-                "utl_applicable_rate": "0",
                 "avg_nac": fmt(metric_mean(items, "nac")),
                 "avg_hal_rate": fmt(metric_mean(items, "hal_rate")),
                 "avg_hal_pass": fmt(metric_mean(items, "hal_pass")),
@@ -464,20 +660,10 @@ def eval_rows_from_model_rows(model_rows: list[dict[str, Any]], source_run_id: s
                 "scored_average": row["avg_overall_score"],
                 "acc": row["avg_acc"],
                 "com": row["avg_com"],
-                "utl": "",
-                "utl_applicable_rate": "0",
                 "nac": row["avg_nac"],
                 "hal": row["avg_hal_rate"],
                 "hal_rate": row["avg_hal_rate"],
                 "hal_pass": row["avg_hal_pass"],
-                "fct": "",
-                "fmt": "",
-                "fmt_applicable_rate": "0",
-                "overall_with_safe": "",
-                "safe": "",
-                "safe_pass_rate": "",
-                "safe_review_rate": "",
-                "safe_block_rate": "",
                 "answer_quality_score": row["avg_overall_score"],
                 "rag_quality_score": "",
                 "avg_latency_ms": "",
@@ -522,20 +708,10 @@ def slice_rows(case_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "overall_score": fmt(metric_mean(items, "overall_score")),
                     "acc": fmt(metric_mean(items, "acc")),
                     "com": fmt(metric_mean(items, "com")),
-                    "utl": "",
-                    "utl_applicable_rate": "0",
                     "nac": fmt(metric_mean(items, "nac")),
                     "hal": fmt(metric_mean(items, "hal_rate")),
                     "hal_rate": fmt(metric_mean(items, "hal_rate")),
                     "hal_pass": fmt(metric_mean(items, "hal_pass")),
-                    "fct": "",
-                    "fmt": "",
-                    "fmt_applicable_rate": "0",
-                    "overall_with_safe": "",
-                    "safe": "",
-                    "safe_pass_rate": "",
-                    "safe_review_rate": "",
-                    "safe_block_rate": "",
                     "score_schema": SCHEMA_VERSION,
                 }
             )
@@ -563,7 +739,7 @@ def release_gate_rows(model_rows: list[dict[str, Any]], source_run_id: str) -> l
                 "pass_rate": "",
                 "core_pass_rate": fmt(pass_rate, 4),
                 "core_pass_rate_min": "",
-                "reason": "utl_na_metrics_v2; no gate-eligible release set in final benchmark",
+                "reason": "omnieval_metrics_v2; no gate-eligible release set in benchmark",
             }
         )
     return rows
@@ -586,8 +762,6 @@ def target_model_rows(model_rows: list[dict[str, Any]], source_run_id: str, eval
                 "overall_score": row["avg_overall_score"],
                 "acc": row["avg_acc"],
                 "com": row["avg_com"],
-                "utl": "",
-                "utl_applicable_rate": "0",
                 "nac": row["avg_nac"],
                 "hal": row["avg_hal_rate"],
                 "hal_rate": row["avg_hal_rate"],
@@ -628,8 +802,6 @@ def judge_summary_rows(
             "pass_rate": fmt(pass_count / len(items), 4),
             "avg_acc": fmt(metric_mean(items, "acc")),
             "avg_com": fmt(metric_mean(items, "com")),
-            "avg_utl": "",
-            "utl_applicable_rate": "0",
             "avg_nac": fmt(metric_mean(items, "nac")),
             "avg_hal_rate": fmt(metric_mean(items, "hal_rate")),
             "avg_hal_pass": fmt(metric_mean(items, "hal_pass")),
@@ -646,10 +818,16 @@ def gate_rows(case_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows = []
     for row in case_rows:
         overall = safe_float(row.get("overall_score")) or 0.0
-        quality_gate = "pass" if overall >= PASS_THRESHOLD else "fail"
+        critical_fail = bool_value(row.get("critical_fail")) or bool_value(row.get("llm_judge_critical_fail"))
+        quality_gate = "pass" if overall >= PASS_THRESHOLD and not critical_fail else "fail"
         agreement = row.get("agreement_status", "")
         agreement_gate = "review" if agreement == "review_needed" else "monitor" if agreement == "borderline" else "pass"
         final_gate = "review" if agreement_gate == "review" else quality_gate
+        quality_reason = (
+            "overall_score >= 0.60 and no critical_fail"
+            if quality_gate == "pass"
+            else "critical_fail" if critical_fail else "overall_score < 0.60"
+        )
         rows.append(
             {
                 "question_id": row.get("question_id", ""),
@@ -661,10 +839,7 @@ def gate_rows(case_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "expected_behavior": row.get("expected_behavior", ""),
                 "overall_score": row.get("overall_score", ""),
                 "quality_gate": quality_gate,
-                "quality_gate_reason": "overall_score >= 0.60" if quality_gate == "pass" else "overall_score < 0.60",
-                "safe": "",
-                "safe_gate": "not_applicable",
-                "safe_gate_reason": "SAFE excluded from omnieval_metrics_config.v2",
+                "quality_gate_reason": quality_reason,
                 "judge_agreement_gate": agreement_gate,
                 "agreement_status": agreement,
                 "overall_gap": row.get("llm_judge_score_gap", ""),
@@ -687,24 +862,22 @@ def write_report(summary: dict[str, Any]) -> None:
 Generated: {summary["generated_at_local"]}
 Source run: {summary["source_run_id"]}
 
-UTL is treated as N/A for every completed row and excluded from all denominators.
 Scores are derived from the current UI export in `final_UI/data/question_cases.csv`.
-Each row uses `llm_judge_individual_scores` when available; otherwise the row-level scored fields are used.
+Each row uses `llm_judge_individual_scores`.
 
 ```
 acc = mean(judge_acc)
-com = mean(judge_com)
-nac = mean(judge_nac)
+com = mean(applicable judge_com; completeness=-1 excluded)
+nac = mean(applicable judge_nac; numerical_accuracy=-1 excluded)
 hal_rate = 1 - mean(judge_hal_pass)
 hal_pass = mean(judge_hal_pass)
-overall_score = mean(acc, com, nac, hal_pass)
-pass_fail = Pass if overall_score >= 0.60 else Fail
+overall_score = valid_mean(applicable acc, com, nac, hal_pass)
+pass_fail = Pass if overall_score >= 0.60 and critical_fail is false else Fail
 ```
 
 Rows converted: {summary["row_count"]}
 Average overall_score: {summary["avg_overall_score"]}
 Pass rate: {summary["pass_rate"]}
-UTL applicable rate: 0
 """
     path = REPORTS_DIR / "omnieval_metrics_v2_score_snapshot.md"
     ensure_inside(ROOT, path)
@@ -733,16 +906,6 @@ def write_metric_definition() -> None:
             "aggregate_role": "overall_component",
             "source": SCORE_DERIVATION_POLICY,
             "scoring_rule": "Mean of UI-exported COM judge scores.",
-        },
-        {
-            "metric_id": "utl",
-            "metric_name": "Retrieval Utilization",
-            "scale": "N/A",
-            "direction": "not_applicable",
-            "active_metric": "false",
-            "aggregate_role": "excluded",
-            "source": "user_policy",
-            "scoring_rule": "All completed rows are treated as UTL N/A and excluded from denominators.",
         },
         {
             "metric_id": "nac",
@@ -807,20 +970,18 @@ Each row carries the model answer and `llm_judge_individual_scores`.
 
 - Active metrics: ACC, COM, NAC, HAL_pass.
 - Each metric is stored on a 0-1 scale in the generated CSV/JSON files.
-- UTL, SAFE, FCT, and FMT are excluded from the active denominator.
 - HAL is reported as `hal_rate`; `hal_pass` is used in `overall_score`.
 
 ```text
-overall_score = mean(acc, com, nac, hal_pass)
-pass_fail = Pass if overall_score >= 0.60 else Fail
+overall_score = valid_mean(applicable acc, com, nac, hal_pass)
+pass_fail = Pass if overall_score >= 0.60 and critical_fail is false else Fail
 ```
 
 ## Gate Policy
 
 | Gate | Values | Rule |
 | --- | --- | --- |
-| quality_gate | pass / fail | pass when overall_score >= 0.60 |
-| safe_gate | not_applicable | SAFE is excluded from OmniEval v2 |
+| quality_gate | pass / fail | pass when overall_score >= 0.60 and critical_fail is false |
 | judge_agreement_gate | pass / monitor / review | stable -> pass, borderline -> monitor, review_needed -> review |
 | final_gate | pass / fail / review | judge review first, then quality fail/pass |
 
@@ -868,15 +1029,12 @@ def update_manifest(generated_at: str) -> None:
     manifest["score_schema"] = {
         "version": SCHEMA_VERSION,
         "rubric_version": RUBRIC_VERSION,
-        "metrics": ["acc", "com", "utl", "nac", "hal", "hal_pass"],
+        "metrics": ["acc", "com", "nac", "hal", "hal_pass"],
         "active_overall_metrics": list(ACTIVE_METRICS),
         "score_scale": "0_1",
-        "overall_score_policy": "mean(acc, com, nac, hal_pass); UTL excluded",
+        "overall_score_policy": "valid_mean(applicable acc, com, nac, hal_pass)",
         "pass_policy": PASS_POLICY,
-        "utl_policy": "UTL is N/A for all completed rows and excluded from all denominators.",
         "hal_policy": "HAL is reported as hal_rate where lower is better; HAL_pass = 1 - HAL_rate is used in overall_score.",
-        "safe_policy": "SAFE is excluded from omnieval_metrics_config.v2 final scores.",
-        "fct_policy": "FCT is excluded from omnieval_metrics_config.v2 final scores.",
         "score_config_path": score_config,
         "full_consensus_case_scores_path": "scores/omnieval_consensus_case_scores.csv",
         "full_consensus_summary_path": "scores/omnieval_consensus_summary.json",
@@ -918,6 +1076,13 @@ def main() -> None:
     elif not eval_date:
         eval_date = generated_at[:10]
     judge_scores, judge_score_rows = load_judge_scores_from_question_rows(question_rows)
+    input_question_row_count = len(question_rows)
+    question_rows = [
+        row
+        for row in question_rows
+        if (str(row.get("version") or ""), str(row.get("question_id") or "")) in judge_scores
+    ]
+    skipped_missing_judge_score_count = input_question_row_count - len(question_rows)
 
     paths_to_archive = [
         UI_RUNTIME_DATA / "question_cases.csv",
@@ -963,27 +1128,20 @@ def main() -> None:
     judge_overall = judge_summary_rows(judge_score_rows, by_target=False)
     judge_by_target = judge_summary_rows(judge_score_rows, by_target=True)
 
-    question_fields = add_fields(question_fields, ["utl", "hal", "hal_rate", "hal_pass"], after="nac")
-    question_fields = add_fields(question_fields, ["score_scale", "metric_source_hal"], after="score_schema")
-    question_fields = add_fields(question_fields, ["llm_judge_hal_pass"], after="llm_judge_overall_score")
-    write_csv(UI_RUNTIME_DATA / "question_cases.csv", question_fields, updated_question_rows)
+    write_csv(UI_RUNTIME_DATA / "question_cases.csv", list(QUESTION_CASE_OUTPUT_FIELDS), updated_question_rows)
 
     eval_fields = [
         "run_id", "model", "version", "run_type", "eval_date", "eval_started_at", "total_questions",
         "scored_questions", "review_pending_count", "pass_rate", "overall_score", "scored_pass_rate",
-        "scored_average", "acc", "com", "utl", "utl_applicable_rate", "nac", "hal", "hal_rate",
-        "hal_pass", "fct", "fmt", "fmt_applicable_rate", "overall_with_safe", "safe", "safe_pass_rate",
-        "safe_review_rate", "safe_block_rate", "answer_quality_score", "rag_quality_score",
-        "avg_latency_ms", "avg_cost_krw", "score_schema",
+        "scored_average", "acc", "com", "nac", "hal", "hal_rate", "hal_pass",
+        "answer_quality_score", "rag_quality_score", "avg_latency_ms", "avg_cost_krw", "score_schema",
     ]
     write_csv(UI_RUNTIME_DATA / "eval_runs.csv", eval_fields, eval_rows)
 
     slice_fields = [
         "version", "model", "slice_level", "slice_dimension", "slice_value", "case_count", "row_count",
-        "min_reliable_cases", "reliability_status", "pass_rate", "overall_score", "acc", "com", "utl",
-        "utl_applicable_rate", "nac", "hal", "hal_rate", "hal_pass", "fct", "fmt",
-        "fmt_applicable_rate", "overall_with_safe", "safe", "safe_pass_rate", "safe_review_rate",
-        "safe_block_rate", "score_schema",
+        "min_reliable_cases", "reliability_status", "pass_rate", "overall_score", "acc", "com",
+        "nac", "hal", "hal_rate", "hal_pass", "score_schema",
     ]
     write_csv(UI_RUNTIME_DATA / "qa_slice_scores.csv", slice_fields, slices)
 
@@ -998,7 +1156,7 @@ def main() -> None:
 
     compact_fields = [
         "question_id", "target_config_id", "model", "qa_category", "question_type", "qa_topic",
-        "expected_behavior", "acc", "com", "utl", "utl_applicable", "nac", "hal", "hal_rate",
+        "expected_behavior", "acc", "com", "nac", "hal", "hal_rate",
         "hal_pass", "score_denominator", "raw_metric_score", "overall_score", "pass_fail",
         "overall_gap", "metric_max_gap", "pass_mismatch", "agreement_status", "review_priority",
         "error_type", "judge_reason", "score_schema",
@@ -1011,22 +1169,22 @@ def main() -> None:
 
     model_fields = [
         "target_config_id", "model", "score_rows", "avg_overall_score", "pass_rate", "avg_acc",
-        "avg_com", "avg_utl", "utl_applicable_rate", "avg_nac", "avg_hal_rate", "avg_hal_pass",
+        "avg_com", "avg_nac", "avg_hal_rate", "avg_hal_pass",
         "rubric_version", "pass_policy", "score_schema",
     ]
     write_csv(SCORES_DIR / "new_omnieval_rubric_model_scores.csv", model_fields, model_rows)
 
     target_fields = [
         "rank_by_overall_score", "source_run_id", "target_config_id", "model", "run_type", "eval_date",
-        "total_questions", "scored_questions", "pass_rate", "overall_score", "acc", "com", "utl",
-        "utl_applicable_rate", "nac", "hal", "hal_rate", "hal_pass", "score_schema", "score_derivation_policy",
+        "total_questions", "scored_questions", "pass_rate", "overall_score", "acc", "com",
+        "nac", "hal", "hal_rate", "hal_pass", "score_schema", "score_derivation_policy",
     ]
     write_csv(SCORES_DIR / "target_model_scores.csv", target_fields, target_rows)
 
     gate_fields = [
         "question_id", "target_config_id", "model", "qa_category", "question_type", "qa_topic",
-        "expected_behavior", "overall_score", "quality_gate", "quality_gate_reason", "safe",
-        "safe_gate", "safe_gate_reason", "judge_agreement_gate", "agreement_status", "overall_gap",
+        "expected_behavior", "overall_score", "quality_gate", "quality_gate_reason",
+        "judge_agreement_gate", "agreement_status", "overall_gap",
         "metric_max_gap", "review_priority", "final_gate", "final_gate_reason", "release_recommendation",
         "error_type", "rubric_version", "pass_policy",
     ]
@@ -1067,8 +1225,8 @@ def main() -> None:
 
     judge_fields = [
         "label", "judge_provider", "judge_config_id", "judge_model", "score_rows", "avg_overall_score",
-        "min_overall_score", "max_overall_score", "pass_rate", "avg_acc", "avg_com", "avg_utl",
-        "utl_applicable_rate", "avg_nac", "avg_hal_rate", "avg_hal_pass", "score_schema",
+        "min_overall_score", "max_overall_score", "pass_rate", "avg_acc", "avg_com",
+        "avg_nac", "avg_hal_rate", "avg_hal_pass", "score_schema",
     ]
     write_csv(SCORES_DIR / "judge_scores_overall.csv", judge_fields, judge_overall)
     write_csv(SCORES_DIR / "judge_scores_by_target_model.csv", add_fields(judge_fields, ["target_config_id"], after="judge_model"), judge_by_target)
@@ -1084,14 +1242,15 @@ def main() -> None:
         "rubric_version": RUBRIC_VERSION,
         "score_schema": SCHEMA_VERSION,
         "pass_policy": PASS_POLICY,
+        "input_row_count": input_question_row_count,
         "row_count": len(updated_question_rows),
+        "skipped_missing_judge_score_count": skipped_missing_judge_score_count,
         "judge_score_rows": len(judge_score_rows),
         "avg_overall_score": fmt(sum(scores) / len(scores)),
         "min_overall_score": fmt(min(scores)),
         "max_overall_score": fmt(max(scores)),
         "pass_count": pass_count,
         "pass_rate": fmt(pass_count / len(updated_question_rows), 4),
-        "utl_policy": "all rows set to N/A and excluded from denominator",
         "active_metrics": list(ACTIVE_METRICS),
         "hal_policy": "hal is reported as hal_rate (lower is better); hal_pass is used for overall_score and gates",
         "archive_root": str(archive_root.relative_to(ROOT)).replace("\\", "/"),
@@ -1118,12 +1277,11 @@ def main() -> None:
         "metrics": {
             "acc": {"scale": "0_1", "direction": "higher_is_better"},
             "com": {"scale": "0_1", "direction": "higher_is_better"},
-            "utl": {"scale": "N/A", "policy": "all rows excluded by request"},
             "nac": {"scale": "0_1", "direction": "higher_is_better"},
             "hal": {"scale": "0_1", "direction": "lower_is_better", "meaning": "hallucination rate"},
             "hal_pass": {"scale": "0_1", "direction": "higher_is_better", "meaning": "1 - hal_rate"},
         },
-        "overall_score": "mean(acc, com, nac, hal_pass); UTL excluded",
+        "overall_score": "valid_mean(applicable acc, com, nac, hal_pass)",
         "pass_policy": PASS_POLICY,
         "score_derivation_policy": SCORE_DERIVATION_POLICY,
     }

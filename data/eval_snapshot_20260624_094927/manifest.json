@@ -32,10 +32,6 @@
       "scores/new_omnieval_rubric_model_scores.csv",
       "scores/new_omnieval_rubric_model_gate_summary.csv"
     ],
-    "judge_responses": [
-      "judge_responses/gemini_2_5_flash.omnieval.jsonl",
-      "judge_responses/gpt_5_4_mini.omnieval.jsonl"
-    ],
     "reports": [
       "reports/new_omnieval_rubric_scoring_method.md",
       "reports/new_omnieval_rubric_score_summary.json",
@@ -43,12 +39,11 @@
     ]
   },
   "score_schema": {
-    "version": "omnieval_metrics_config_v2_utl_na_0_1",
+    "version": "omnieval_metrics_config_v2",
     "rubric_version": "omnieval_metrics_config.v2",
     "metrics": [
       "acc",
       "com",
-      "utl",
       "nac",
       "hal",
       "hal_pass"
@@ -60,12 +55,9 @@
       "hal_pass"
     ],
     "score_scale": "0_1",
-    "overall_score_policy": "mean(acc, com, nac, hal_pass); UTL excluded",
-    "pass_policy": "mean_acc_com_nac_hal_pass_gte_0_60_utl_na",
-    "utl_policy": "UTL is N/A for all completed rows and excluded from all denominators.",
+    "overall_score_policy": "valid_mean(applicable acc, com, nac, hal_pass)",
+    "pass_policy": "valid_mean_applicable_acc_com_nac_hal_pass_gte_0_60_and_no_critical_fail",
     "hal_policy": "HAL is reported as hal_rate where lower is better; HAL_pass = 1 - HAL_rate is used in overall_score.",
-    "safe_policy": "SAFE is excluded from omnieval_metrics_config.v2 final scores.",
-    "fct_policy": "FCT is excluded from omnieval_metrics_config.v2 final scores.",
     "score_config_path": "scores/omnieval_metrics_config_v2.json",
     "full_consensus_case_scores_path": "scores/omnieval_consensus_case_scores.csv",
     "full_consensus_summary_path": "scores/omnieval_consensus_summary.json",
@@ -78,7 +70,7 @@
     "new_rubric_summary_path": "reports/new_omnieval_rubric_score_summary.json",
     "score_snapshot_report_path": "reports/omnieval_metrics_v2_score_snapshot.md"
   },
-  "updated_at_local": "2026-06-24T11:14:27+09:00",
+  "updated_at_local": "2026-06-24T19:17:11+09:00",
   "source_data": {
     "description": "Current UI runtime export used to build score and report snapshots.",
     "relative_path": "final_UI/data",

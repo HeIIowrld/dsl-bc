@@ -1,6 +1,6 @@
 # OmniEval Metrics Config v2 Scoring Method
 
-Generated: 2026-06-24T11:14:27+09:00
+Generated: 2026-06-24T19:17:11+09:00
 
 ## Active Source
 
@@ -16,20 +16,18 @@ Each row carries the model answer and `llm_judge_individual_scores`.
 
 - Active metrics: ACC, COM, NAC, HAL_pass.
 - Each metric is stored on a 0-1 scale in the generated CSV/JSON files.
-- UTL, SAFE, FCT, and FMT are excluded from the active denominator.
 - HAL is reported as `hal_rate`; `hal_pass` is used in `overall_score`.
 
 ```text
-overall_score = mean(acc, com, nac, hal_pass)
-pass_fail = Pass if overall_score >= 0.60 else Fail
+overall_score = valid_mean(applicable acc, com, nac, hal_pass)
+pass_fail = Pass if overall_score >= 0.60 and critical_fail is false else Fail
 ```
 
 ## Gate Policy
 
 | Gate | Values | Rule |
 | --- | --- | --- |
-| quality_gate | pass / fail | pass when overall_score >= 0.60 |
-| safe_gate | not_applicable | SAFE is excluded from OmniEval v2 |
+| quality_gate | pass / fail | pass when overall_score >= 0.60 and critical_fail is false |
 | judge_agreement_gate | pass / monitor / review | stable -> pass, borderline -> monitor, review_needed -> review |
 | final_gate | pass / fail / review | judge review first, then quality fail/pass |
 

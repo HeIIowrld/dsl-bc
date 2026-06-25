@@ -243,6 +243,14 @@ def case_id_for(row: dict[str, Any]) -> str:
     return "COMPOSED-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:12].upper()
 
 
+def composed_case_id_for(row: dict[str, Any], pool: dict[str, Any]) -> str:
+    case_id = case_id_for(row)
+    prefix = str(pool.get("case_id_prefix") or "").strip()
+    if prefix and not case_id.startswith(f"{prefix}::"):
+        return f"{prefix}::{case_id}"
+    return case_id
+
+
 def unique_cases(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -391,6 +399,13 @@ def annotate_case(
 ) -> dict[str, Any]:
     case = copy.deepcopy(row)
     case.setdefault("case_id", case_id_for(row))
+    prefixed_case_id = composed_case_id_for(case, pool)
+    if prefixed_case_id != case_id_for(case):
+        metadata = dict(metadata_for(case))
+        metadata.setdefault("source_case_id", case_id_for(case))
+        case["case_id"] = prefixed_case_id
+        case["question_id"] = prefixed_case_id
+        case["metadata"] = metadata
     metadata = dict(metadata_for(case))
     role = str(pool.get("role") or "regression")
     pool_gate_eligible = bool(pool.get("gate_eligible", role != "benchmark"))
@@ -487,7 +502,7 @@ def compose_dataset(
         rng.shuffle(shuffled)
         chosen: list[dict[str, Any]] = []
         for row in shuffled:
-            case_id = case_id_for(row)
+            case_id = composed_case_id_for(row, pool)
             if case_id in seen:
                 continue
             chosen.append(row)

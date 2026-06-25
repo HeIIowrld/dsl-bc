@@ -27,7 +27,7 @@ overall_score = mean(acc, com, nac, hal_pass)
 pass_fail = Pass when overall_score >= 0.60
 ```
 
-`UTL`, `SAFE`, `FCT`, and `FMT` are not part of the active denominator.
+Only `acc`, `com`, `nac`, and `hal_pass` are part of the active denominator.
 
 | File | Purpose |
 | --- | --- |
@@ -50,5 +50,5 @@ pass_fail = Pass when overall_score >= 0.60
 ## Runtime Snapshots
 
 `models/` and `inventories/` keep lightweight runtime references and file
-inventories. Historical raw judge-response files may remain for audit, but they
-are not the active score-generation source.
+inventories. Historical raw judge-response files are archived outside this
+active snapshot tree.

@@ -1,3 +1,3 @@
-﻿label,judge_provider,judge_config_id,judge_model,score_rows,avg_overall_score,min_overall_score,max_overall_score,pass_rate,avg_acc,avg_com,avg_utl,utl_applicable_rate,avg_nac,avg_hal_rate,avg_hal_pass,score_schema
-gemini_2_5_flash_judge,gemini,gemini_2_5_flash_judge,gemini-2.5-flash,12000,0.4971,0,1,0.4126,0.353125,0.343646,,0,0.764825,0.473196,0.526804,omnieval_metrics_config_v2_utl_na_0_1
-openai_gpt54_mini_judge,openai_native,openai_gpt54_mini_judge,gpt-5.4-mini,12000,0.477838,0,1,0.3701,0.365042,0.348242,,0,0.790687,0.592621,0.407379,omnieval_metrics_config_v2_utl_na_0_1
+﻿label,judge_provider,judge_config_id,judge_model,score_rows,avg_overall_score,min_overall_score,max_overall_score,pass_rate,avg_acc,avg_com,avg_nac,avg_hal_rate,avg_hal_pass,score_schema
+gemini_2_5_flash_judge,gemini,gemini_2_5_flash_judge,gemini-2.5-flash,2,0.25,0.25,0.25,0,0,0,0,0,1,omnieval_metrics_config_v2
+openai_gpt54_mini_judge,openai_native,openai_gpt54_mini_judge,gpt-5.4-mini,20,0.247917,0,1,0.15,0.25,0.225,0.0625,0.65,0.35,omnieval_metrics_config_v2

@@ -16,9 +16,10 @@
     "model_answer",
     "acc",
     "com",
-    "utl",
     "nac",
     "hal",
+    "hal_rate",
+    "hal_pass",
     "overall_score",
     "latency_ms",
     "status",
@@ -37,12 +38,25 @@
     "instruction": {"type": "string"},
     "output": {"type": "string"},
     "model_answer": {"type": "string"},
-    "acc": {"type": "number", "minimum": 0, "maximum": 20},
-    "com": {"type": "number", "minimum": 0, "maximum": 20},
-    "utl": {"type": "number", "minimum": 0, "maximum": 20},
-    "nac": {"type": "number", "minimum": 0, "maximum": 20},
-    "hal": {"type": "number", "minimum": 0, "maximum": 20},
-    "overall_score": {"type": "number", "minimum": 0, "maximum": 100},
+    "acc": {"type": "number", "minimum": 0, "maximum": 1},
+    "com": {
+      "anyOf": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"const": ""},
+        {"type": "null"}
+      ]
+    },
+    "nac": {
+      "anyOf": [
+        {"type": "number", "minimum": 0, "maximum": 1},
+        {"const": ""},
+        {"type": "null"}
+      ]
+    },
+    "hal": {"type": "number", "minimum": 0, "maximum": 1},
+    "hal_rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "hal_pass": {"type": "number", "minimum": 0, "maximum": 1},
+    "overall_score": {"type": "number", "minimum": 0, "maximum": 1},
     "latency_ms": {"type": "number"},
     "status": {"type": "string"},
     "error": {"type": ["string", "null"]},
