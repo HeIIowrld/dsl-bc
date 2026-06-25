@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BC 금융 RAG 회귀 평가 대시보드</title>
-  <link rel="stylesheet" href="styles.css?v=20260620-uiux-readability">
+  <link rel="stylesheet" href="styles.css?v=20260625-matrix-scroll-chain">
 </head>
 <body class="theme-internal benchmark-console" data-active-tab="runEval">
   <div id="toastRegion" class="toast-region" aria-live="polite" aria-label="알림"></div>
 
   <!-- ════════════════════════════════════════════
-       TOP HEADER  (로고 + 전역 KPI + Run 상태)
+       TOP HEADER  (로고)
        ════════════════════════════════════════════ -->
   <header class="top-header">
     <div class="top-header-brand">
@@ -21,24 +21,6 @@
       </div>
     </div>
 
-    <!-- 핵심 수치 3개 — 항상 노출 -->
-    <div class="top-header-kpis">
-      <div class="header-kpi">
-        <span class="header-kpi-label">벤치마크 문항</span>
-        <span id="headerBenchmarkCount" class="header-kpi-value">-</span>
-      </div>
-      <div class="header-kpi">
-        <span class="header-kpi-label">회귀 문항</span>
-        <span id="headerRegressionCount" class="header-kpi-value">-</span>
-      </div>
-      <div class="header-kpi">
-        <span class="header-kpi-label">채점</span>
-        <span id="headerJudgeValue" class="header-kpi-value">규칙 기반</span>
-      </div>
-    </div>
-
-    <!-- 마지막 Run 메타 -->
-    <div id="runMeta" class="run-meta top-run-meta"></div>
   </header>
 
   <!-- ════════════════════════════════════════════
@@ -92,16 +74,18 @@
            2. 테스트셋 — Test Sets
            3. 실행   — Run Evaluation
            4. 결과   — Results Matrix
-           5. 비교   — Model Compare
-           6. 통과/실패 문항 개요 — Pass/Fail Case Overview
-           7. 문항별 모델 상세 응답 — Per-Case Model Responses
-           8. 전체 검색 — Search
+           5. 리포트 — Report selector
+           6. 비교   — Model Compare
+           7. 통과/실패 문항 개요 — Pass/Fail Case Overview
+           8. 문항별 모델 상세 응답 — Per-Case Model Responses
+           9. 전체 검색 — Search
       ──────────────────────────────────────────── -->
       <nav class="tabs primary-tabs" role="tablist" aria-label="Dashboard tabs">
         <button id="tab-settings" class="tab" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings" tabindex="-1">설정</button>
         <button id="tab-caseSets" class="tab" data-tab="caseSets" role="tab" aria-selected="false" aria-controls="caseSets" tabindex="-1">테스트셋</button>
         <button id="tab-runEval" class="tab active" data-tab="runEval" role="tab" aria-selected="true" aria-controls="runEval" tabindex="0">실행</button>
         <button id="tab-overview" class="tab" data-tab="overview" role="tab" aria-selected="false" aria-controls="overview" tabindex="-1">결과</button>
+        <button id="tab-reports" class="tab" data-tab="reports" role="tab" aria-selected="false" aria-controls="reports" tabindex="-1">리포트</button>
         <button id="tab-compare" class="tab" data-tab="compare" role="tab" aria-selected="false" aria-controls="compare" tabindex="-1">비교</button>
         <button id="tab-failures" class="tab" data-tab="failures" role="tab" aria-selected="false" aria-controls="failures" tabindex="-1">통과/실패 문항 개요</button>
         <button id="tab-explorer" class="tab" data-tab="explorer" role="tab" aria-selected="false" aria-controls="explorer" tabindex="-1">문항별 모델 상세 응답</button>
@@ -307,6 +291,7 @@
                 <label>Judge 시스템 프롬프트
                   <textarea id="judgeRegistrySystemPrompt" name="system_prompt" rows="7" placeholder="프리셋 프롬프트 내용을 표시합니다" readonly></textarea>
                 </label>
+                <div id="judgeRegistryPromptContract" class="judge-prompt-contract"></div>
                 <label>추가 옵션 JSON
                   <textarea id="judgeRegistryOptionsJson" name="options_json" rows="3" placeholder="{&quot;include_ai_filters&quot;:false}"></textarea>
                 </label>
@@ -379,7 +364,8 @@
               <input id="evalLimit" name="limit" type="number" min="1" max="100000" placeholder="실행 범위 전체 / 단일 파일 기본 10">
             </label>
             <label>실행 ID
-              <input id="evalRunId" name="run_id" placeholder="WEB_EVAL_SAMPLE">
+              <input id="evalRunId" name="run_id" placeholder="WEB_EVAL_20260624_184500" autocomplete="off">
+              <small class="field-help">화면에서 자동 생성됩니다. 기존 실행 ID와 겹치면 서버가 suffix를 붙여 새 ID로 실행합니다.</small>
             </label>
             <label hidden>Tool prediction JSONL
               <input id="evalPredictionFile" name="prediction_file" placeholder="out\tool_agent_eval\predictions.jsonl">
@@ -459,7 +445,7 @@
               <small id="evalBlendWeightHelp" class="field-help">0.50 = LLM 50%, Rule 50%로 반영 점수에 적용합니다.</small>
             </label>
             <label class="check-inline">
-              <input id="evalDryRun" name="dry_run" type="checkbox">
+              <input id="evalDryRun" name="dry_run" type="checkbox" checked>
               모의 실행 (모델 호출 없음)
             </label>
             <label class="check-inline">
@@ -480,13 +466,29 @@
               <small>LLM 평가 없이 답변 파일 저장</small>
             </button>
             <div class="run-step-two-action">
-              <label class="run-cache-option">
-                <input id="evalAnswerCacheEnabled" name="answer_cache" type="checkbox" checked>
-                <span>
-                  <strong>답변 캐시 재사용</strong>
-                  <small>2단계 실행 시 1단계/이전 답변을 먼저 사용</small>
-                </span>
-              </label>
+              <div class="run-cache-options" aria-label="재사용 옵션">
+                <label class="run-cache-option">
+                  <input id="evalAnswerCacheEnabled" name="answer_cache" type="checkbox" checked>
+                  <span>
+                    <strong>답변 재사용</strong>
+                    <small>동일 모델/동일 질문이면 이전 답변 사용</small>
+                  </span>
+                </label>
+                <label class="run-cache-option">
+                  <input id="evalJudgeCacheEnabled" name="judge_cache" type="checkbox" checked>
+                  <span>
+                    <strong>채점 답변 재사용</strong>
+                    <small>동일 모델 답변/동일 Judge면 이전 채점 사용</small>
+                  </span>
+                </label>
+                <label class="run-cache-option">
+                  <input id="evalArbiterCacheEnabled" name="arbiter_cache" type="checkbox" checked>
+                  <span>
+                    <strong>Arbiter 답변 재사용</strong>
+                    <small>동일 충돌 맥락/동일 Arbiter면 이전 중재 사용</small>
+                  </span>
+                </label>
+              </div>
               <button id="evalRunSubmit" class="run-submit" type="button">
                 <span>2단계: 채점 포함 실행</span>
                 <small>선택한 모델의 답변 생성부터 평가까지 실행</small>
@@ -598,15 +600,83 @@
       </section>
 
       <!-- ════════════════════════════════════════
-           TAB 3: 결과 — Results Matrix
+           TAB 4: 결과 — Results Matrix
            순서: KPI → 배포 판정 → Matrix+Detail → 차트
            ════════════════════════════════════════ -->
       <section id="overview" class="panel eval-viewer-panel" role="tabpanel" aria-labelledby="tab-overview">
 
+        <!-- 4-1. KPI (제일 먼저) -->
+        <div id="kpis" class="kpi-grid"></div>
+        <div id="runGateKpis" class="kpi-grid compact"></div>
+
+        <!-- 4-2. 배포 판정 (차단/검토 사유 — KPI 다음으로 중요) -->
+        <article class="card">
+          <div class="card-head">
+            <h2>배포 판정 요약</h2>
+            <span>차단/검토 기준이 적용되는 실행에서 표시됩니다.</span>
+          </div>
+          <div id="runGateTable"></div>
+        </article>
+
+        <!-- 4-3. 결과 뷰어 -->
+        <article class="card">
+          <div class="card-head result-viewer-head">
+            <div>
+              <h2>결과 매트릭스</h2>
+              <span>질문별 모델 성능 비교</span>
+            </div>
+            <div id="resultViewerStats" class="result-viewer-stats"></div>
+          </div>
+          <div class="control-row result-controls">
+            <label for="resultViewMode">보기
+              <select id="resultViewMode">
+                <option value="all">전체</option>
+                <option value="failures">실패 문항</option>
+                <option value="passes">통과 문항</option>
+                <option value="safety">정책/안전 이슈</option>
+                <option value="different">불일치</option>
+                <option value="review">검토</option>
+              </select>
+            </label>
+            <label for="resultModelFilter">모델
+              <select id="resultModelFilter"></select>
+            </label>
+            <label class="search-field" for="resultSearch">검색
+              <input id="resultSearch" type="search" placeholder="질문, 케이스 ID, 답변 요약">
+            </label>
+            <button id="clearResultFilters" type="button">초기화</button>
+          </div>
+          <div id="resultMatrix"></div>
+          <div id="resultDetail" class="result-detail"></div>
+        </article>
+
+        <!-- 4-4. 차트/분포 -->
+        <div class="grid two">
+          <article class="card">
+            <div class="card-head">
+              <h2>모델별 평균 점수</h2>
+              <span>필터 반영</span>
+            </div>
+            <div id="trendChart"></div>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <h2>지표별 분포</h2>
+              <span>ACC/COM/NAC/HAL</span>
+            </div>
+            <div id="metricBars"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- ════════════════════════════════════════
+           TAB 5: 리포트 — Report selector
+           ════════════════════════════════════════ -->
+      <section id="reports" class="panel report-panel" role="tabpanel" aria-labelledby="tab-reports">
         <article class="card result-history-card">
           <div class="card-head">
-            <h2>결과 선택</h2>
-            <span>과거 실행 결과를 선택해 같은 UI에서 확인합니다.</span>
+            <h2>리포트 선택</h2>
+            <span>실행별 화면 리포트와 HTML 보고서를 선택합니다.</span>
           </div>
           <div class="control-row result-history-controls">
             <label for="resultRunSelect">실행
@@ -618,96 +688,13 @@
           <div id="resultRunSummary" class="run-summary-strip"></div>
         </article>
 
-        <details class="card result-methodology-card">
-          <summary class="card-head">
-            <h2>평가 방법론 보기</h2>
-            <span>결과 해석 기준</span>
-          </summary>
-          <div class="method-grid compact-method-grid">
-            <div><strong>총점</strong><p>ACC, COM, NAC, HAL_pass를 기본 4대 지표로 평균해 0-1 원 스케일로 표시합니다.</p></div>
-            <div><strong>제외 지표</strong><p>UTL, SAFE, FCT, FMT는 총점과 점수 바에서 제외합니다. 정책/안전 이슈는 오류 유형, Judge 사유, 배포 판정으로 확인합니다.</p></div>
-            <div><strong>LLM 평가</strong><p>Judge 응답은 OmniEval v2 기준으로 처리되며 산출 파일과 화면 표시 모두 0-1 스케일을 사용합니다.</p></div>
-            <div><strong>비교</strong><p>동일 테스트셋과 동일 채점 방식 기준으로 모델, 프롬프트 변형, 채점 설정별 성능을 비교합니다.</p></div>
-          </div>
-        </details>
-
-        <!-- 3-1. KPI (제일 먼저) -->
-        <div id="kpis" class="kpi-grid"></div>
-        <div id="runGateKpis" class="kpi-grid compact"></div>
-
-        <!-- 3-2. 배포 판정 (차단/검토 사유 — KPI 다음으로 중요) -->
         <article class="card">
           <div class="card-head">
-            <h2>배포 판정 요약</h2>
-            <span>차단/검토 기준이 적용되는 실행에서 표시됩니다.</span>
+            <h2>실행별 리포트</h2>
+            <span>최근 실행 중 리포트를 열 대상을 선택합니다.</span>
           </div>
-          <div id="runGateTable"></div>
+          <div id="reportRunTable"></div>
         </article>
-
-        <!-- 3-3. Evaluation Matrix + Case Detail -->
-        <div class="eval-toolbar">
-          <div>
-            <strong>문항-모델 결과표</strong>
-            <span>행은 문항, 열은 모델 또는 프롬프트 변형입니다.</span>
-          </div>
-          <div class="eval-toolbar-controls">
-            <label>보기
-              <select id="resultViewMode">
-                <option value="all">전체</option>
-                <option value="failures">실패 문항</option>
-                <option value="passes">통과 문항</option>
-                <option value="safety">정책/안전 이슈</option>
-                <option value="different">불일치</option>
-                <option value="review">검토</option>
-              </select>
-            </label>
-            <label>모델
-              <select id="resultModelFilter">
-                <option value="">전체 모델</option>
-              </select>
-            </label>
-            <label>검색
-              <input id="resultSearch" type="search" placeholder="케이스 ID, 질문, 사유">
-            </label>
-            <button id="clearResultFilters" type="button">초기화</button>
-          </div>
-        </div>
-        <div id="resultViewerStats" class="viewer-stats"></div>
-        <div class="eval-viewer-grid">
-          <article class="card matrix-card">
-            <div class="card-head">
-              <h2>문항별 결과표</h2>
-              <span>셀을 클릭하면 답변, 점수, 채점 사유를 확인할 수 있습니다.</span>
-            </div>
-            <div id="resultMatrix"></div>
-          </article>
-          <aside class="card result-detail-card">
-            <div class="card-head">
-              <h2>문항별 모델 상세 응답</h2>
-              <span>선택한 문항과 모델 답변</span>
-            </div>
-            <div id="resultDetail"></div>
-          </aside>
-        </div>
-
-        <!-- 3-4. 차트 (맥락 분석은 마지막) -->
-        <div class="grid two">
-          <article class="card">
-            <div class="card-head">
-              <h2>선택 모델 평가 비교</h2>
-              <span>종합 점수 / 합격률</span>
-            </div>
-            <div id="trendChart" class="chart"></div>
-          </article>
-          <article class="card">
-            <div class="card-head">
-              <h2>평가 지표</h2>
-              <span>ACC / COM / NAC / HAL_pass</span>
-            </div>
-            <div id="metricBars" class="metric-bars"></div>
-          </article>
-        </div>
-
       </section>
 
       <!-- ════════════════════════════════════════
@@ -742,7 +729,9 @@
               <label for="datasetLimit">미리보기 수</label>
               <input id="datasetLimit" type="number" min="1" max="1000" value="120">
               <button id="runWithSelectedDataset" type="button" class="link-button">이 테스트셋으로 실행</button>
+              <button id="deleteDatasetButton" type="button" class="link-button danger-action" disabled>선택 테스트셋 삭제</button>
             </div>
+            <div id="datasetDefaultControl" class="dataset-default-control"></div>
             <form id="datasetUploadForm" class="dataset-upload-form">
               <div class="prompt-variant-copy">
                 <strong>CSV 테스트셋 추가</strong>
@@ -996,6 +985,6 @@
     </main>
   </div><!-- /.layout -->
 
-  <script src="app.js?v=20260620-uiux-readability"></script>
+  <script src="app.js?v=20260624-runid-expand-2"></script>
 </body>
 </html>

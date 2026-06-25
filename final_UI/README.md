@@ -81,15 +81,11 @@ final_UI/data/judge_api_presets.json
 Saved results are displayed from the full 12,000-row OmniEval consensus
 summaries under `data/eval_snapshot_20260624_094927/scores/`:
 
-- core metric bars: `ACC`, `COM`, `NAC`, `FCT`, `FMT`
-- `SAFE` is shown as a separate fail-cause proxy/gate metric
-- `overall_score` remains the core ranking/pass score; `overall_with_safe` is diagnostic
-- saved legacy factuality scores are displayed as `FCT`
-- `FMT` is shown as `N/A` unless the row has an explicit format requirement
-
-Some live runner internals still preserve legacy judge fields for compatibility
-with saved `by_judge/*/judge_scores.jsonl` sources, but result-facing UI labels
-and final CSV summaries should use the OmniEval names above.
+- core metric bars: `ACC`, `COM`, `NAC`, `HAL_pass`
+- every displayed score is a normalized 0-1 value
+- `overall_score` is the ranking and pass/fail score
+- `hal_rate` may be stored as a reported diagnostic, but `HAL_pass` is the
+  score component used in `overall_score`
 
 Do not keep these in the active tree:
 

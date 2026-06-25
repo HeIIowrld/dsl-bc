@@ -40,15 +40,23 @@ const severityLabels = {
 
 const runProfileLabels = {
   single_dataset: "단일 케이스 파일",
-  benchmark_final_full: "벤치마크 전체",
-  regression_golden_full: "회귀 전체",
+  benchmark_default_full: "기본 벤치마크 셋",
+  benchmark_registered_all: "등록된 벤치마크 전체",
+  regression_default_full: "기본 회귀 셋",
+  regression_registered_all: "등록된 회귀 전체",
+  benchmark_final_full: "고정 벤치마크 파일",
+  regression_golden_full: "고정 회귀 파일",
   custom_seeded_mix: "직접 구성",
 };
 
 const runProfileHelp = {
   single_dataset: "선택한 케이스 파일 전체를 기준으로 빠르게 확인합니다.",
-  benchmark_final_full: "벤치마크 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
-  regression_golden_full: "회귀 골든셋 전체를 실행합니다. 배포 차단 판단에 사용합니다.",
+  benchmark_default_full: "기본으로 지정된 벤치마크 셋 전체를 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
+  benchmark_registered_all: "현재 등록되어 있는 모든 벤치마크 셋을 합쳐 실행합니다. 배포 차단 집계에는 포함하지 않습니다.",
+  regression_default_full: "기본으로 지정된 회귀 셋 전체를 실행합니다. 배포 차단 판단에 사용합니다.",
+  regression_registered_all: "현재 등록되어 있는 모든 회귀 셋을 합쳐 실행합니다. 배포 차단 판단에 사용합니다.",
+  benchmark_final_full: "questionlist/benchmark의 고정 벤치마크 파일만 실행합니다.",
+  regression_golden_full: "questionlist/regression의 고정 회귀 파일만 실행합니다.",
   custom_seeded_mix: "총 샘플 수, 풀별 비율, 랜덤 시드를 직접 입력해 섞어서 실행합니다.",
 };
 
@@ -232,6 +240,7 @@ let questionlistCases = [];
 let questionlistCasesLoaded = false;
 let questionlistCasesLoadPromise = null;
 let questionlistDatasets = [];
+let questionDatasetDefaults = { benchmark: "benchmark_final_full", regression: "regression_golden_full" };
 let datasetCases = [];
 let datasetCasesLoadPromise = null;
 let datasetCasesLoadedId = "";
@@ -250,6 +259,7 @@ let caseDetailCache = new Map();
 let caseDetailRequestSeq = 0;
 let deferredInitialDataPromise = null;
 let deferredInitialDataRequestToken = 0;
+let reportsDeferredLoadAttempted = false;
 let evalCatalog = { profiles: {}, pools: {}, default_seed: 42 };
 let judgeComparisonOptions = { baseline_sources: [], judge_runs: [] };
 let modelHealthCheckInFlight = false;
@@ -312,12 +322,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     const initialRunId = selectedRunId || currentUiDataRunId;
     const runQuery = runQueryForRunId(initialRunId);
+    authSession = await fetchJsonOptional("api/auth/session", null);
+    const secretCatalogPromise = hasWriteAccess()
+      ? fetchJsonOptional("api/server-api-secrets", { keys: [] })
+      : Promise.resolve({ keys: [] });
     const [runText, gateText, registry, presetCatalog, secretCatalog, qSummary, qDatasets, catalog] = await Promise.all([
       fetchCsv(`data/eval_runs.csv${runQuery}`),
       fetchCsvOptional(`data/run_release_gates.csv${runQuery}`, ""),
       fetchJsonOptional("api/model-registry", {}),
       fetchJsonOptional("api/judge-api-presets", { presets: [] }),
-      fetchJsonOptional("api/server-api-secrets", { keys: [] }),
+      secretCatalogPromise,
       fetchJsonOptional("api/questionlist/summary", null),
       fetchJsonOptional("api/questionlist/datasets", { datasets: [] }),
       fetchJsonOptional("api/eval/catalog", { profiles: {}, pools: {}, default_seed: 42 }),
@@ -331,9 +345,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     questionlistSummary = qSummary;
     selectedRunId = normalizeRunId(selectedRunId || initialRunId);
     latestRun = lightweightRunInfo(selectedRunId);
-    questionlistDatasets = qDatasets?.datasets ?? [];
-    selectedDataset = preferredDatasetForRun(selectedRunId, selectedDataset);
+    applyQuestionDatasetPayload(qDatasets);
+    selectedDataset = preferredDatasetForRun(selectedRunId, defaultDatasetId("benchmark") || selectedDataset);
     evalCatalog = catalog ?? evalCatalog;
+    if (catalog?.defaults) {
+      questionDatasetDefaults = normalizeQuestionDatasetDefaults(catalog.defaults);
+    }
     if (shouldLoadQuestionlistImmediately) {
       await ensureQuestionlistCasesLoaded();
     }
@@ -361,6 +378,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       renderAll();
     }
     renderTargetRegistry();
+    applyAuthUiState();
     window.setTimeout(() => {
       reconnectEvalJob().catch((error) => console.warn("eval job reconnect failed", error));
     }, 0);
@@ -445,6 +463,25 @@ function isCurrentUiDataRunId(runId) {
 function normalizeRunId(runId) {
   const value = String(runId || "").trim();
   return isCurrentUiDataRunId(value) ? currentUiDataRunId : value;
+}
+
+function generatedEvalRunId(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    "WEB_EVAL",
+    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`,
+    `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`,
+  ].join("_");
+}
+
+function ensureEvalRunId({ force = false } = {}) {
+  const input = document.getElementById("evalRunId");
+  if (!input) return "";
+  const current = input.value.trim();
+  if (current && !force) return current;
+  const runId = generatedEvalRunId();
+  input.value = runId;
+  return runId;
 }
 
 function runQueryForRunId(runId) {
@@ -558,6 +595,7 @@ function resetQuestionlistCaseCache() {
 function invalidateDeferredInitialData() {
   deferredInitialDataRequestToken += 1;
   deferredInitialDataPromise = null;
+  reportsDeferredLoadAttempted = false;
 }
 
 async function fetchJsonOptional(path, defaultValue) {
@@ -576,6 +614,82 @@ async function fetchJson(path) {
     throw new Error(`${path} 로딩 실패 (${response.status})`);
   }
   return response.json();
+}
+
+function hasWriteAccess(session = authSession) {
+  if (!session) return false;
+  if (!session.auth_enabled) return true;
+  return session.role === "admin";
+}
+
+function readOnlyActionMessage(actionLabel = "이 작업") {
+  return `읽기 전용 계정은 ${actionLabel}할 수 없습니다. 관리자 계정으로 로그인하세요.`;
+}
+
+function requireWriteAccess(messageSetter = null, actionLabel = "이 작업") {
+  if (hasWriteAccess()) return true;
+  const message = readOnlyActionMessage(actionLabel);
+  if (typeof messageSetter === "function") {
+    messageSetter(message, "error");
+  } else {
+    showToast(message, "error");
+  }
+  return false;
+}
+
+function applyAuthUiState() {
+  const readOnly = !hasWriteAccess();
+  document.body.classList.toggle("read-only-mode", readOnly);
+  const selector = [
+    "#settings input",
+    "#settings select",
+    "#settings textarea",
+    "#settings button",
+    "#datasetUploadForm input",
+    "#datasetUploadForm select",
+    "#datasetUploadForm button",
+    "#deleteDatasetButton",
+    "#datasetDefaultControl input",
+    "#datasetDefaultControl button",
+    "#runEval input",
+    "#runEval select",
+    "#runEval textarea",
+    "#runEval button",
+    "[data-edit-model]",
+    "[data-delete-model]",
+    "[data-check-model]",
+    "[data-edit-judge]",
+    "[data-delete-judge]",
+    "[data-check-judge]",
+  ].join(",");
+  document.querySelectorAll(selector).forEach((control) => {
+    setAuthDisabled(control, readOnly);
+  });
+}
+
+function setAuthDisabled(control, disabled) {
+  if (!control) return;
+  if (disabled) {
+    if (control.dataset.authDisabled !== "true") {
+      control.dataset.authPrevDisabled = control.disabled ? "true" : "false";
+    }
+    control.disabled = true;
+    control.dataset.authDisabled = "true";
+    control.setAttribute("aria-disabled", "true");
+    if (!control.dataset.authPrevTitle) control.dataset.authPrevTitle = control.title || "";
+    const rawLabel = (control.textContent?.trim() || control.getAttribute("aria-label") || "").replace(/\s+/g, " ");
+    const actionLabel = rawLabel && rawLabel.length <= 30 ? rawLabel : "이 작업";
+    control.title = readOnlyActionMessage(actionLabel);
+    return;
+  }
+  if (control.dataset.authDisabled === "true") {
+    if (control.dataset.authPrevDisabled !== "true") control.disabled = false;
+    control.title = control.dataset.authPrevTitle || "";
+    control.removeAttribute("aria-disabled");
+    delete control.dataset.authDisabled;
+    delete control.dataset.authPrevDisabled;
+    delete control.dataset.authPrevTitle;
+  }
 }
 
 function selectedRunQuery() {
@@ -697,37 +811,49 @@ function mergeCaseDetailRow(baseRow, detailRow) {
   return baseRow;
 }
 
-function hydrateResultDetail(row) {
-  if (!row || row.__detailLoaded || row.__detailLoadFailed) return;
+function loadCaseDetailRow(row) {
+  if (!row) return Promise.reject(new Error("missing case row"));
+  if (row.__detailLoaded) return Promise.resolve(row);
   const key = caseDetailKey(row);
   const cached = caseDetailCache.get(key);
   if (cached && !(cached instanceof Promise)) {
     mergeCaseDetailRow(row, cached);
-    if (state.selectedMatrixKey === `${row.question_id || row.case_id}::${row.version}`) renderResultDetail(row);
-    return;
+    return Promise.resolve(row);
   }
-  if (cached instanceof Promise) return;
-  const requestSeq = ++caseDetailRequestSeq;
+  if (cached instanceof Promise) {
+    return cached.then((detail) => mergeCaseDetailRow(row, detail));
+  }
   const promise = fetchJson(caseDetailUrl(row))
     .then((payload) => {
       const detail = payload?.row;
       if (!detail) throw new Error("case detail response missing row");
       caseDetailCache.set(key, detail);
-      mergeCaseDetailRow(row, detail);
+      return detail;
+    })
+    .catch((error) => {
+      caseDetailCache.delete(key);
+      throw error;
+    });
+  caseDetailCache.set(key, promise);
+  return promise.then((detail) => mergeCaseDetailRow(row, detail));
+}
+
+function hydrateResultDetail(row) {
+  if (!row || row.__detailLoaded || row.__detailLoadFailed) return;
+  const requestSeq = ++caseDetailRequestSeq;
+  loadCaseDetailRow(row)
+    .then(() => {
       if (requestSeq === caseDetailRequestSeq && state.selectedMatrixKey === `${row.question_id || row.case_id}::${row.version}`) {
         renderResultDetail(row);
       }
-      return detail;
     })
     .catch((error) => {
       console.warn("case detail load failed", error);
       row.__detailLoadFailed = true;
-      caseDetailCache.delete(key);
       if (requestSeq === caseDetailRequestSeq && state.selectedMatrixKey === `${row.question_id || row.case_id}::${row.version}`) {
         renderResultDetail(row);
       }
     });
-  caseDetailCache.set(key, promise);
 }
 
 async function ensureQuestionlistCasesLoaded() {
@@ -754,12 +880,15 @@ async function loadDeferredInitialData() {
   deferredInitialDataRequestToken = requestToken;
   const previousRunId = selectedRunCacheId();
   const runQuery = selectedRunQuery();
+  const accessLogPromise = hasWriteAccess()
+    ? fetchJsonOptional("api/auth/access-log?limit=80", { entries: [] })
+    : Promise.resolve({ entries: [] });
   deferredInitialDataPromise = Promise.all([
     fetchJsonOptional(`api/eval/latest-run${runQuery}`, null),
     fetchJsonOptional("api/eval/runs", { runs: [] }),
     fetchJsonOptional("api/eval/judge-comparison/options", { baseline_sources: [], judge_runs: [] }),
     fetchJsonOptional("api/auth/session", null),
-    fetchJsonOptional("api/auth/access-log?limit=80", { entries: [] }),
+    accessLogPromise,
   ]).then(([runInfo, runHistory, comparisonOptions, session, accessLog]) => {
     if (requestToken !== deferredInitialDataRequestToken || previousRunId !== selectedRunCacheId()) {
       return false;
@@ -771,14 +900,16 @@ async function loadDeferredInitialData() {
     }
     evalRunHistory = runHistory?.runs ?? evalRunHistory;
     judgeComparisonOptions = comparisonOptions ?? judgeComparisonOptions;
-    authSession = session;
+    authSession = session || authSession;
     authAccessLog = accessLog?.entries ?? [];
     renderRunMeta();
     renderResultRunSelector();
+    if (activeTabId() === "reports") renderReportsTab();
     renderReblendRunSelector();
     renderJudgeComparisonControls();
     if (activeTabId() === "settings") renderAuthPanel();
     if (resultDataTabIds.has(activeTabId())) renderAll({ tab: activeTabId() });
+    applyAuthUiState();
     return true;
   }).finally(() => {
     if (requestToken === deferredInitialDataRequestToken) {
@@ -1418,7 +1549,7 @@ function initializeResultViewerControls() {
 function initializeResultRunControls() {
   const select = document.getElementById("resultRunSelect");
   if (!select) return;
-  select.onchange = () => loadSelectedRun(select.value);
+  select.onchange = () => loadSelectedRun(select.value, { targetTab: activeTabId() });
 }
 
 function initializeSearchControls() {
@@ -1480,10 +1611,14 @@ function initializeRunFormGuards() {
 function initializeRegistryProviderControls() {
   const modelProvider = document.getElementById("modelProvider");
   const judgeProvider = document.getElementById("judgeRegistryProvider");
+  const judgeModel = document.getElementById("judgeRegistryModel");
+  const judgeOptionsJson = document.getElementById("judgeRegistryOptionsJson");
   const judgeConfigId = document.getElementById("judgeRegistryConfigId");
   const judgePromptPreset = document.getElementById("judgeRegistryPromptPreset");
   modelProvider?.addEventListener("change", updateModelRegistryProviderFields);
   judgeProvider?.addEventListener("change", updateJudgeRegistryProviderFields);
+  judgeModel?.addEventListener("input", updateJudgeRegistrySamplingFields);
+  judgeOptionsJson?.addEventListener("input", updateJudgeRegistrySamplingFields);
   judgeConfigId?.addEventListener("input", () => syncJudgeRegistryApiKeyEnv());
   judgePromptPreset?.addEventListener("change", updateJudgePromptPresetFields);
   updateModelRegistryProviderFields();
@@ -1562,12 +1697,14 @@ function updateJudgeRegistryProviderFields() {
   }
   if (hasProvider) applyJudgeRegistryProviderDefaults();
   syncJudgeRegistryApiKeyEnv();
+  updateJudgeRegistrySamplingFields();
 }
 
 function updateJudgePromptPresetFields() {
   const presetInput = document.getElementById("judgeRegistryPromptPreset");
   const versionInput = document.getElementById("judgeRegistryPromptVersion");
   const promptInput = document.getElementById("judgeRegistrySystemPrompt");
+  const contractBlock = document.getElementById("judgeRegistryPromptContract");
   const preset = presetInput?.value || "judge_default_v1";
   const spec = judgePromptPresets[preset] || judgePromptPresets.judge_default_v1;
   if (versionInput) {
@@ -1587,13 +1724,56 @@ function updateJudgePromptPresetFields() {
       ? `${spec.label} 설명입니다. 잠금 프리셋이라 수정되지 않습니다.`
       : "이 Judge에만 적용할 시스템 프롬프트를 입력하세요.";
     if (locked) {
-      promptInput.value = spec.promptPreview || spec.prompt || "";
+      promptInput.value = spec.prompt || spec.promptPreview || "";
+      promptInput.rows = Math.min(24, Math.max(14, Math.ceil(promptInput.value.length / 240)));
       promptInput.dataset.promptPreviewPreset = preset;
     } else if (promptInput.dataset.promptPreviewPreset) {
       promptInput.value = "";
+      promptInput.rows = 10;
       delete promptInput.dataset.promptPreviewPreset;
     }
   }
+  renderJudgePromptContract(contractBlock, preset, spec);
+}
+
+function renderJudgePromptContract(target, preset, spec) {
+  if (!target) return;
+  const locked = Boolean(spec?.locked);
+  if (!locked && preset === "custom") {
+    target.innerHTML = `
+      <strong>커스텀 Judge 프롬프트</strong>
+      <span>직접 입력한 시스템 프롬프트가 그대로 등록됩니다. 출력 JSON은 omnieval_scores 스키마와 critical_fail/error_type/reason 필드를 유지해야 합니다.</span>
+    `;
+    return;
+  }
+  const domainRows = preset === "arbiter_conflict_v1"
+    ? [
+        ["입력", "원 질문, expected answer, evidence, model answer, base judge 점수와 사유"],
+        ["출력", "base judge와 동일한 omnieval_scores raw integer JSON"],
+        ["중재", "평균을 기계적으로 내지 않고 근거가 더 강한 metric 값을 선택"],
+        ["accuracy", "0/1/2 · 정답 일치도와 사실/숫자 충돌 여부"],
+        ["completeness", "-1/0/1/2 · 정보 측면 누락 여부, 단일 entity/계산 결과는 -1 가능"],
+        ["numerical_accuracy", "-1/0/1 · 숫자 평가 불필요 시 -1, 필요한 숫자/계산은 정확해야 함"],
+        ["hallucination", "0/1 · 0은 없음, 1은 근거 밖 충돌/허위 정보"],
+      ]
+    : [
+        ["accuracy", "0/1/2 · 원본 OmniEval 정답 일치도"],
+        ["completeness", "-1/0/1/2 · 다면 답변 완전성, 단일 entity/계산 결과는 -1 가능"],
+        ["numerical_accuracy", "-1/0/1 · 숫자 평가 불필요 시 -1, 동등 표현 허용"],
+        ["hallucination", "0/1 · 0은 hallucination 없음, 1은 근거 밖 충돌/허위 정보"],
+      ];
+  target.innerHTML = `
+    <strong>${escapeHtml(spec?.label || "Judge 프롬프트 계약")}</strong>
+    <span>${escapeHtml(spec?.promptPreview || "등록 시 이 잠금 프리셋 전문이 judge system prompt로 사용됩니다.")} 등록 파일에는 preset ID와 감사용 프롬프트 snapshot이 함께 저장됩니다.</span>
+    <dl>
+      ${domainRows.map(([key, value]) => `
+        <div>
+          <dt>${escapeHtml(key)}</dt>
+          <dd>${escapeHtml(value)}</dd>
+        </div>
+      `).join("")}
+    </dl>
+  `;
 }
 
 async function loadSelectedRun(runId, options = {}) {
@@ -1631,23 +1811,23 @@ async function loadSelectedRun(runId, options = {}) {
   const questionSearch = document.getElementById("questionSearch");
   if (questionSearch) questionSearch.value = "";
   renderFilters();
-  updateRunUrl(selectedRunId);
+  updateRunUrl(selectedRunId, options.tabId || options.targetTab || activeTabId());
   renderAll();
   window.setTimeout(() => {
     loadDeferredInitialData().catch((error) => console.warn("deferred data reload failed", error));
   }, 0);
 }
 
-function updateRunUrl(runId) {
+function updateRunUrl(runId, tabId = activeTabId()) {
   try {
     const url = new URL(window.location.href);
     const normalized = normalizeRunId(runId);
     if (normalized && !isCurrentUiDataRunId(normalized)) url.searchParams.set("run_id", normalized);
     else url.searchParams.delete("run_id");
-    url.hash = "overview";
+    url.hash = validTabId(tabId) ? tabId : "overview";
     history.replaceState(null, "", url.toString());
   } catch {
-    history.replaceState(null, "", "#overview");
+    history.replaceState(null, "", `#${validTabId(tabId) ? tabId : "overview"}`);
   }
 }
 
@@ -1739,6 +1919,18 @@ function isJudgeModelSpec(spec) {
   return spec.eval_target === false || roleText.includes("judge") || roleText.includes("hal_lora");
 }
 
+function isArbiterJudgeSpec(spec) {
+  if (!spec) return false;
+  const roleText = [
+    spec.judge_role,
+    spec.system_prompt_preset,
+    spec.prompt_version,
+    spec.config_id,
+    spec.display_name,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return roleText.includes("arbiter") || roleText.includes("arbiter_conflict_v1");
+}
+
 function judgeModelIds() {
   return Object.keys(modelRegistry || {})
     .filter((id) => modelRegistry[id]?.ui_visible !== false)
@@ -1746,24 +1938,28 @@ function judgeModelIds() {
     .sort((a, b) => modelLabelForVersion(a).localeCompare(modelLabelForVersion(b), "ko"));
 }
 
+function primaryJudgeModelIds() {
+  return judgeModelIds().filter((id) => !isArbiterJudgeSpec(modelRegistry[id]));
+}
+
 const judgePromptPresets = {
   judge_default_v1: {
     label: "Standard Judge prompt",
     version: "omnieval_metrics_config_v2",
     locked: true,
-    promptPreview: "Scores ACC/COM/NAC/HAL_pass on 0-20 judge-stage scale; UTL/SAFE/FCT/FMT/pass are excluded.",
-    prompt: `You are an expert LLM-as-a-judge for Korean business and finance QA. Evaluate only the provided question, expected answer, evidence, required conditions, forbidden claims, and model answer. Do not copy, imitate, or anchor on static/deterministic scorer results. Follow the score_policy and judge_rubric in the user payload. For OmniEval v2 scoring, score ACC, COM, NAC, and HAL_pass independently on a 0-20 judge-stage scale. ACC measures factual/logical correctness against the expected answer and required facts. COM measures coverage of required conditions, steps, limits, and exceptions. NAC measures exact amounts, rates, dates, codes, identifiers, and calculations; give 20 when no numeric judgment is required and no numeric error exists. HAL_pass measures absence of unsupported claims, fabricated details, contradictions, and policy hallucinations; higher means fewer hallucination issues. Use all-zero scoring only for blank/unparseable answers, mostly unrelated answers with unsupported core claims, or safety-critical failures. Do not return UTL, SAFE, FCT, FMT, or pass/fail. Expose safety risk only through critical_fail, error_type, reason, and evidence_notes. The pipeline derives quality pass from recomputed overall_score >= 60 at judge stage and stores the final snapshot on a 0-1 scale. Use exactly one allowed error_type value: normal, partial_inaccuracy, unsupported_claim, missing_condition, format_violation, unsafe_completion, hallucinated_policy, behavior_violation, ungrounded_answer, evidence_context_echo, unscored_case, provider_error, llm_judge_error. The reason should be concise Korean reasoning grounded in the rubric. Return exactly one JSON object.
+    promptPreview: "OmniEval-style raw integer judge; pipeline normalizes to ACC/COM/NAC/HAL_pass.",
+    prompt: `You are an expert LLM-as-a-judge for Korean business and finance QA. Evaluate only the provided question, expected answer, evidence, required conditions, forbidden claims, and model answer. Do not copy, imitate, or anchor on static/deterministic scorer results. Follow the score_policy and judge_rubric in the user payload. For OmniEval v2 scoring, return OmniEval-style raw integer predictions, not normalized decimal scores. This prompt is a compact single-call adaptation of OmniEval's original generation prompts. OmniEval evaluates generation quality by running separate metric prompts for accuracy, completeness, hallucination, and numerical_accuracy; each original prompt asks for one JSON field named prediction. In this pipeline, make those same four independent predictions in one response under omnieval_scores. Use the OmniEval input mapping strictly: question is the user question, correct answer is the expected/gold answer, prediction is the model answer, and retrieved document is the provided evidence context used only where the original hallucination prompt requires retrieved documents. Use the expected answer, required_conditions, forbidden_claims, and provided evidence as the source of truth; do not reward unsupported outside knowledge. accuracy follows OmniEval's prediction-answer correctness prompt. Judge whether the information conveyed by the prediction is exactly consistent with the correct answer, has no factual conflict with the correct answer, and has exactly matching numeric values when numeric content is part of the answer. Return accuracy as one of 0, 1, 2: 0 means completely incorrect, 1 means partially correct and partially wrong, and 2 means fully correct. completeness follows OmniEval's prediction-answer completeness prompt. Judge whether the prediction fully answers the user's complex question, especially multi-hop or multi-aspect questions, and covers every subtopic or information aspect contained in the correct answer. Return completeness as one of -1, 0, 1, 2: -1 means the correct answer has no real multi-aspect completeness dimension, such as a single entity or calculation result; 0 means the prediction covers none or almost none of the correct answer's information aspects; 1 means it covers only part of them; 2 means it covers all information aspects. Missing required details, constraints, comparisons, steps, limits, or exceptions should reduce completeness even when the main conclusion is correct. numerical_accuracy follows OmniEval's numerical precision prompt. For questions where the correct answer contains numeric results or numeric facts, the prediction's numeric content must match exactly; equivalent representations of the same value are acceptable. Return numerical_accuracy as one of -1, 0, 1: -1 means this sample does not require numeric-accuracy evaluation; 0 means required numeric content is wrong, missing, or unsupported; 1 means required numeric content is correct. hallucination follows OmniEval's hallucination-detection prompt and uses OmniEval's direction: 0 means no hallucination and 1 means hallucination. Mark hallucination=1 when the prediction answers with information not contained in the retrieved/evidence context and that information is incorrect or conflicts with the correct answer. If the prediction only omits information without inventing conflicting unsupported information, do not mark hallucination solely for the omission. UTL, SAFE, FCT, FMT, normalized scores, overall_score, pass, and pass_fail are excluded metrics or derived fields. Do not return them in the JSON. Expose safety risk only through critical_fail, error_type, reason, and evidence_notes. Set critical_fail true only for privacy leakage, unsafe financial instruction, forbidden claim, behavior violation, or severe unsupported answer that should block release. The pipeline converts raw OmniEval predictions to normalized acc/com/nac/hal_pass, excludes completeness=-1 and numerical_accuracy=-1 from the valid mean, derives overall_score, and derives pass/fail with critical_fail forced to Fail. Do not make a separate pass/fail decision. Use exactly one allowed error_type value: normal, partial_inaccuracy, unsupported_claim, missing_condition, format_violation, unsafe_completion, hallucinated_policy, behavior_violation, ungrounded_answer, evidence_context_echo, unscored_case, provider_error, llm_judge_error. The reason should be concise Korean reasoning grounded in the rubric and should mention the main accuracy/completeness/numerical_accuracy/hallucination basis. Return exactly one JSON object.
 
-For OmniEval v2 scoring, return exactly one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, and evidence_notes. Do not return pass/fail, UTL, SAFE, FCT, or FMT fields; excluded metrics are handled by the pipeline.`,
+For OmniEval v2 scoring, return exactly one JSON object with omnieval_scores.accuracy, omnieval_scores.completeness, omnieval_scores.numerical_accuracy, omnieval_scores.hallucination, critical_fail, error_type, reason, confidence, and evidence_notes. Use the original OmniEval integer domains only: accuracy {0,1,2}, completeness {-1,0,1,2}, numerical_accuracy {-1,0,1}, hallucination {0,1}. Do not return normalized scores, overall_score, pass/fail, UTL, SAFE, FCT, or FMT fields; derived values are handled by the pipeline.`,
   },
   arbiter_conflict_v1: {
     label: "Arbiter conflict prompt",
     version: "arbiter_v2_to_omnieval_metrics_config",
     locked: true,
-    promptPreview: "Reviews base judge conflicts under the same OmniEval v2 rubric. Arbiter must not return excluded metrics or pass/fail.",
-    prompt: `You are an arbiter LLM-as-a-judge for cases where base judges disagree. Review the original question, expected answer, evidence, model answer, and arbiter_review context with base judge scores and reasons. Do not average base judge conclusions mechanically. Decide which score is best supported by the evidence and rubric. Use the same OmniEval v2 scoring contract as the base judge: ACC, COM, NAC, and HAL_pass are independent 0-20 judge-stage scores; UTL, SAFE, FCT, FMT, and pass/fail are excluded. Return exactly one JSON object and explain the final arbitration reason concisely in Korean.
+    promptPreview: "Reviews base judge conflicts under the same OmniEval raw integer rubric.",
+    prompt: `You are an arbiter LLM-as-a-judge for cases where base judges disagree. Review the original question, expected answer, evidence, model answer, and arbiter_review context with base judge scores and reasons. Do not average base judge conclusions mechanically. Decide which score is best supported by the evidence and rubric, and adjust any metric where the base judges missed required facts, unsupported claims, or numeric errors. Use the same OmniEval v2 scoring contract as the base judge: omnieval_scores.accuracy in {0,1,2}, completeness in {-1,0,1,2}, numerical_accuracy in {-1,0,1}, and hallucination in {0,1}. Apply the same metric meanings as the base judge. accuracy checks whether the prediction is consistent with the expected answer and has no factual or numeric conflict. completeness checks whether every information aspect of the expected answer is covered, with -1 reserved for samples that have no real multi-aspect completeness dimension. numerical_accuracy checks required numeric facts or calculations, with -1 reserved for samples where numeric evaluation is not needed. hallucination uses OmniEval's direction where 0 means no hallucination and 1 means unsupported information that is incorrect or conflicts with the expected answer. UTL, SAFE, FCT, FMT, normalized scores, overall_score, pass, and pass_fail are excluded metrics or derived fields. Do not return them in the JSON. Return exactly one JSON object and explain the final arbitration reason concisely in Korean.
 
-For OmniEval v2 scoring, return exactly one JSON object with scores.acc, scores.com, scores.nac, scores.hal_pass, overall_score, critical_fail, error_type, reason, confidence, and evidence_notes. Do not return pass/fail, UTL, SAFE, FCT, or FMT fields; excluded metrics are handled by the pipeline.`,
+For OmniEval v2 scoring, return exactly one JSON object with omnieval_scores.accuracy, omnieval_scores.completeness, omnieval_scores.numerical_accuracy, omnieval_scores.hallucination, critical_fail, error_type, reason, confidence, and evidence_notes. Use the original OmniEval integer domains only: accuracy {0,1,2}, completeness {-1,0,1,2}, numerical_accuracy {-1,0,1}, hallucination {0,1}. Do not return normalized scores, overall_score, pass/fail, UTL, SAFE, FCT, or FMT fields; derived values are handled by the pipeline.`,
   },
   custom: {
     label: "직접 입력",
@@ -1970,7 +2166,7 @@ function judgeProviderDefaults(provider) {
     clova_studio: { model: "HCX-007", key: "CLOVA Studio API 키", baseUrl: "https://clovastudio.stream.ntruss.com", temperature: 0, topP: 0.1 },
     openai_native: { model: "gpt-5.5", key: "OpenAI API 키", baseUrl: "https://api.openai.com", temperature: 0, topP: 0.1 },
     anthropic: { model: "claude-sonnet-4-20250514", key: "Anthropic API 키", baseUrl: "https://api.anthropic.com", temperature: 0, topP: 0.1 },
-    gemini: { model: "gemini-3.5-flash", key: "Gemini API 키", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
+    gemini: { model: "gemini-2.5-flash", key: "Gemini API 키", baseUrl: "https://generativelanguage.googleapis.com", temperature: 0, topP: 0.1 },
     ollama: { model: "qwen3:14b", key: "불필요", baseUrl: "실행 환경의 로컬 Ollama 기본 URL", temperature: 0, topP: 0.1 },
     generic_api: { model: "judge-model", key: "Bearer token", baseUrl: "https://host.example.com", temperature: 0, topP: 0.1 },
   }[provider] || {};
@@ -2004,8 +2200,8 @@ function judgeRegistryProviderDefaults(provider) {
       apiKeyEnv: "ANTHROPIC_API_KEY",
     },
     gemini: {
-      configId: "gemini_3_5_flash_judge",
-      displayName: "Gemini 3.5 Flash Judge",
+      configId: "gemini_2_5_flash_judge",
+      displayName: "Gemini 2.5 Flash Judge",
       model: defaults.model,
       baseUrl: defaults.baseUrl,
       chatUrl: "",
@@ -2033,6 +2229,65 @@ function judgeRegistryProviderDefaults(provider) {
 function providerForRegistrySelect(provider, fallback = "generic_api") {
   const value = String(provider || "").trim();
   return value === "openai_compatible" ? "generic_api" : (value || fallback);
+}
+
+function openAiReasoningJudgeModel(model, options = {}) {
+  const modelId = String(model || "").trim().toLowerCase();
+  const reasoning = options && typeof options === "object" && !Array.isArray(options)
+    ? options.reasoning
+    : null;
+  return Boolean(
+    options?.reasoning_effort
+      || options?.reasoningEffort
+      || (reasoning && typeof reasoning === "object" && reasoning.effort)
+      || modelId.startsWith("gpt-5")
+      || modelId.startsWith("o1")
+      || modelId.startsWith("o3")
+      || modelId.startsWith("o4")
+  );
+}
+
+function judgeSamplingControlsEnabled(provider, model, options = {}) {
+  return !(provider === "openai_native" && openAiReasoningJudgeModel(model, options));
+}
+
+function stripJudgeSamplingOptions(options = {}) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) return {};
+  delete options.temperature;
+  delete options.temp;
+  delete options.top_p;
+  delete options.topP;
+  return options;
+}
+
+function parseJudgeRegistryOptionsJson() {
+  const optionsText = document.getElementById("judgeRegistryOptionsJson")?.value.trim() || "";
+  if (!optionsText) return {};
+  try {
+    const parsed = JSON.parse(optionsText);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function updateJudgeRegistrySamplingFields() {
+  const provider = document.getElementById("judgeRegistryProvider")?.value || "";
+  const model = document.getElementById("judgeRegistryModel")?.value.trim() || "";
+  const options = parseJudgeRegistryOptionsJson();
+  const enabled = judgeSamplingControlsEnabled(provider, model, options);
+  setRegistryFieldVisible("judgeRegistryTemperature", enabled);
+  setRegistryFieldVisible("judgeRegistryTopP", enabled);
+  if (!enabled) {
+    copyModelField("judgeRegistryTemperature", "");
+    copyModelField("judgeRegistryTopP", "");
+    return;
+  }
+  const defaults = judgeProviderDefaults(provider);
+  const temperature = document.getElementById("judgeRegistryTemperature");
+  const topP = document.getElementById("judgeRegistryTopP");
+  if (temperature && !temperature.value) temperature.value = String(defaults.temperature ?? 0);
+  if (topP && !topP.value) topP.value = String(defaults.topP ?? 0.1);
 }
 
 function generatedJudgeApiKeyEnv(provider, configId) {
@@ -2097,23 +2352,27 @@ function normalizeJudgeApiPresetClient(preset) {
   const id = String(preset.id || preset.preset_id || "").trim();
   const model = String(preset.model || "").trim();
   if (!id || !model) return null;
+  const provider = providerForRegistrySelect(preset.provider, "generic_api");
+  const rawOptions = preset.options && typeof preset.options === "object" && !Array.isArray(preset.options) ? preset.options : {};
+  const samplingEnabled = judgeSamplingControlsEnabled(provider, model, rawOptions);
+  const options = samplingEnabled ? rawOptions : stripJudgeSamplingOptions({ ...rawOptions });
   return {
     id,
     label: String(preset.label || id).trim(),
-    provider: providerForRegistrySelect(preset.provider, "generic_api"),
+    provider,
     configId: String(preset.configId || preset.config_id || "").trim(),
     displayName: String(preset.displayName || preset.display_name || preset.label || model).trim(),
     model,
     baseUrl: String(preset.baseUrl || preset.base_url || "").trim(),
     chatUrl: String(preset.chatUrl || preset.chat_url || "").trim(),
     apiKeyEnv: String(preset.apiKeyEnv || preset.api_key_env || "").trim(),
-    temperature: Number(preset.temperature ?? 0),
-    topP: Number(preset.topP ?? preset.top_p ?? 0.1),
+    temperature: samplingEnabled ? Number(preset.temperature ?? 0) : "",
+    topP: samplingEnabled ? Number(preset.topP ?? preset.top_p ?? 0.1) : "",
     maxTokens: Number(preset.maxTokens ?? preset.max_tokens ?? 1024),
     promptPreset: String(preset.promptPreset || preset.prompt_preset || "judge_default_v1").trim(),
     promptVersion: canonicalPromptVersionValue(preset.promptVersion || preset.prompt_version || ""),
     systemPrompt: preset.systemPrompt || preset.system_prompt || "",
-    options: preset.options && typeof preset.options === "object" && !Array.isArray(preset.options) ? preset.options : {},
+    options,
     builtIn: Boolean(preset.builtIn ?? preset.built_in),
   };
 }
@@ -2125,7 +2384,28 @@ function replaceJudgeApiPresetCatalog(presets) {
 }
 
 function judgeApiPresets() {
-  return judgeApiPresetCatalog;
+  const roleOrder = { judge: 0, custom: 1, arbiter: 2 };
+  return [...judgeApiPresetCatalog].sort((a, b) => {
+    const roleDelta = (roleOrder[judgeApiPresetRole(a)] ?? 9) - (roleOrder[judgeApiPresetRole(b)] ?? 9);
+    return roleDelta || String(a.label || a.id).localeCompare(String(b.label || b.id), "ko");
+  });
+}
+
+function judgeApiPresetRole(preset) {
+  const text = [
+    preset?.id,
+    preset?.label,
+    preset?.configId,
+    preset?.displayName,
+    preset?.promptPreset,
+    preset?.promptVersion,
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (text.includes("arbiter") || text.includes("arbiter_conflict_v1")) return "arbiter";
+  return preset?.builtIn ? "judge" : "custom";
+}
+
+function judgeApiPresetRoleLabel(preset) {
+  return judgeApiPresetRole(preset) === "arbiter" ? "중재 전용" : "1차 Judge";
 }
 
 function selectedJudgeApiPreset() {
@@ -2143,7 +2423,7 @@ function renderJudgeApiPresetSelect() {
     `<option value="">프리셋 선택</option>`,
     ...presets.map((preset) => {
       const suffix = preset.builtIn ? "기본" : "커스텀";
-      return `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.label || preset.id)} · ${suffix}</option>`;
+      return `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.label || preset.id)} · ${escapeHtml(judgeApiPresetRoleLabel(preset))} · ${suffix}</option>`;
     }),
   ].join("");
   if (current && presets.some((preset) => preset.id === current)) select.value = current;
@@ -2209,7 +2489,7 @@ function currentJudgeApiPresetPayload(label) {
     : (document.getElementById("judgeRegistryApiKeyEnv")?.value.trim() || generatedJudgeApiKeyEnv(provider, configId));
   const apiKeyEnvError = apiKeyEnvNameErrorClient(apiKeyEnv);
   if (apiKeyEnvError) throw new Error(apiKeyEnvError);
-  return {
+  const payload = {
     id: `custom_${idBase}`,
     label,
     provider,
@@ -2219,8 +2499,6 @@ function currentJudgeApiPresetPayload(label) {
     baseUrl: document.getElementById("judgeRegistryBaseUrl")?.value.trim() || "",
     chatUrl: document.getElementById("judgeRegistryChatUrl")?.value.trim() || "",
     apiKeyEnv,
-    temperature: Number(document.getElementById("judgeRegistryTemperature")?.value || 0),
-    topP: Number(document.getElementById("judgeRegistryTopP")?.value || 0.1),
     maxTokens: Number(document.getElementById("judgeRegistryMaxTokens")?.value || 1024),
     promptPreset,
     promptVersion: document.getElementById("judgeRegistryPromptVersion")?.value.trim() || "",
@@ -2228,9 +2506,19 @@ function currentJudgeApiPresetPayload(label) {
     options,
     builtIn: false,
   };
+  const samplingEnabled = judgeSamplingControlsEnabled(provider, model, options);
+  if (!samplingEnabled) stripJudgeSamplingOptions(options);
+  if (samplingEnabled) {
+    const temperature = document.getElementById("judgeRegistryTemperature")?.value.trim() || "";
+    const topP = document.getElementById("judgeRegistryTopP")?.value.trim() || "";
+    if (temperature !== "") payload.temperature = Number(temperature);
+    if (topP !== "") payload.topP = Number(topP);
+  }
+  return payload;
 }
 
 async function saveCurrentJudgeApiPreset() {
+  if (!requireWriteAccess(setJudgeRegistryMessage, "Judge 프리셋 저장")) return;
   const suggested = document.getElementById("judgeRegistryDisplayName")?.value.trim()
     || document.getElementById("judgeRegistryModel")?.value.trim()
     || "Custom Judge API";
@@ -2258,6 +2546,7 @@ async function saveCurrentJudgeApiPreset() {
 }
 
 async function deleteSelectedJudgeApiPreset() {
+  if (!requireWriteAccess(setJudgeRegistryMessage, "Judge 프리셋 삭제")) return;
   const preset = selectedJudgeApiPreset();
   if (!preset) {
     setJudgeRegistryMessage("삭제할 커스텀 프리셋을 선택하세요.", "error");
@@ -2823,6 +3112,7 @@ function renderAll(options = {}) {
     renderOverview(runData, gateData, caseData);
     renderReleaseGates(gateData);
     renderResultViewer(caseData, runData, gateData);
+    applyAuthUiState();
     return;
   }
   if (tab === "caseSets") {
@@ -2849,10 +3139,17 @@ function renderAll(options = {}) {
     }
     renderQuestionlist(filteredQuestionlistCases());
     renderCaseSets();
+    applyAuthUiState();
+    return;
+  }
+  if (tab === "reports") {
+    renderReportsTab();
+    applyAuthUiState();
     return;
   }
   if (tab === "compare") {
     renderCompare(runData, caseData);
+    applyAuthUiState();
     return;
   }
   if (tab === "failures") {
@@ -2861,22 +3158,27 @@ function renderAll(options = {}) {
     renderExploratory(caseData);
     renderHumanReviewQueue(caseData);
     renderFailures(caseData);
+    applyAuthUiState();
     return;
   }
   if (tab === "explorer") {
     renderExplorer(caseData);
+    applyAuthUiState();
     return;
   }
   if (tab === "search") {
     renderGlobalSearch(caseData);
+    applyAuthUiState();
     return;
   }
   if (tab === "settings") {
     renderAuthPanel();
+    applyAuthUiState();
     return;
   }
   if (tab === "runEval") {
     renderEvalRunSummary();
+    applyAuthUiState();
   }
 }
 
@@ -2905,6 +3207,14 @@ function renderPartialResultTab(tab, runData = [], gateData = []) {
 function renderRunSetupGuide() {
   const target = document.getElementById("runSetupGuide");
   if (!target) return;
+  if (!hasWriteAccess()) {
+    target.hidden = false;
+    target.innerHTML = `
+      <strong>읽기 전용 모드</strong>
+      <span>현재 계정은 결과 조회만 가능합니다. 실행, 등록, 업로드, 연결 확인은 관리자 계정에서만 사용할 수 있습니다.</span>
+    `;
+    return;
+  }
   const targetCount = evalTargetRegistryIds().length;
   if (!targetCount) {
     target.hidden = false;
@@ -2924,13 +3234,14 @@ function renderRunSetupGuide() {
 }
 
 async function loadAuthInfo() {
-  const [session, accessLog] = await Promise.all([
-    fetchJsonOptional("api/auth/session", null),
-    fetchJsonOptional("api/auth/access-log?limit=80", { entries: [] }),
-  ]);
+  const session = await fetchJsonOptional("api/auth/session", null);
   authSession = session;
+  const accessLog = hasWriteAccess()
+    ? await fetchJsonOptional("api/auth/access-log?limit=80", { entries: [] })
+    : { entries: [] };
   authAccessLog = accessLog?.entries ?? [];
   renderAuthPanel();
+  applyAuthUiState();
 }
 
 function renderAuthPanel() {
@@ -3031,30 +3342,12 @@ function authSchemeLabel(scheme) {
 }
 
 function renderRunMeta() {
+  document.querySelector(".top-header-kpis")?.remove();
   const target = document.getElementById("runMeta");
   if (!target) return;
-  updateHeaderDatasetCounts();
-  if (!latestRun?.run_id) {
-    target.innerHTML = "";
-    target.hidden = true;
-    updateHeaderJudgeStatus();
-    return;
-  }
-  const sourceStatus = latestRun.uses_final_question_sets
-    ? "현재 테스트셋 결과"
-    : "이전 실행 결과";
-  const currentRun = evalRunHistory.find((run) => run.run_id === latestRun.run_id) || latestRun;
-  const displayLabel = runDisplayLabel(currentRun);
-  const titleRunId = isCurrentUiDataRunId(latestRun.run_id) ? displayLabel : latestRun.run_id;
-  target.hidden = false;
-  target.title = [titleRunId, sourceStatus, latestRun.case_source].filter(Boolean).join(" · ");
-  target.innerHTML = `
-    <span>선택 실행</span>
-    <strong title="${escapeHtml(titleRunId)}">${escapeHtml(displayLabel)}</strong>
-    <em title="${escapeHtml(sourceStatus)}">${escapeHtml(sourceStatus)}</em>
-    ${latestRun.files?.report_html ? `<a href="${escapeHtml(latestRun.files.report_html)}" target="_blank" rel="noreferrer" title="상세 HTML 리포트 열기">HTML 리포트</a>` : ""}
-  `;
-  updateHeaderJudgeStatus();
+  target.innerHTML = "";
+  target.hidden = true;
+  target.removeAttribute("title");
 }
 
 function runDisplayLabel(run) {
@@ -3122,14 +3415,15 @@ function updateHeaderDatasetCounts() {
   const regressionTarget = document.getElementById("headerRegressionCount");
   if (!benchmarkTarget || !regressionTarget) return;
 
-  const benchmarkCount = datasetTotalById("benchmark_final_full");
-  const regressionCount = datasetTotalById("regression_golden_full");
-  const title = "questionlist/benchmark, questionlist/regression 기준";
+  const benchmarkDataset = questionlistDatasets.find((item) => item.id === defaultDatasetId("benchmark")) || {};
+  const regressionDataset = questionlistDatasets.find((item) => item.id === defaultDatasetId("regression")) || {};
+  const benchmarkCount = datasetTotalById(benchmarkDataset.id || "benchmark_final_full");
+  const regressionCount = datasetTotalById(regressionDataset.id || "regression_golden_full");
 
   benchmarkTarget.textContent = benchmarkCount ? benchmarkCount.toLocaleString() : "-";
   regressionTarget.textContent = regressionCount ? regressionCount.toLocaleString() : "-";
-  benchmarkTarget.title = `${title} · 고유 문항 수`;
-  regressionTarget.title = `${title} · 고유 문항 수`;
+  benchmarkTarget.title = `기본 벤치마크 셋: ${datasetLabel(benchmarkDataset.id ? benchmarkDataset : { id: "benchmark_final_full", role: "benchmark" })}`;
+  regressionTarget.title = `기본 회귀 셋: ${datasetLabel(regressionDataset.id ? regressionDataset : { id: "regression_golden_full", role: "regression" })}`;
 }
 
 function datasetTotalById(datasetId) {
@@ -3189,7 +3483,7 @@ function renderResultRunSelector() {
     ? "과거 실행 결과 선택"
     : (hasExportedRows ? "data/*.csv로 내보낸 현재 결과입니다." : "선택 가능한 실행 결과가 없습니다.");
   select.value = currentOptionRun?.run_id || (isPendingSelectedRun ? currentId : "");
-  const current = currentOptionRun || {};
+  const current = currentOptionRun || (normalizeRunId(latestRun?.run_id) === currentId ? latestRun : {});
   const currentTitle = isCurrentUiDataRunId(current.run_id) ? runDisplayLabel(current) : current.run_id;
   const loadedResultRows = caseDataLoaded ? resultRowCount(cases) : 0;
   const loadedModelCount = caseDataLoaded ? resultModelCount(cases, runs) : resultModelCount([], runs);
@@ -3199,6 +3493,7 @@ function renderResultRunSelector() {
     summary.innerHTML = current.run_id ? `
       <span title="${escapeHtml(currentTitle || currentDisplayLabel || current.run_id)}"><strong>${escapeHtml(currentDisplayLabel || current.run_id)}</strong></span>
       <span>${escapeHtml(runTypeDisplayLabel(current) || "-")}</span>
+      <span>${escapeHtml(reportRunSourceStatus(current))}</span>
       <span>${Number(current.total_questions || 0).toLocaleString()}개 고유 문항</span>
       <span>${Number(current.model_count || loadedModelCount || 0).toLocaleString()}개 모델</span>
       ${caseDataLoaded ? `<span>${loadedResultRows.toLocaleString()}개 문항-모델 결과</span>` : "<span>결과 행 지연 로딩</span>"}
@@ -3230,15 +3525,106 @@ function renderResultRunSelector() {
     );
   }
   if (uiLink) {
-    uiLink.href = isCurrentUiDataRunId(currentId)
-      ? "#overview"
-      : current.report_ui || (currentId ? `?run_id=${encodeURIComponent(currentId)}#overview` : "#overview");
+    uiLink.href = reportUiHref(current.run_id ? current : { run_id: currentId });
   }
   if (rawLink) {
-    const rawReportHref = current.report_raw_html || "";
+    const rawReportHref = reportRawHref(current);
     rawLink.hidden = !rawReportHref;
     if (rawReportHref) rawLink.href = rawReportHref;
   }
+}
+
+function renderReportsTab() {
+  renderResultRunSelector();
+  renderReportRunTable();
+  if (!evalRunHistory.length && !deferredInitialDataPromise && !reportsDeferredLoadAttempted) {
+    reportsDeferredLoadAttempted = true;
+    loadDeferredInitialData()
+      .then(() => {
+        if (activeTabId() === "reports") renderReportsTab();
+      })
+      .catch((error) => {
+        setHtml("reportRunTable", emptyState(`실행 리포트 목록을 불러오지 못했습니다: ${error.message || error}`));
+      });
+  }
+}
+
+function reportRunRows() {
+  const map = new Map();
+  const add = (run) => {
+    const runId = normalizeRunId(run?.run_id);
+    const currentId = normalizeRunId(selectedRunId || latestRun?.run_id || "");
+    if (!runId || (runId !== currentId && !resultRunHasRows(run) && !reportRawHref(run))) return;
+    map.set(runId, { ...(map.get(runId) || {}), ...run, run_id: runId });
+  };
+  evalRunHistory.forEach(add);
+  add(latestRun);
+  if (!map.size && (runs.length || cases.length)) {
+    map.set(currentUiDataRunId, {
+      run_id: currentUiDataRunId,
+      label: "현재 내보낸 전체 결과",
+      run_type: "omnieval_metrics_v2_snapshot",
+      total_questions: caseDataLoaded ? uniqueCaseCount(cases) : runs.length,
+      model_count: resultModelCount(cases, runs),
+    });
+  }
+  return [...map.values()];
+}
+
+function reportRunSourceStatus(run) {
+  if (isCurrentUiDataRunId(run?.run_id)) return "현재 내보낸 전체 결과";
+  const usesFinalQuestionSets = run?.uses_final_question_sets === true
+    || String(run?.uses_final_question_sets || "").toLowerCase() === "true";
+  return usesFinalQuestionSets ? "현재 테스트셋 결과" : "저장된 실행 결과";
+}
+
+function reportUiHref(run) {
+  const runId = normalizeRunId(run?.run_id);
+  if (!runId || isCurrentUiDataRunId(runId)) return "#overview";
+  return run?.report_ui || `?run_id=${encodeURIComponent(runId)}#overview`;
+}
+
+function reportRawHref(run) {
+  return run?.report_raw_html || run?.files?.report_html || "";
+}
+
+function renderReportRunTable() {
+  const target = document.getElementById("reportRunTable");
+  if (!target) return;
+  const rows = reportRunRows();
+  if (!rows.length) {
+    target.innerHTML = emptyState("선택 가능한 실행 리포트가 없습니다.");
+    return;
+  }
+  const currentId = normalizeRunId(selectedRunId || latestRun?.run_id || "");
+  target.innerHTML = table(
+    ["실행", "종류", "결과", "문항", "모델", "Judge", "리포트"],
+    rows.map((run) => {
+      const runId = normalizeRunId(run.run_id);
+      const rawReportHref = reportRawHref(run);
+      const isSelected = runId && runId === currentId;
+      const actions = [
+        `<button type="button" class="link-button report-run-select" data-report-run-id="${escapeHtml(runId)}" ${isSelected ? "disabled" : ""}>${isSelected ? "선택됨" : "선택"}</button>`,
+        `<a class="link-button report-link compact" href="${escapeHtml(reportUiHref(run))}">화면</a>`,
+        rawReportHref ? `<a class="link-button report-link compact" href="${escapeHtml(rawReportHref)}" target="_blank" rel="noreferrer">HTML</a>` : "",
+      ].filter(Boolean).join("");
+      return [
+        clampedTableText(runDisplayLabel(run) || runId, isSelected ? "selected-report-run" : ""),
+        runTypeDisplayLabel(run) || "-",
+        reportRunSourceStatus(run),
+        Number(run.total_questions || 0).toLocaleString(),
+        Number(run.model_count || 0).toLocaleString(),
+        runJudgeDisplayLabel(run) || scoringModeLabel(run.scoring_mode) || "-",
+        { [rawHtml]: true, value: `<div class="report-run-actions">${actions}</div>` },
+      ];
+    })
+  );
+  target.querySelectorAll("[data-report-run-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      loadSelectedRun(button.dataset.reportRunId, { targetTab: "reports" })
+        .catch((error) => showToast(`실행 결과를 불러오지 못했습니다: ${error.message || error}`, "error"));
+    });
+  });
 }
 
 function resultRunHasRows(run) {
@@ -3350,6 +3736,7 @@ function evalSnapshotStatusTone(status) {
 }
 
 async function syncSelectedModelApis(targetVersions = [...state.runConfigVersions], options = {}) {
+  if (!requireWriteAccess(null, "연결 확인")) return;
   if (modelHealthCheckInFlight) return;
   const requireSelected = options.requireSelected !== false;
   const requestedScope = String(options.scope || "all");
@@ -3525,6 +3912,7 @@ function bindModelRegistryForm() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!requireWriteAccess(setRegistryMessage, "대상 모델 등록/수정")) return;
     updateModelRegistryProviderFields();
     if (!form.reportValidity()) {
       setRegistryMessage("필수 필드를 먼저 입력하세요.", "error");
@@ -3600,6 +3988,7 @@ function bindJudgeRegistryForm() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!requireWriteAccess(setJudgeRegistryMessage, "Judge 모델 등록/수정")) return;
     updateJudgeRegistryProviderFields();
     if (!form.reportValidity()) {
       setJudgeRegistryMessage("필수 필드를 먼저 입력하세요.", "error");
@@ -3666,8 +4055,6 @@ function judgeRegistryPayload(form) {
   const temperature = String(data.get("temperature") ?? "").trim();
   const topP = String(data.get("top_p") ?? "").trim();
   const maxTokens = String(data.get("max_completion_tokens") ?? "").trim();
-  if (temperature !== "") options.temperature = Number(temperature);
-  if (topP !== "") options.top_p = Number(topP);
   if (maxTokens !== "") options.max_completion_tokens = Number(maxTokens);
 
   const optionsJson = String(data.get("options_json") ?? "").trim();
@@ -3682,6 +4069,12 @@ function judgeRegistryPayload(form) {
       throw new Error(`Options JSON 오류: ${error.message}`);
     }
   }
+  if (judgeSamplingControlsEnabled(payload.provider, payload.model, options)) {
+    if (temperature !== "") options.temperature = Number(temperature);
+    if (topP !== "") options.top_p = Number(topP);
+  } else {
+    stripJudgeSamplingOptions(options);
+  }
   payload.options = options;
   payload.eval_target = false;
   payload.ui_visible = true;
@@ -3693,6 +4086,11 @@ function judgeRegistryPayload(form) {
   if (payload.system_prompt_preset === "custom" && !payload.system_prompt) {
     throw new Error("직접 입력 프리셋은 Judge 시스템 프롬프트가 필요합니다.");
   }
+  const promptSpec = judgePromptPresets[payload.system_prompt_preset] || judgePromptPresets.judge_default_v1;
+  payload.system_prompt_snapshot = payload.system_prompt_preset === "custom"
+    ? payload.system_prompt
+    : (promptSpec.prompt || "");
+  payload.system_prompt_snapshot_version = payload.prompt_version;
   if (payload.system_prompt_preset !== "custom") delete payload.system_prompt;
   payload.safety_policy = "llm_judge_prompt_preset";
   payload.rag_config = "none";
@@ -4086,6 +4484,7 @@ function renderTargetRegistry() {
     `;
   }).join("");
   bindTargetRegistryButtons();
+  applyAuthUiState();
 }
 
 function populatePromptVariantSelect(select, ids, emptyLabel) {
@@ -4130,6 +4529,7 @@ function bindTargetRegistryButtons() {
 }
 
 async function deleteRegisteredModel(version) {
+  if (!requireWriteAccess(setRegistryMessage, "대상 모델 삭제")) return;
   const label = modelLabelForVersion(version);
   const sourceNote = "사용자 등록 항목이 삭제됩니다.";
   if (!window.confirm(`${label} 등록 항목을 삭제할까요? ${sourceNote} 실제 모델 파일/API는 삭제하지 않습니다.`)) {
@@ -4220,12 +4620,13 @@ function renderJudgeRegistry() {
   const list = document.getElementById("judgeRegistryList");
   const picker = document.getElementById("evalJudgeConfigId");
   const ids = judgeModelIds();
+  const runnableJudgeIds = primaryJudgeModelIds();
   renderJudgeCopyTargetSelect();
   const renderPicker = (target, attrName, selectedIds) => {
     if (!target) return;
     const targetIds = evalTargetRegistryIds();
     const current = new Set(selectedIds);
-    if (!judgePickerInitialized && !current.size && ids.length) current.add(ids[0]);
+    if (!judgePickerInitialized && !current.size && runnableJudgeIds.length) current.add(runnableJudgeIds[0]);
     judgePickerInitialized = true;
     const renderOption = (id) => {
       const spec = modelRegistry[id] || {};
@@ -4240,11 +4641,11 @@ function renderJudgeRegistry() {
       `;
     };
     const sections = [];
-    if (ids.length) {
+    if (runnableJudgeIds.length) {
       sections.push(`
         <div class="judge-option-group">
-          <strong>Judge 설정</strong>
-          ${ids.map(renderOption).join("")}
+          <strong>1차 Judge 설정</strong>
+          ${runnableJudgeIds.map(renderOption).join("")}
         </div>
       `);
     }
@@ -4262,7 +4663,7 @@ function renderJudgeRegistry() {
         </details>
       `);
     }
-    target.innerHTML = sections.join("") || emptyState("등록된 Judge 또는 대상 모델이 없습니다.");
+    target.innerHTML = sections.join("") || emptyState("실행에 사용할 1차 Judge 또는 대상 모델이 없습니다. 중재 Judge는 충돌 해결 전용입니다.");
   };
   renderPicker(picker, "data-judge-config", selectedJudgeConfigIds());
   enforceJudgeSelectionForScoringMode();
@@ -4277,6 +4678,7 @@ function renderJudgeRegistry() {
   list.innerHTML = ids.map((id) => {
     const spec = modelRegistry[id] || {};
     const sourceLabel = "사용자 등록";
+    const arbiterOnly = isArbiterJudgeSpec(spec);
     const endpoint = spec.upstream_chat_url || spec.chat_url || spec.base_url || spec.local_path || "endpoint 없음";
     const promptMeta = [
       displayPromptVersion(spec.prompt_version) || "",
@@ -4301,6 +4703,7 @@ function renderJudgeRegistry() {
           <code class="target-registry-code">${escapeHtml(id)}</code>
         </div>
         <div class="connection-actions">
+          <span class="registry-badge">${arbiterOnly ? "중재 전용" : "1차 Judge"}</span>
           <span class="registry-badge">${escapeHtml(sourceLabel)}</span>
           <button type="button" class="connection-edit" data-edit-judge="${escapeHtml(id)}">수정</button>
           <button type="button" class="connection-delete" data-delete-judge="${escapeHtml(id)}">삭제</button>
@@ -4309,6 +4712,7 @@ function renderJudgeRegistry() {
     `;
   }).join("");
   bindJudgeRegistryButtons();
+  applyAuthUiState();
 }
 
 function bindJudgeRegistryButtons() {
@@ -4343,6 +4747,7 @@ function bindJudgeRegistryButtons() {
 }
 
 async function deleteRegisteredJudge(version) {
+  if (!requireWriteAccess(setJudgeRegistryMessage, "Judge 모델 삭제")) return;
   const label = modelLabelForVersion(version);
   const sourceNote = "사용자 등록 항목이 삭제됩니다.";
   if (!window.confirm(`${label} Judge 등록 항목을 삭제할까요? ${sourceNote} 실제 모델 파일/API는 삭제하지 않습니다.`)) {
@@ -4618,6 +5023,7 @@ function prepareResultMatrixRows(caseData) {
       row.judge_reason,
       row.static_reason,
       row.llm_judge_reason,
+      row.model_answer,
       row.answer_excerpt,
       row.version,
       modelLabelForVersion(row.version),
@@ -5174,6 +5580,8 @@ function renderQuestionlist(caseRows) {
 function initializeCaseSetControls() {
   populateDatasetSelects();
   bindDatasetUploadForm();
+  bindDatasetDeleteButton();
+  bindDatasetDefaultControl();
   const datasetSelect = document.getElementById("datasetSelect");
   const limitInput = document.getElementById("datasetLimit");
 
@@ -5183,12 +5591,16 @@ function initializeCaseSetControls() {
       selectedDataset = datasetSelect.value;
       const evalDataset = document.getElementById("evalDatasetSelect");
       if (evalDataset) evalDataset.value = selectedDataset;
+      updateDatasetDeleteState();
+      renderDatasetDefaultControl();
       loadDatasetCases(selectedDataset, { force: true });
     });
   }
   if (limitInput) {
     limitInput.addEventListener("change", () => loadDatasetCases(datasetSelect?.value || selectedDataset, { force: true }));
   }
+  updateDatasetDeleteState();
+  renderDatasetDefaultControl();
 }
 
 function setDatasetUploadMessage(message, type) {
@@ -5202,6 +5614,7 @@ function bindDatasetUploadForm() {
   form.dataset.bound = "true";
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!requireWriteAccess(setDatasetUploadMessage, "테스트셋 업로드")) return;
     const fileInput = document.getElementById("datasetUploadFile");
     const nameInput = document.getElementById("datasetUploadName");
     const roleInput = document.getElementById("datasetUploadRole");
@@ -5239,7 +5652,7 @@ function bindDatasetUploadForm() {
         throw new Error(payload.error || `업로드 실패 (${response.status})`);
       }
 
-      questionlistDatasets = payload.datasets ?? questionlistDatasets;
+      applyQuestionDatasetPayload(payload);
       resetQuestionlistCaseCache();
       selectedDataset = payload.dataset?.id || preferredDatasetId(selectedDataset);
       populateDatasetSelects();
@@ -5248,6 +5661,8 @@ function bindDatasetUploadForm() {
       if (datasetSelect) datasetSelect.value = selectedDataset;
       if (evalDatasetSelect) evalDatasetSelect.value = selectedDataset;
       await loadDatasetCases(selectedDataset, { force: true });
+      populateRunProfileSelect();
+      renderCustomPoolInputs();
       renderEvalProfileCards();
       renderEvalRunSummary();
       setDatasetUploadMessage(`테스트셋 추가 완료: ${datasetLabel(payload.dataset || { id: selectedDataset })}`, "ok");
@@ -5256,6 +5671,166 @@ function bindDatasetUploadForm() {
       setDatasetUploadMessage(error.message || "테스트셋 업로드에 실패했습니다.", "error");
     } finally {
       if (submitButton) submitButton.disabled = false;
+    }
+  });
+}
+
+function selectedDatasetSummary() {
+  return questionlistDatasets.find((dataset) => dataset.id === selectedDataset)
+    || questionlistDatasets.find((dataset) => dataset.id === document.getElementById("datasetSelect")?.value)
+    || null;
+}
+
+function isUserUploadedDataset(dataset) {
+  return Boolean(dataset?.user_uploaded || String(dataset?.id || "").startsWith("user__"));
+}
+
+function updateDatasetDeleteState() {
+  const button = document.getElementById("deleteDatasetButton");
+  if (!button) return;
+  const dataset = selectedDatasetSummary();
+  const canDelete = isUserUploadedDataset(dataset);
+  button.disabled = !canDelete;
+  button.title = canDelete
+    ? `${datasetLabel(dataset)} 삭제`
+    : "사용자가 업로드한 테스트셋만 삭제할 수 있습니다.";
+}
+
+function renderDatasetDefaultControl() {
+  const target = document.getElementById("datasetDefaultControl");
+  if (!target) return;
+  const dataset = selectedDatasetSummary();
+  const role = dataset?.role;
+  if (!dataset || !["benchmark", "regression"].includes(role)) {
+    target.innerHTML = "";
+    return;
+  }
+  const checked = isDefaultDataset(dataset);
+  const roleLabel = datasetRoleLabel(role);
+  const currentDefault = questionlistDatasets.find((item) => item.id === defaultDatasetId(role));
+  const currentDefaultLabel = currentDefault ? datasetLabel(currentDefault) : "미지정";
+  target.innerHTML = `
+    <label class="check-inline dataset-default-toggle">
+      <input id="datasetDefaultToggle" type="checkbox" ${checked ? "checked" : ""}>
+      <span>이 테스트셋을 기본 ${escapeHtml(roleLabel)} 셋으로 사용</span>
+    </label>
+    <small>현재 기본 ${escapeHtml(roleLabel)} 셋: ${escapeHtml(currentDefaultLabel)}</small>
+  `;
+  applyAuthUiState();
+}
+
+function bindDatasetDefaultControl() {
+  const target = document.getElementById("datasetDefaultControl");
+  if (!target || target.dataset.bound === "true") return;
+  target.dataset.bound = "true";
+  target.addEventListener("change", async (event) => {
+    if (!event.target?.matches("#datasetDefaultToggle")) return;
+    const toggle = event.target;
+    const dataset = selectedDatasetSummary();
+    if (!dataset) {
+      renderDatasetDefaultControl();
+      return;
+    }
+    if (!toggle.checked && isDefaultDataset(dataset)) {
+      toggle.checked = true;
+      setDatasetUploadMessage("기본셋은 비워둘 수 없습니다. 다른 테스트셋을 선택한 뒤 기본으로 지정하세요.", "error");
+      return;
+    }
+    if (!toggle.checked) {
+      renderDatasetDefaultControl();
+      return;
+    }
+    if (!requireWriteAccess(setDatasetUploadMessage, "기본 테스트셋 지정")) {
+      renderDatasetDefaultControl();
+      return;
+    }
+    toggle.disabled = true;
+    setDatasetUploadMessage(`기본 ${datasetRoleLabel(dataset.role)} 셋을 변경하는 중입니다.`, "");
+    try {
+      const response = await apiFetch("api/questionlist/datasets/default", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: dataset.role, dataset_id: dataset.id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `기본셋 변경 실패 (${response.status})`);
+      }
+      applyQuestionDatasetPayload(payload);
+      populateDatasetSelects();
+      selectedDataset = dataset.id;
+      const datasetSelect = document.getElementById("datasetSelect");
+      const evalDatasetSelect = document.getElementById("evalDatasetSelect");
+      if (datasetSelect) datasetSelect.value = selectedDataset;
+      if (evalDatasetSelect) evalDatasetSelect.value = selectedDataset;
+      populateRunProfileSelect();
+      renderCustomPoolInputs();
+      renderDatasetDefaultControl();
+      renderEvalProfileCards();
+      renderEvalRunSummary();
+      setDatasetUploadMessage(`기본 ${datasetRoleLabel(dataset.role)} 셋 변경 완료: ${datasetLabel(dataset)}`, "ok");
+    } catch (error) {
+      setDatasetUploadMessage(error.message || "기본셋 변경에 실패했습니다.", "error");
+      renderDatasetDefaultControl();
+    }
+  });
+}
+
+function bindDatasetDeleteButton() {
+  const button = document.getElementById("deleteDatasetButton");
+  if (!button || button.dataset.bound === "true") return;
+  button.dataset.bound = "true";
+  button.addEventListener("click", async () => {
+    if (!requireWriteAccess(setDatasetUploadMessage, "테스트셋 삭제")) return;
+    const dataset = selectedDatasetSummary();
+    if (!isUserUploadedDataset(dataset)) {
+      setDatasetUploadMessage("사용자가 업로드한 테스트셋만 삭제할 수 있습니다.", "error");
+      updateDatasetDeleteState();
+      return;
+    }
+    const label = datasetLabel(dataset);
+    if (!window.confirm(`테스트셋을 삭제할까요?\n\n${label}\n\n업로드된 CSV 파일이 서버에서 삭제됩니다.`)) return;
+
+    button.disabled = true;
+    setDatasetUploadMessage(`테스트셋 삭제 중: ${label}`, "");
+    try {
+      const response = await apiFetch(`api/questionlist/datasets/${encodeURIComponent(dataset.id)}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `삭제 실패 (${response.status})`);
+      }
+
+      applyQuestionDatasetPayload(payload);
+      if (!payload.datasets) {
+        questionlistDatasets = questionlistDatasets.filter((item) => item.id !== dataset.id);
+      }
+      resetQuestionlistCaseCache();
+      if (selectedDataset === dataset.id) {
+        selectedDataset = preferredDatasetId(defaultDatasetId(dataset.role) || (dataset.role === "regression" ? "regression_golden_full" : "benchmark_final_full"));
+      }
+      if (datasetCasesLoadedId === dataset.id) {
+        datasetCases = [];
+        datasetCasesLoadedId = "";
+        state.selectedDatasetCaseId = null;
+      }
+      populateDatasetSelects();
+      const datasetSelect = document.getElementById("datasetSelect");
+      const evalDatasetSelect = document.getElementById("evalDatasetSelect");
+      if (datasetSelect) datasetSelect.value = selectedDataset;
+      if (evalDatasetSelect) evalDatasetSelect.value = selectedDataset;
+      await loadDatasetCases(selectedDataset, { force: true });
+      populateRunProfileSelect();
+      renderCustomPoolInputs();
+      renderEvalProfileCards();
+      renderEvalRunSummary();
+      setDatasetUploadMessage(`테스트셋 삭제 완료: ${label}`, "ok");
+    } catch (error) {
+      setDatasetUploadMessage(error.message || "테스트셋 삭제에 실패했습니다.", "error");
+    } finally {
+      updateDatasetDeleteState();
+      applyAuthUiState();
     }
   });
 }
@@ -5289,12 +5864,18 @@ function populateDatasetSelects() {
     element.innerHTML = options;
     element.value = resolvedDataset;
   });
+  updateDatasetDeleteState();
+  renderDatasetDefaultControl();
 }
 
 function datasetLabel(dataset) {
-  if (dataset.id === "benchmark_final_full") return "벤치마크 - benchmark_dataset_test.csv";
-  if (dataset.id === "regression_golden_full") return "회귀 전체 - regression_golden_set.csv";
-  return dataset.name || dataset.label || dataset.id;
+  const base = dataset.id === "benchmark_final_full"
+    ? "벤치마크 - benchmark_dataset_test.csv"
+    : dataset.id === "regression_golden_full"
+      ? "회귀 - regression_golden_set.csv"
+      : (dataset.name || dataset.label || dataset.id);
+  const role = dataset.role || "";
+  return isDefaultDataset(dataset) ? `${base} (기본 ${datasetRoleLabel(role)})` : base;
 }
 
 function runProfileLabel(profileId) {
@@ -5339,6 +5920,48 @@ function syncScoringModeHelp() {
   }
 }
 
+function normalizeQuestionDatasetDefaults(defaults = {}) {
+  return {
+    benchmark: String(defaults.benchmark || questionDatasetDefaults.benchmark || "benchmark_final_full"),
+    regression: String(defaults.regression || questionDatasetDefaults.regression || "regression_golden_full"),
+  };
+}
+
+function applyQuestionDatasetPayload(payload = {}) {
+  if (Array.isArray(payload?.datasets)) {
+    questionlistDatasets = payload.datasets;
+  }
+  if (payload?.defaults) {
+    questionDatasetDefaults = normalizeQuestionDatasetDefaults(payload.defaults);
+  } else {
+    questionDatasetDefaults = normalizeQuestionDatasetDefaults({});
+  }
+  if (payload?.catalog) {
+    evalCatalog = payload.catalog;
+    if (payload.catalog.defaults) {
+      questionDatasetDefaults = normalizeQuestionDatasetDefaults(payload.catalog.defaults);
+    }
+  }
+}
+
+function defaultDatasetId(role) {
+  return questionDatasetDefaults?.[role] || "";
+}
+
+function datasetRoleLabel(role) {
+  return role === "regression" ? "회귀" : "벤치마크";
+}
+
+function isDefaultDataset(dataset) {
+  const role = dataset?.role || "";
+  return Boolean(role && dataset?.id && defaultDatasetId(role) === dataset.id);
+}
+
+function profileTotalCases(profileId) {
+  const profile = evalCatalog?.profiles?.[profileId] ?? {};
+  return Object.values(profile.pools || {}).reduce((sum, quota) => sum + Number(quota || 0), 0);
+}
+
 function sortedDatasets() {
   return [...questionlistDatasets].sort((a, b) => datasetRank(a) - datasetRank(b) || String(a.id).localeCompare(String(b.id)));
 }
@@ -5353,8 +5976,10 @@ function selectableDatasets() {
 }
 
 function datasetRank(dataset) {
-  if (dataset.id === "benchmark_final_full") return 0;
-  if (dataset.id === "regression_golden_full") return 1;
+  if (isDefaultDataset(dataset) && dataset.role === "benchmark") return 0;
+  if (isDefaultDataset(dataset) && dataset.role === "regression") return 1;
+  if (dataset.id === "benchmark_final_full") return 2;
+  if (dataset.id === "regression_golden_full") return 3;
   if (dataset.auto_discovered) return dataset.role === "benchmark" ? 30 : 40;
   if (dataset.role === "benchmark") return 10;
   if (dataset.role === "regression") return 20;
@@ -5378,22 +6003,27 @@ function preferredDatasetId(currentId = selectedDataset) {
   const datasets = selectableDatasets();
   const ids = new Set(datasets.map((dataset) => dataset.id));
   if (ids.has(currentId)) return currentId;
-  return ["benchmark_final_full", "regression_golden_full"].find((id) => ids.has(id))
+  return [
+    defaultDatasetId("benchmark"),
+    defaultDatasetId("regression"),
+    "benchmark_final_full",
+    "regression_golden_full",
+  ].find((id) => id && ids.has(id))
     || datasets[0]?.id
     || currentId;
 }
 
 function preferredDatasetForRun(runId, currentId = selectedDataset) {
   const normalized = String(runId || "").toLowerCase();
-  if (normalized.startsWith("regression")) return preferredDatasetId("regression_golden_full");
-  if (normalized.startsWith("benchmark")) return preferredDatasetId("benchmark_final_full");
+  if (normalized.startsWith("regression")) return preferredDatasetId(defaultDatasetId("regression") || "regression_golden_full");
+  if (normalized.startsWith("benchmark")) return preferredDatasetId(defaultDatasetId("benchmark") || "benchmark_final_full");
   return preferredDatasetId(currentId);
 }
 
 function preferredRunProfileId(profileIds) {
   const preferred = selectedRunId && String(selectedRunId).startsWith("regression")
-    ? ["regression_golden_full", "benchmark_final_full"]
-    : ["benchmark_final_full", "regression_golden_full"];
+    ? ["regression_default_full", "regression_registered_all", "benchmark_default_full", "benchmark_registered_all"]
+    : ["benchmark_default_full", "benchmark_registered_all", "regression_default_full", "regression_registered_all"];
   return preferred.find((id) => profileIds.has(id))
     || [...profileIds].find((id) => id !== "custom_seeded_mix")
     || "single_dataset";
@@ -5416,8 +6046,12 @@ function populateRunProfileSelect() {
 
 function profileRank(profileId) {
   return {
-    benchmark_final_full: 0,
-    regression_golden_full: 1,
+    benchmark_default_full: 0,
+    benchmark_registered_all: 1,
+    regression_default_full: 2,
+    regression_registered_all: 3,
+    benchmark_final_full: 20,
+    regression_golden_full: 21,
   }[profileId] ?? 50;
 }
 
@@ -5786,13 +6420,15 @@ function initializeEvalRunControls() {
   initializeStaticEmbeddingControls();
   const form = document.getElementById("evalRunForm");
   if (!form) return;
+  ensureEvalRunId();
   const inlineSubmit = form.querySelector('button[type="submit"]');
   if (inlineSubmit) {
     inlineSubmit.classList.add("run-submit", "secondary-run-submit");
     inlineSubmit.innerHTML = "<span>2단계: 채점 포함 실행</span><small>현재 설정으로 평가까지 실행</small>";
   }
-  ["evalLimit", "evalDryRun", "evalAnswerCacheEnabled", "evalExportFinalUi"].forEach((id) => {
-    document.getElementById(id)?.addEventListener("change", renderEvalRunSummary);
+  ["evalLimit", "evalRunId", "evalDryRun", "evalAnswerCacheEnabled", "evalJudgeCacheEnabled", "evalArbiterCacheEnabled", "evalExportFinalUi"].forEach((id) => {
+    const eventName = id === "evalRunId" ? "input" : "change";
+    document.getElementById(id)?.addEventListener(eventName, renderEvalRunSummary);
   });
   document.getElementById("evalScoringMode")?.addEventListener("change", () => {
     syncScoringModeHelp();
@@ -5882,6 +6518,7 @@ function initializeReblendControls() {
 }
 
 async function submitReblendRun() {
+  if (!requireWriteAccess(setEvalReblendMessage, "기존 실행 점수 재계산")) return;
   const button = document.getElementById("evalReblendSubmit");
   const sourceRunId = document.getElementById("reblendSourceRunId")?.value || "";
   const selectedScoringMode = document.getElementById("reblendScoringMode")?.value || "blend";
@@ -5929,7 +6566,7 @@ function judgeScoreGapModeLabel(mode) {
 function judgeScoreGapThresholdLabel(threshold, mode) {
   const number = Number(threshold);
   if (!Number.isFinite(number)) return "-";
-  return mode === "relative_percent" ? `${number}%+` : `${number}점+`;
+  return mode === "relative_percent" ? `${number}%+` : `${number} score gap+`;
 }
 
 function initializeJudgeComparisonControls() {
@@ -6141,6 +6778,7 @@ function setJudgeComparisonMessage(message, type = "") {
 }
 
 async function submitJudgeComparison() {
+  if (!requireWriteAccess(setJudgeComparisonMessage, "Judge 비교 리포트 생성")) return;
   const button = document.getElementById("judgeComparisonSubmit");
   const previous = button?.innerHTML || "";
   const baselineSourceId = document.getElementById("judgeCompareBaselineSource")?.value || "";
@@ -6439,11 +7077,15 @@ function renderEvalRunSummary() {
   const dryRun = Boolean(document.getElementById("evalDryRun")?.checked);
   const exportFinalUi = Boolean(document.getElementById("evalExportFinalUi")?.checked);
   const answerCacheEnabled = document.getElementById("evalAnswerCacheEnabled")?.checked !== false;
+  const judgeCacheEnabled = document.getElementById("evalJudgeCacheEnabled")?.checked !== false;
+  const arbiterCacheEnabled = document.getElementById("evalArbiterCacheEnabled")?.checked !== false;
   const scoringMode = document.getElementById("evalScoringMode")?.value || "static";
+  const runId = document.getElementById("evalRunId")?.value.trim() || "";
   const staticEmbeddingEnabled = Boolean(document.getElementById("evalStaticEmbeddingEnabled")?.checked);
   const staticEmbeddingModel = document.getElementById("evalStaticEmbeddingModel")?.value || "";
   const aggregationMethod = selectedJudgeAggregationMethod();
   const customPlanForSummary = isProfileRun && runProfile === "custom_seeded_mix" ? customPoolPlan() : null;
+  const profileTotal = isProfileRun && runProfile !== "custom_seeded_mix" ? profileTotalCases(runProfile) : 0;
   const judgeCount = scoringMode === "static"
     ? 0
     : selectedJudgeConfigIds().length;
@@ -6459,13 +7101,17 @@ function renderEvalRunSummary() {
       modelCount ? `모델 ${modelCount}개` : "선택한 모델 없음",
       targetSelectionModeLabels[targetMode],
       customPlanForSummary ? `샘플 ${customPlanForSummary.total}` : (limitRaw ? `제한 ${limitRaw}` : ""),
+      profileTotal ? `케이스 ${profileTotal.toLocaleString()}개` : "",
       customPlanForSummary ? `seed ${customPlanForSummary.seed ?? "?"}` : "",
       scoringModeLabel(scoringMode),
+      runId ? `실행 ID ${runId}` : "",
       staticEmbeddingEnabled ? `임베딩 ${staticEmbeddingModel || "사용"}` : "",
       judgeCount ? `Judge ${judgeCount}개` : "",
       judgeCount > 1 ? judgeAggregationLabels[aggregationMethod] : "",
       judgeWeightStatus ? `Judge 비중 ${judgeWeightStatus.total.toFixed(2)}` : "",
       answerCacheEnabled ? "답변 캐시 사용" : "새 답변 생성",
+      scoringMode !== "static" ? (judgeCacheEnabled ? "채점 캐시 사용" : "새 채점 생성") : "",
+      scoringMode !== "static" && judgeCount > 1 ? (arbiterCacheEnabled ? "Arbiter 캐시 사용" : "새 Arbiter 생성") : "",
       dryRun ? "모의 실행" : "실제 실행",
       exportFinalUi ? "UI 내보내기" : "",
     ].filter(Boolean).join(" / "))}</span>
@@ -6486,7 +7132,10 @@ function updateRunSubmitState() {
   const customPlanForSubmit = runProfile === "custom_seeded_mix" ? customPoolPlan() : null;
   let disabled = false;
   let reason = "선택한 모델과 실행 범위로 평가를 시작합니다.";
-  if (targetCount === 0) {
+  if (!hasWriteAccess()) {
+    disabled = true;
+    reason = readOnlyActionMessage("평가 실행");
+  } else if (targetCount === 0) {
     disabled = true;
     reason = "설정 탭에서 대상 모델을 먼저 등록하세요.";
   } else if (selectedCount === 0) {
@@ -6523,6 +7172,7 @@ function updateRunSubmitState() {
 
   const disabledHint = (() => {
     if (!disabled) return "";
+    if (reason.includes("읽기 전용")) return "관리자 권한 필요";
     if (reason.includes("비중 합계")) return "Judge 비중 합계가 1이면 실행 가능";
     if (reason.includes("단일 모델")) return "모델 1개만 선택 필요";
     if (reason.includes("1개만")) return "Judge 1개만 선택 필요";
@@ -6553,19 +7203,69 @@ function updateRunSubmitState() {
   });
   const answerOnlyButton = document.getElementById("answerOnlyRunSubmit");
   if (answerOnlyButton) {
-    const answerDisabled = targetCount === 0 || selectedCount === 0 || (targetMode === "single" && selectedCount > 1);
+    const answerDisabled = !hasWriteAccess() || targetCount === 0 || selectedCount === 0 || (targetMode === "single" && selectedCount > 1);
     const answerReason = targetCount === 0
       ? "설정 탭에서 대상 모델을 먼저 등록하세요."
-      : selectedCount === 0
-        ? "실행할 모델을 하나 이상 선택하세요."
-        : "단일 모델 실행은 대상 모델을 1개만 선택해야 합니다.";
+      : !hasWriteAccess()
+        ? readOnlyActionMessage("답변 생성")
+        : selectedCount === 0
+          ? "실행할 모델을 하나 이상 선택하세요."
+          : "단일 모델 실행은 대상 모델을 1개만 선택해야 합니다.";
     answerOnlyButton.disabled = answerDisabled;
     answerOnlyButton.title = answerDisabled ? answerReason : "LLM judge 없이 답변셋만 생성";
     answerOnlyButton.setAttribute("aria-disabled", answerDisabled ? "true" : "false");
   }
 }
 
+function confirmEvalRunStart({
+  answerOnly,
+  dryRun,
+  runId,
+  runProfile,
+  dataset,
+  configs,
+  limit,
+  selectedScoringMode,
+  judgeConfigIds,
+  customPlan,
+  answerCacheEnabled,
+  judgeCacheEnabled,
+  arbiterCacheEnabled,
+  exportFinalUi,
+}) {
+  if (dryRun) return true;
+  const datasetSummary = questionlistDatasets.find((item) => item.id === dataset) ?? {};
+  const isProfileRun = runProfile !== "single_dataset";
+  const caseCount = runProfile === "custom_seeded_mix"
+    ? customPlan.total
+    : isProfileRun
+      ? profileTotalCases(runProfile)
+      : (Number.isFinite(limit) ? limit : Number(datasetSummary.total || 0));
+  const caseLabel = caseCount ? `${Number(caseCount).toLocaleString()}개` : "선택 범위 전체";
+  const scoringLabel = answerOnly ? "답변 생성 전용" : scoringModeLabel(selectedScoringMode);
+  const rangeLabel = isProfileRun
+    ? runProfileLabel(runProfile)
+    : `${runProfileLabel(runProfile)} / ${datasetLabel(datasetSummary.id ? datasetSummary : { id: dataset })}`;
+  const lines = [
+    answerOnly ? "답변 생성 작업을 시작할까요?" : "실제 평가 작업을 시작할까요?",
+    "이 작업은 등록된 모델 또는 Judge API를 호출할 수 있습니다.",
+    `실행 ID: ${runId || "서버 자동 생성"}`,
+    `테스트 범위: ${rangeLabel}`,
+    `케이스: ${caseLabel}`,
+    `대상 모델: ${configs.length.toLocaleString()}개`,
+    `채점 방식: ${scoringLabel}`,
+    selectedScoringMode !== "static" ? `Judge: ${judgeConfigIds.length.toLocaleString()}개` : "",
+    answerCacheEnabled ? "답변 캐시: 사용" : "답변 캐시: 사용 안 함",
+    selectedScoringMode !== "static" ? (judgeCacheEnabled ? "채점 답변 캐시: 사용" : "채점 답변 캐시: 사용 안 함") : "",
+    selectedScoringMode !== "static" && judgeConfigIds.length > 1 ? (arbiterCacheEnabled ? "Arbiter 답변 캐시: 사용" : "Arbiter 답변 캐시: 사용 안 함") : "",
+    exportFinalUi ? "완료 후 UI 데이터 내보내기: 켜짐" : "",
+    "계속하려면 확인을 누르세요.",
+  ].filter(Boolean);
+  return window.confirm(lines.join("\n"));
+}
+
 async function startEvalRun(options = {}) {
+  if (!requireWriteAccess(setEvalRunMessage, "평가 실행")) return;
   const answerOnly = Boolean(options.answerOnly);
   const runProfile = document.getElementById("evalRunProfile")?.value || "single_dataset";
   const dataset = document.getElementById("evalDatasetSelect")?.value || selectedDataset;
@@ -6574,7 +7274,7 @@ async function startEvalRun(options = {}) {
   const suites = [];
   const limitRaw = document.getElementById("evalLimit")?.value ?? "";
   const limit = runProfile === "custom_seeded_mix" ? null : (limitRaw === "" ? null : Number(limitRaw));
-  const runId = document.getElementById("evalRunId")?.value || "";
+  const runId = ensureEvalRunId();
   const customPlan = customPoolPlan();
   const seed = runProfile === "custom_seeded_mix" ? customPlan.seed : Number(evalCatalog.default_seed || 42);
   const poolQuotas = runProfile === "custom_seeded_mix" ? customPlan.quotas : {};
@@ -6597,6 +7297,8 @@ async function startEvalRun(options = {}) {
   const dryRun = answerOnly ? false : Boolean(document.getElementById("evalDryRun")?.checked);
   const exportFinalUi = answerOnly ? false : Boolean(document.getElementById("evalExportFinalUi")?.checked);
   const answerCacheEnabled = document.getElementById("evalAnswerCacheEnabled")?.checked !== false;
+  const judgeCacheEnabled = document.getElementById("evalJudgeCacheEnabled")?.checked !== false;
+  const arbiterCacheEnabled = document.getElementById("evalArbiterCacheEnabled")?.checked !== false;
 
   if (runProfile === "custom_seeded_mix" && (!Number.isInteger(seed) || seed < 0)) {
     setEvalRunMessage("직접 구성 랜덤 시드는 0 이상의 정수여야 합니다.", "error");
@@ -6638,6 +7340,25 @@ async function startEvalRun(options = {}) {
     setEvalRunMessage("정적 임베딩 유사도를 사용하려면 임베딩 모델명을 입력하세요.", "error");
     return;
   }
+  if (!confirmEvalRunStart({
+    answerOnly,
+    dryRun,
+    runId,
+    runProfile,
+    dataset,
+    configs,
+    limit,
+    selectedScoringMode,
+    judgeConfigIds,
+    customPlan,
+    answerCacheEnabled,
+    judgeCacheEnabled,
+    arbiterCacheEnabled,
+    exportFinalUi,
+  })) {
+    setEvalRunMessage("실행을 취소했습니다.", "");
+    return;
+  }
 
   setEvalRunMessage(answerOnly ? "답변 생성 작업을 시작하는 중..." : "평가 작업을 시작하는 중...", "");
   const response = await apiFetch("api/eval/run", {
@@ -6657,6 +7378,8 @@ async function startEvalRun(options = {}) {
       scoring_mode: selectedScoringMode,
       skip_scoring: answerOnly,
       answer_cache: answerCacheEnabled,
+      judge_cache: judgeCacheEnabled,
+      arbiter_cache: arbiterCacheEnabled,
       static_embedding: {
         enabled: staticEmbeddingEnabled,
         model: staticEmbeddingModel,
@@ -6686,7 +7409,15 @@ async function startEvalRun(options = {}) {
     return;
   }
   activeEvalJobId = payload.job?.job_id;
-  setEvalRunMessage(`작업 시작: ${activeEvalJobId}`, "ok");
+  const startedRunId = payload.job?.run_id || runId;
+  const runIdInput = document.getElementById("evalRunId");
+  if (runIdInput && startedRunId) runIdInput.value = startedRunId;
+  const requestedRunId = payload.job?.requested_run_id || "";
+  const dedupeNote = payload.job?.run_id_deduplicated && requestedRunId
+    ? ` (요청 ID: ${requestedRunId})`
+    : "";
+  setEvalRunMessage(`작업 시작: ${startedRunId || activeEvalJobId}${dedupeNote}`, "ok");
+  renderEvalRunSummary();
   renderEvalJob(payload.job);
   restartEvalJobPoll(activeEvalJobId);
 }
@@ -6767,6 +7498,8 @@ function renderEvalJob(job) {
     <div class="job-status ${escapeHtml(job.status)}">
       <strong>${escapeHtml(evalJobStatusLabel(job.status))}</strong>
       <span>${escapeHtml(job.run_id || "")}</span>
+      ${job.requested_run_id && job.requested_run_id !== job.run_id ? `<span>요청 ID: ${escapeHtml(job.requested_run_id)}</span>` : ""}
+      ${job.run_id_deduplicated ? "<span>중복 ID 회피</span>" : ""}
       <span>${escapeHtml(job.runner_type || "")}</span>
       <span>${escapeHtml(job.dataset || "")}</span>
       ${job.run_profile ? `<span>실행 범위: ${escapeHtml(job.run_profile)}</span>` : ""}
@@ -6776,6 +7509,9 @@ function renderEvalJob(job) {
       ${job.composed_summary_path ? `<span>요약: ${escapeHtml(job.composed_summary_path)}</span>` : ""}
       ${job.static_embedding_model ? `<span>임베딩: ${escapeHtml(job.static_embedding_model)}${job.static_embedding_base_url ? ` · ${escapeHtml(job.static_embedding_base_url)}` : ""}</span>` : ""}
       ${job.judge_config ? `<span>Judge: ${escapeHtml(job.judge_config)} ${escapeHtml(job.judge_mode || "")}</span>` : ""}
+      ${job.answer_cache !== undefined ? `<span>답변 캐시: ${job.answer_cache ? "사용" : "꺼짐"}</span>` : ""}
+      ${job.judge_config ? `<span>채점 캐시: ${job.judge_cache ? "사용" : "꺼짐"}</span>` : ""}
+      ${job.judge_config && (job.judge_config_ids || []).length > 1 ? `<span>Arbiter 캐시: ${job.arbiter_cache ? "사용" : "꺼짐"}</span>` : ""}
       ${job.template_output ? `<span>템플릿: ${escapeHtml(job.template_output)}</span>` : ""}
       ${job.output_dir ? `<span>출력: ${escapeHtml(job.output_dir)}</span>` : ""}
       ${snapshotLabel ? `<span class="${escapeHtml(evalSnapshotStatusTone(job.snapshot_status))}">${escapeHtml(snapshotLabel)}</span>` : ""}
@@ -6818,6 +7554,7 @@ function renderEvalJobControls(job) {
 }
 
 async function controlEvalJob(jobId, action) {
+  if (!requireWriteAccess(setEvalRunMessage, "실행 작업 제어")) return;
   if (!jobId || !action) return;
   if (action === "cancel" && !window.confirm("실행 중인 평가 작업을 취소할까요? 완료된 체크포인트는 남습니다.")) {
     return;
@@ -7333,7 +8070,7 @@ function renderHeadToHeadSummary(runData) {
     <div class="compare-head-to-head">
       <span><strong>우세</strong>${escapeHtml(winner)}</span>
       <span><strong>점수차</strong>${escapeHtml(signed(scoreDelta))}</span>
-      <span><strong>통과율차</strong>${escapeHtml(signed(passDelta * 100))}%p</span>
+      <span><strong>통과율차</strong>${escapeHtml(signed(passDelta * 100))}pp</span>
       <span><strong>검토대기</strong>${Number(left.review_pending_count || 0).toLocaleString()} / ${Number(right.review_pending_count || 0).toLocaleString()}</span>
     </div>
   `;
@@ -7868,7 +8605,7 @@ function renderExplorer(caseData) {
     ["모델", "응답 요약", "규칙 기반", "LLM 평가", "반영", "결과", "채점 사유"],
       rows.map((d) => [
         modelCell(d.version, d.model),
-        clampedTableText(d.answer_excerpt, "answer-summary"),
+        explorerAnswerCell(d),
         scoreBadgeOrBlank(firstPresentValue(d.static_overall_score, d.overall_score)),
         scoreBadgeOrBlank(d.llm_judge_overall_score),
         scoreBadgeOrBlank(d.overall_score),
@@ -7877,6 +8614,7 @@ function renderExplorer(caseData) {
       ])
     )}
   ` : emptyState("선택 가능한 질문이 없습니다."));
+  hydrateExplorerRows(rows);
 
   const grouped = aggregateBy(caseData, "source_type");
   setHtml("tagSummary", grouped.map((d) => `
@@ -7888,12 +8626,46 @@ function renderExplorer(caseData) {
   `).join(""));
 }
 
+function explorerAnswerCell(row) {
+  const hasFullAnswer = Boolean(String(row?.model_answer || "").trim());
+  const status = hasFullAnswer
+    ? ""
+    : row?.__detailLoadFailed
+      ? "요약만 표시"
+      : "원문 불러오는 중";
+  return expandableTableText(row?.model_answer || row?.answer_excerpt, "answer-summary", 220, { status });
+}
+
+function hydrateExplorerRows(rows) {
+  const selectedQuestion = state.selectedQuestion;
+  const targets = rows
+    .filter((row) => row && !row.__detailLoaded && !row.__detailLoadFailed);
+  if (!targets.length) return;
+  let scheduled = false;
+  const scheduleRender = () => {
+    if (scheduled) return;
+    scheduled = true;
+    window.requestAnimationFrame(() => {
+      if (state.selectedQuestion === selectedQuestion) renderExplorer(filteredCases());
+    });
+  };
+  targets.forEach((row) => {
+    loadCaseDetailRow(row)
+      .then(scheduleRender)
+      .catch((error) => {
+        console.warn("explorer case detail load failed", error);
+        row.__detailLoadFailed = true;
+      });
+  });
+}
+
 function questionMatchesSearch(row, query) {
   return [
     row.question_id,
     row.question,
     row.model,
     row.version,
+    row.model_answer,
     row.answer_excerpt,
     row.llm_judge_reason,
     row.judge_reason,
@@ -7923,6 +8695,7 @@ function renderGlobalSearch(caseData) {
       return [
         row.question_id,
         row.question,
+        row.model_answer,
         row.answer_excerpt,
         row.llm_judge_reason,
         humanJudgeReasonText(row.llm_judge_reason),
@@ -8206,6 +8979,28 @@ function clampedTableText(value, className = "") {
   return {
     [rawHtml]: true,
     value: `<div class="table-text-clamp ${escapeHtml(className)}" title="${escapeHtml(text)}">${escapeHtml(text || "-")}</div>`,
+  };
+}
+
+function expandableTableText(value, className = "", previewLength = 220, options = {}) {
+  const text = String(value ?? "").trim();
+  if (!text) return clampedTableText("-", className);
+  const isLong = text.length > previewLength || text.includes("\n");
+  const status = String(options.status || "").trim();
+  if (!isLong && !status) return clampedTableText(text, className);
+  const statusHtml = status ? `<span class="table-text-status">${escapeHtml(status)}</span>` : "";
+  return {
+    [rawHtml]: true,
+    value: `
+      <details class="table-text-expand ${escapeHtml(className)}">
+        <summary>
+          <span class="table-text-preview">${escapeHtml(shortLabel(text, previewLength))}</span>
+          ${statusHtml}
+          <span class="table-text-toggle" aria-hidden="true"></span>
+        </summary>
+        <div class="table-text-full">${escapeHtml(text)}</div>
+      </details>
+    `,
   };
 }
 

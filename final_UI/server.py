@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import base64
 import gzip
 import hashlib
@@ -52,14 +53,18 @@ from scripts.eval.run_multi_model_eval import (  # noqa: E402
     export_final_ui as eval_export_final_ui,
     gemini_chat_url,
     gemini_payload,
+    metric_keys_for_score as eval_metric_keys_for_score,
     openai_chat_url,
     openai_responses_url,
     qa_slice_score_rows as eval_qa_slice_score_rows,
     question_case_rows as eval_question_case_rows,
+    raw_metric_score as eval_raw_metric_score,
     read_cases_path as eval_read_cases_path,
     read_jsonl as eval_read_jsonl,
     safe_filename as eval_safe_filename,
+    score_denominator as eval_score_denominator,
     score_output as eval_score_output,
+    score_total_from_metrics as eval_score_total_from_metrics,
     write_csv as eval_write_csv,
     write_html_report as eval_write_html_report,
     write_jsonl as eval_write_jsonl,
@@ -71,6 +76,7 @@ REGISTERED_TARGET_MODELS_PATH = ROOT / "data" / "registered_target_models.json"
 REGISTERED_JUDGE_MODELS_PATH = ROOT / "data" / "registered_judge_models.json"
 JUDGE_API_PRESETS_PATH = ROOT / "data" / "judge_api_presets.json"
 SERVER_API_SECRETS_PATH = ROOT / "data" / "server_api_secrets.json"
+QUESTION_DATASET_SETTINGS_PATH = ROOT / "data" / "question_dataset_settings.json"
 SEEDED_TARGET_MODELS_PATH = PROJECT_ROOT / "config" / "seeded_target_models.yaml"
 EVAL_DATASET_CATALOG_PATH = PROJECT_ROOT / "config" / "eval_dataset_catalog.yaml"
 EVAL_RUNS_ROOT = PROJECT_ROOT / "out" / "eval_runs"
@@ -96,6 +102,19 @@ QUESTIONLIST_CSV_DIRS = [
     USER_UPLOAD_CSV_ROOT / "benchmark",
     USER_UPLOAD_CSV_ROOT / "regression",
 ]
+QUESTION_DATASET_ROLES = ("benchmark", "regression")
+FALLBACK_DEFAULT_DATASET_BY_ROLE = {
+    "benchmark": "benchmark_final_full",
+    "regression": "regression_golden_full",
+}
+DEFAULT_PROFILE_BY_ROLE = {
+    "benchmark": "benchmark_default_full",
+    "regression": "regression_default_full",
+}
+REGISTERED_ALL_PROFILE_BY_ROLE = {
+    "benchmark": "benchmark_registered_all",
+    "regression": "regression_registered_all",
+}
 
 
 def is_current_ui_data_run_id(run_id: str) -> bool:
@@ -118,11 +137,11 @@ MODEL_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MODEL_HEALTH_TIMEOUT_SECOND
 MODEL_LIVE_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("MODEL_LIVE_HEALTH_TIMEOUT_SECONDS", "180"))
 MAX_JSON_BODY_BYTES = int(os.environ.get("FINAL_UI_MAX_JSON_BODY_BYTES", str(8 * 1024 * 1024)))
 RUN_EXCLUDE_MARKERS = ("SMOKE", "DEBUG", "TEST")
-RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs"}
+RESERVED_EVAL_RUN_NAMES = {"archive", "_answer_cache", "_judge_cache", "_archive_fragments_20260526", "_archive_fragments_20260527", "_judge_jobs"}
 MIN_DISPLAY_QUESTIONS = 10
 EMPTY_LATEST_RUN_CSV = {
     "eval_runs.csv": "run_id,model,version,run_type,eval_date,eval_started_at,total_questions,scored_questions,review_pending_count,pass_rate,overall_score,scored_pass_rate,scored_average,acc,com,nac,hal,hal_rate,hal_pass,answer_quality_score,rag_quality_score,avg_latency_ms,avg_cost_krw,score_schema\n",
-    "question_cases.csv": "question_id,qa_category,question_type,qa_topic,instruction,output,ground_truth_doc,source_type,expected_behavior,selection_mode,regression_suite,metamorphic_relation,dataset_pool_id,dataset_role,gate_eligible,release_gate_eligible,case_status,gold_verified,human_review_required,case_source,dataset_version,qa_matrix_topic,benchmark_group,source_hash,source_title,source_url,priority,task_type,model,version,answer_excerpt,model_answer,acc,com,nac,hal,hal_rate,hal_pass,applicable_metrics,score_denominator,raw_metric_score,canonical_metric_count,answer_quality_score,rag_quality_score,overall_score,pass_fail,score_schema,score_scale,metric_source_hal,scoring_mode,static_overall_score,static_pass_fail,llm_judge_count,llm_judge_overall_score,llm_judge_pass_fail,llm_judge_status,llm_judge_provider,llm_judge_model,llm_judge_prompt_version,llm_judge_prompt_hash,llm_judge_prompt_preset,llm_judge_hal_pass,llm_judge_individual_scores,llm_judge_conflict,llm_judge_conflict_detected,llm_judge_unresolved_conflict,llm_judge_conflict_reason,llm_judge_conflict_resolution_policy,llm_judge_arbiter_config_id,llm_judge_arbitration_status,llm_judge_provider_refused,llm_judge_provider_refusal_reason,llm_judge_sanitized_eval,llm_judge_score_gap,llm_judge_score_min,llm_judge_score_max,llm_judge_pass_mismatch,llm_judge_base_average_score,llm_judge_arbiter_score,llm_judge_arbiter_override,regression_delta,regression_type,release_gate,error_type,judge_reason,static_reason,llm_judge_reason,metric_source_acc,metric_source_com,metric_source_nac\n",
+    "question_cases.csv": "question_id,qa_category,question_type,qa_topic,instruction,output,ground_truth_doc,source_type,expected_behavior,selection_mode,regression_suite,metamorphic_relation,dataset_pool_id,dataset_role,gate_eligible,release_gate_eligible,case_status,gold_verified,human_review_required,case_source,dataset_version,qa_matrix_topic,benchmark_group,source_hash,source_title,source_url,priority,task_type,model,version,answer_excerpt,model_answer,acc,com,nac,hal,hal_rate,hal_pass,applicable_metrics,score_denominator,raw_metric_score,canonical_metric_count,answer_quality_score,rag_quality_score,overall_score,pass_fail,score_schema,score_scale,metric_source_hal,scoring_mode,static_overall_score,static_pass_fail,llm_judge_count,llm_judge_overall_score,llm_judge_pass_fail,llm_judge_status,llm_judge_provider,llm_judge_model,llm_judge_prompt_version,llm_judge_prompt_hash,llm_judge_prompt_preset,llm_judge_hal_pass,llm_judge_omnieval_accuracy,llm_judge_omnieval_completeness,llm_judge_omnieval_numerical_accuracy,llm_judge_omnieval_hallucination,llm_judge_omnieval_scores,llm_judge_applicable_metrics,llm_judge_scores,llm_judge_individual_scores,llm_judge_conflict,llm_judge_conflict_detected,llm_judge_unresolved_conflict,llm_judge_conflict_reason,llm_judge_conflict_resolution_policy,llm_judge_arbiter_config_id,llm_judge_arbitration_status,llm_judge_provider_refused,llm_judge_provider_refusal_reason,llm_judge_sanitized_eval,llm_judge_score_gap,llm_judge_score_min,llm_judge_score_max,llm_judge_pass_mismatch,llm_judge_base_average_score,llm_judge_arbiter_score,llm_judge_arbiter_override,regression_delta,regression_type,release_gate,error_type,judge_reason,static_reason,llm_judge_reason,metric_source_acc,metric_source_com,metric_source_nac\n",
     "qa_slice_scores.csv": "version,model,slice_level,slice_dimension,slice_value,case_count,row_count,min_reliable_cases,reliability_status,pass_rate,overall_score,acc,com,nac,hal,hal_rate,hal_pass,score_schema\n",
     "run_release_gates.csv": "run_id,config_id,model,release_gate,total_cases,evaluated_cases,gate_eligible_cases,pass_count,review_count,block_count,critical_fail_count,pass_rate,core_pass_rate,core_pass_rate_min,reason\n",
     "regression_diff.csv": "question_id,version,baseline_version,overall_score,baseline_overall_score,delta,regression_type\n",
@@ -853,6 +872,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/questionlist/datasets/upload":
             self.handle_upload_question_dataset()
             return
+        if parsed.path == "/api/questionlist/datasets/default":
+            self.handle_set_question_dataset_default()
+            return
         if parsed.path == "/api/eval/run":
             self.handle_start_eval_run()
             return
@@ -886,6 +908,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if parsed.path.startswith("/api/server-api-secrets/"):
             env_name = unquote(parsed.path.rsplit("/", 1)[-1])
             self.handle_delete_server_api_secret(env_name)
+            return
+        if parsed.path.startswith("/api/questionlist/datasets/"):
+            dataset_id = unquote(parsed.path.rsplit("/", 1)[-1])
+            self.handle_delete_question_dataset(dataset_id)
             return
         self.send_json({"error": "not found"}, status=404)
 
@@ -1313,6 +1339,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "prompt_version": config.get("prompt_version"),
             "system_prompt_preset": str(config.get("system_prompt_preset") or config.get("judge_prompt_preset") or "").strip(),
             "system_prompt": config.get("system_prompt") or "",
+            "system_prompt_snapshot": config.get("system_prompt_snapshot") or "",
+            "system_prompt_snapshot_version": str(config.get("system_prompt_snapshot_version") or config.get("prompt_version") or "").strip(),
             "prompt_template": config.get("prompt_template") or "",
             "query_prompt_template": config.get("query_prompt_template") or "",
             "prompt_prefix": config.get("prompt_prefix") or "",
@@ -1655,6 +1683,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             encoding="utf-8",
         )
 
+    def openai_reasoning_judge_model(self, model: str, options: dict | None = None):
+        options = options if isinstance(options, dict) else {}
+        reasoning = options.get("reasoning")
+        model_id = str(model or "").strip().lower()
+        return bool(
+            options.get("reasoning_effort")
+            or options.get("reasoningEffort")
+            or (isinstance(reasoning, dict) and reasoning.get("effort"))
+            or model_id.startswith(("gpt-5", "o1", "o3", "o4"))
+        )
+
+    def judge_sampling_controls_enabled(self, provider: str, model: str, options: dict | None = None):
+        return not (provider == "openai_native" and self.openai_reasoning_judge_model(model, options))
+
     def normalize_judge_api_preset(self, preset: dict):
         if not isinstance(preset, dict):
             return None
@@ -1670,7 +1712,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         config_id = self.safe_config_id(preset.get("configId") or preset.get("config_id") or f"{preset_id}_judge")
         prompt_preset = str(preset.get("promptPreset") or preset.get("prompt_preset") or "judge_default_v1").strip()
         options = preset.get("options", {}) if isinstance(preset.get("options"), dict) else {}
-        return {
+        sampling_enabled = self.judge_sampling_controls_enabled(provider, model, options)
+        if not sampling_enabled:
+            options = dict(options)
+            for key in ("temperature", "temp", "top_p", "topP"):
+                options.pop(key, None)
+        normalized = {
             "id": preset_id,
             "label": str(preset.get("label") or preset_id).strip(),
             "provider": provider,
@@ -1680,8 +1727,6 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "baseUrl": str(preset.get("baseUrl") or preset.get("base_url") or "").strip(),
             "chatUrl": str(preset.get("chatUrl") or preset.get("chat_url") or "").strip(),
             "apiKeyEnv": str(preset.get("apiKeyEnv") or preset.get("api_key_env") or "").strip(),
-            "temperature": self.safe_float(preset.get("temperature"), default=0.0, minimum=0.0, maximum=2.0),
-            "topP": self.safe_float(preset.get("topP") if "topP" in preset else preset.get("top_p"), default=0.1, minimum=0.0, maximum=1.0),
             "maxTokens": self.safe_int(preset.get("maxTokens") or preset.get("max_tokens"), default=1024, minimum=1, maximum=100000),
             "promptPreset": prompt_preset or "judge_default_v1",
             "promptVersion": str(preset.get("promptVersion") or preset.get("prompt_version") or "").strip(),
@@ -1689,6 +1734,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "options": options,
             "builtIn": self.config_bool(preset.get("builtIn") if "builtIn" in preset else preset.get("built_in"), default=False),
         }
+        if sampling_enabled:
+            normalized["temperature"] = self.safe_float(preset.get("temperature"), default=0.0, minimum=0.0, maximum=2.0)
+            normalized["topP"] = self.safe_float(preset.get("topP") if "topP" in preset else preset.get("top_p"), default=0.1, minimum=0.0, maximum=1.0)
+        return normalized
 
     def payload_contains_raw_secret(self, payload) -> bool:
         secret_keys = {"api_key", "apikey", "apiKey", "token", "secret", "password", "authorization", "bearer"}
@@ -2783,6 +2832,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         return score
 
     def partition_judge_row_to_score(self, row: dict) -> dict:
+        omnieval_scores = row.get("omnieval_scores") or row.get("llm_judge_omnieval_scores") or {}
+        if isinstance(omnieval_scores, str):
+            try:
+                omnieval_scores = json.loads(omnieval_scores)
+            except json.JSONDecodeError:
+                omnieval_scores = {}
         score = {
             "config_id": row.get("judge_config_id") or row.get("llm_judge_config_id") or row.get("config_id", ""),
             "provider": row.get("judge_provider") or row.get("llm_judge_provider") or row.get("provider", ""),
@@ -2790,10 +2845,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "prompt_version": row.get("prompt_version", ""),
             "prompt_hash": row.get("prompt_hash", ""),
             "system_prompt_preset": row.get("system_prompt_preset", ""),
+            "omnieval_accuracy": row.get("omnieval_accuracy", row.get("llm_judge_omnieval_accuracy", "")),
+            "omnieval_completeness": row.get("omnieval_completeness", row.get("llm_judge_omnieval_completeness", "")),
+            "omnieval_numerical_accuracy": row.get("omnieval_numerical_accuracy", row.get("llm_judge_omnieval_numerical_accuracy", "")),
+            "omnieval_hallucination": row.get("omnieval_hallucination", row.get("llm_judge_omnieval_hallucination", "")),
+            "omnieval_scores": omnieval_scores,
             **{key: self.safe_float(row.get(key), default=0.0, minimum=0.0, maximum=1.0) for key in SCORE_METRIC_KEYS},
-            "utl_applicable": self.judge_bool_value(row.get("utl_applicable", True)),
             "applicable_metrics": row.get("applicable_metrics", ""),
-            "score_denominator": self.safe_float(row.get("score_denominator"), default=float(len(SCORE_METRIC_KEYS)), minimum=1.0, maximum=float(len(SCORE_METRIC_KEYS))),
+            "score_denominator": row.get("score_denominator", ""),
             "raw_metric_score": row.get("raw_metric_score", ""),
             "answer_quality_score": row.get("answer_quality_score", ""),
             "rag_quality_score": row.get("rag_quality_score", ""),
@@ -2803,9 +2862,19 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "error_type": row.get("error_type", ""),
             "reason": row.get("reason", ""),
         }
+        if not score["applicable_metrics"] and isinstance(omnieval_scores, dict):
+            applicable_metrics = ["acc"]
+            if self.safe_int(omnieval_scores.get("completeness"), default=-1, minimum=-1, maximum=2) >= 0:
+                applicable_metrics.append("com")
+            if self.safe_int(omnieval_scores.get("numerical_accuracy"), default=-1, minimum=-1, maximum=1) >= 0:
+                applicable_metrics.append("nac")
+            applicable_metrics.append("hal_pass")
+            score["applicable_metrics"] = ",".join(applicable_metrics)
         if score["overall_score"] in ("", None):
-            raw = sum(self.safe_float(score.get(key), default=0.0, minimum=0.0, maximum=1.0) for key in SCORE_METRIC_KEYS)
-            score["overall_score"] = round(raw / score["score_denominator"], 4)
+            score["applicable_metrics"] = ",".join(eval_metric_keys_for_score(score))
+            score["score_denominator"] = eval_score_denominator(score)
+            score["raw_metric_score"] = eval_raw_metric_score(score)
+            score["overall_score"] = eval_score_total_from_metrics(score)
         return score
 
     def write_projected_run_files(self, run_dir: Path) -> bool:
@@ -3315,10 +3384,12 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         if candidate_judge_config_id not in candidate_judge_ids:
             self.send_json({"error": f"candidate judge not found in run: {candidate_judge_config_id}"}, status=404)
             return
-        threshold = self.safe_float(payload.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=10000.0)
         score_gap_mode = str(payload.get("score_gap_mode") or "points").strip().lower()
         if score_gap_mode not in {"points", "relative_percent"}:
             score_gap_mode = "points"
+        threshold_default = 30.0 if score_gap_mode == "relative_percent" else 0.3
+        threshold_max = 10000.0 if score_gap_mode == "relative_percent" else 1.0
+        threshold = self.safe_float(payload.get("score_gap_threshold"), default=threshold_default, minimum=0.0, maximum=threshold_max)
         include_error_type = self.judge_bool_value(payload.get("include_error_type_mismatch", False))
         normalize_error_type = True
         if "normalize_error_type" in payload:
@@ -3759,8 +3830,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             cand = candidate_scores[(config_id, case_id)]
             base_score = self.safe_score(base.get("overall_score"))
             cand_score = self.safe_score(cand.get("overall_score"))
-            delta = round(cand_score - base_score, 2)
-            gap = round(abs(delta), 2)
+            delta = round(cand_score - base_score, 4)
+            gap = round(abs(delta), 4)
             relative_gap = round(gap / max(abs(base_score), 1.0) * 100.0, 2)
             selected_gap = relative_gap if score_gap_mode == "relative_percent" else gap
             score_gap_threshold_met = bool(selected_gap >= score_gap_threshold)
@@ -3768,8 +3839,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             cand_error = str(cand.get("error_type") or "")
             compare_base_error = eval_canonical_error_type(base_error) if normalize_error_type else base_error
             compare_cand_error = eval_canonical_error_type(cand_error) if normalize_error_type else cand_error
-            base_pass = base_score >= 60.0
-            cand_pass = cand_score >= 60.0
+            base_pass = self.judge_bool_value(base.get("pass")) if base.get("pass") not in {"", None} else base_score >= 0.6
+            cand_pass = self.judge_bool_value(cand.get("pass")) if cand.get("pass") not in {"", None} else cand_score >= 0.6
             pass_mismatch = base_pass != cand_pass
             error_mismatch = bool(include_error_type_mismatch and compare_base_error != compare_cand_error)
             reasons = []
@@ -3788,7 +3859,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             arbiter = arbiter_scores.get((config_id, case_id), {}) if arbiter_scores else {}
             has_arbiter = bool(arbiter)
             arbiter_score = self.safe_score(arbiter.get("overall_score")) if has_arbiter else ""
-            arbiter_pass = (arbiter_score >= 60.0) if has_arbiter else ""
+            arbiter_pass = (
+                self.judge_bool_value(arbiter.get("pass"))
+                if has_arbiter and arbiter.get("pass") not in {"", None}
+                else (arbiter_score >= 0.6)
+                if has_arbiter
+                else ""
+            )
             arbiter_error = str(arbiter.get("error_type") or "") if has_arbiter else ""
             if not conflict_detected:
                 arbiter_status = "not_required"
@@ -3972,6 +4049,14 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def normalized_judge_score(self, row: dict, *, source: str):
         if source == "candidate":
             score = row.get("llm_judge_overall_score", row.get("overall_score"))
+            if score in (None, ""):
+                score_row = {
+                    key: self.judge_metric_points(row.get(f"llm_judge_{key}", row.get(key)), row)
+                    for key in SCORE_METRIC_KEYS
+                }
+                score_row["applicable_metrics"] = row.get("llm_judge_applicable_metrics", row.get("applicable_metrics", ""))
+                score_row["score_denominator"] = row.get("llm_judge_score_denominator", row.get("score_denominator", ""))
+                score = eval_score_total_from_metrics(score_row)
             overall = self.judge_overall_points(score, row)
             critical_fail = self.judge_bool_value(row.get("llm_judge_critical_fail", row.get("critical_fail")))
             return {
@@ -3986,9 +4071,13 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             }
         score = row.get("overall_score")
         if score in (None, ""):
-            denominator = self.safe_float(row.get("score_denominator"), default=float(len(SCORE_METRIC_KEYS)), minimum=1.0, maximum=float(len(SCORE_METRIC_KEYS)))
-            raw = sum(self.judge_metric_points(row.get(key), row) for key in SCORE_METRIC_KEYS)
-            score = round(raw / denominator, 4)
+            score_row = {
+                key: self.judge_metric_points(row.get(key), row)
+                for key in SCORE_METRIC_KEYS
+            }
+            score_row["applicable_metrics"] = row.get("applicable_metrics", "")
+            score_row["score_denominator"] = row.get("score_denominator", "")
+            score = eval_score_total_from_metrics(score_row)
         overall = self.judge_overall_points(score, row)
         critical_fail = self.judge_bool_value(row.get("critical_fail"))
         return {
@@ -4216,9 +4305,11 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             text = " ".join(str(value or "").split())
             return text if len(text) <= limit else text[: limit - 1] + "..."
 
-        threshold = self.safe_float(summary.get("score_gap_threshold"), default=30.0, minimum=0.0, maximum=10000.0)
         score_gap_mode = str(summary.get("score_gap_mode") or "points")
-        threshold_label = f"{threshold:g}% 상대차+" if score_gap_mode == "relative_percent" else f"{threshold:g}점+"
+        threshold_default = 30.0 if score_gap_mode == "relative_percent" else 0.3
+        threshold_max = 10000.0 if score_gap_mode == "relative_percent" else 1.0
+        threshold = self.safe_float(summary.get("score_gap_threshold"), default=threshold_default, minimum=0.0, maximum=threshold_max)
+        threshold_label = f"{threshold:g}% 상대차+" if score_gap_mode == "relative_percent" else f"{threshold:g} score gap+"
         arbiter_judge = str(summary.get("arbiter_judge_config_id") or "").strip()
         model_rows = [
             [
@@ -4335,7 +4426,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             f"- 기준 Judge: {summary.get('baseline_judge_config_id')} ({summary.get('baseline_label')})",
             f"- 비교 Judge 실행: {summary.get('candidate_run_id')}",
             "- 기준 점수 차이: `비교 Judge 점수 - 기준 Judge 점수`",
-            f"- {threshold_scope_label}: {threshold_label} ({'기준 Judge 대비 상대 차이' if score_gap_mode == 'relative_percent' else '절대 점수차/%p'})",
+            f"- {threshold_scope_label}: {threshold_label} ({'기준 Judge 대비 상대 차이' if score_gap_mode == 'relative_percent' else 'normalized score gap'})",
             f"- 기존 중재 Judge 결과: {arbiter_judge or '선택 안 함'}",
             arbiter_run_note,
             "",
@@ -5007,6 +5098,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         seen_dataset_ids = set()
         catalog = self.load_eval_dataset_catalog()
         pools = catalog.get("pools") if isinstance(catalog.get("pools"), dict) else {}
+        defaults = self.question_dataset_defaults(pools)
         catalog_paths = set()
         for pool in pools.values():
             if not isinstance(pool, dict) or not pool.get("path"):
@@ -5021,33 +5113,40 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             path = dataset["path"]
             if str(path.resolve()).lower() in catalog_paths:
                 continue
+            role = dataset["role"]
             datasets.append(
-                {
-                    "id": dataset["id"],
-                    "name": dataset["name"],
-                    "path": self.display_path(path),
-                    "exists": path.exists(),
-                    "role": dataset["role"],
-                    "default_quota": "",
-                    "gate_eligible": dataset["role"] != "benchmark",
-                    "dataset_version": dataset["version"],
-                    "source_format": "csv",
-                    "source_directory": dataset["directory"],
-                    "auto_discovered": True,
-                    "user_uploaded": bool(dataset.get("user_uploaded")),
-                    **self.summarize_case_file(path, dataset_id=dataset["id"], role=dataset["role"]),
-                }
+                self.dataset_payload_with_default_flags(
+                    {
+                        "id": dataset["id"],
+                        "name": dataset["name"],
+                        "path": self.display_path(path),
+                        "exists": path.exists(),
+                        "role": role,
+                        "default_quota": "",
+                        "gate_eligible": role != "benchmark",
+                        "dataset_version": dataset["version"],
+                        "source_format": "csv",
+                        "source_directory": dataset["directory"],
+                        "auto_discovered": True,
+                        "user_uploaded": bool(dataset.get("user_uploaded")),
+                        **self.summarize_case_file(path, dataset_id=dataset["id"], role=role),
+                    },
+                    defaults,
+                )
             )
             seen_dataset_ids.add(dataset["id"])
         for dataset_id, path in QUESTIONLIST_DATASET_FILES.items():
             datasets.append(
-                {
-                    "id": dataset_id,
-                    "name": path.name,
-                    "path": self.display_path(path),
-                    "exists": path.exists(),
-                    **self.summarize_case_file(path),
-                }
+                self.dataset_payload_with_default_flags(
+                    {
+                        "id": dataset_id,
+                        "name": path.name,
+                        "path": self.display_path(path),
+                        "exists": path.exists(),
+                        **self.summarize_case_file(path),
+                    },
+                    defaults,
+                )
             )
             seen_dataset_ids.add(dataset_id)
         for pool_id, pool in pools.items():
@@ -5059,31 +5158,54 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 continue
             if not self.catalog_dataset_visible(pool, path):
                 continue
+            role = str(pool.get("role") or "regression")
             datasets.append(
-                {
-                    "id": str(pool_id),
-                    "name": str(pool.get("label") or path.name),
-                    "path": self.display_path(path),
-                    "exists": path.exists(),
-                    "role": pool.get("role", "regression"),
-                    "default_quota": pool.get("default_quota", ""),
-                    "gate_eligible": bool(pool.get("gate_eligible", pool.get("role") != "benchmark")),
-                    "dataset_version": pool.get("dataset_version", ""),
-                    "is_public": bool(pool.get("is_public", False)),
-                    "catalog_pool": True,
-                    **self.summarize_case_file(
-                        path,
-                        filters=pool.get("filters"),
-                        dataset_id=str(pool_id),
-                        role=str(pool.get("role") or "regression"),
-                    ),
-                }
+                self.dataset_payload_with_default_flags(
+                    {
+                        "id": str(pool_id),
+                        "name": str(pool.get("label") or path.name),
+                        "path": self.display_path(path),
+                        "exists": path.exists(),
+                        "role": role,
+                        "default_quota": pool.get("default_quota", ""),
+                        "gate_eligible": bool(pool.get("gate_eligible", role != "benchmark")),
+                        "dataset_version": pool.get("dataset_version", ""),
+                        "is_public": bool(pool.get("is_public", False)),
+                        "catalog_pool": True,
+                        "auto_discovered": bool(pool.get("auto_discovered", False)),
+                        "user_uploaded": bool(pool.get("user_uploaded", False)),
+                        "registered_all_eligible": bool(pool.get("registered_all_eligible", True)),
+                        **self.summarize_case_file(
+                            path,
+                            filters=pool.get("filters"),
+                            dataset_id=str(pool_id),
+                            role=role,
+                        ),
+                    },
+                    defaults,
+                )
             )
             seen_dataset_ids.add(str(pool_id))
         return datasets
 
     def handle_questionlist_datasets(self):
-        self.send_json({"status": "ok", "datasets": self.questionlist_datasets_payload()})
+        self.send_json(self.questionlist_datasets_response_payload())
+
+    def questionlist_datasets_response_payload(self):
+        catalog = self.load_eval_dataset_catalog()
+        pools = catalog.get("pools") if isinstance(catalog.get("pools"), dict) else {}
+        return {
+            "status": "ok",
+            "datasets": self.questionlist_datasets_payload(),
+            "defaults": self.question_dataset_defaults(pools),
+        }
+
+    def dataset_payload_with_default_flags(self, dataset: dict, defaults: dict[str, str]):
+        role = self.normalize_question_dataset_role(dataset.get("role"))
+        dataset["role"] = role
+        dataset["is_default_for_role"] = defaults.get(role) == str(dataset.get("id") or "")
+        dataset["default_role"] = role if dataset["is_default_for_role"] else ""
+        return dataset
 
     def handle_question_dataset_sample_csv_download(self):
         buffer = io.StringIO()
@@ -5165,9 +5287,104 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             CASE_SUMMARY_CACHE.clear()
 
         dataset_id = f"user__{role}__{target_path.stem}"
-        datasets = self.questionlist_datasets_payload()
+        datasets_response = self.questionlist_datasets_response_payload()
+        datasets = datasets_response["datasets"]
         uploaded_dataset = next((dataset for dataset in datasets if dataset.get("id") == dataset_id), None)
-        self.send_json({"status": "ok", "dataset": uploaded_dataset, "datasets": datasets})
+        self.send_json(
+            {
+                "status": "ok",
+                "dataset": uploaded_dataset,
+                "datasets": datasets,
+                "defaults": datasets_response["defaults"],
+                "catalog": self.eval_catalog_response_payload(),
+            }
+        )
+
+    def handle_delete_question_dataset(self, dataset_id: str):
+        dataset_id = str(dataset_id or "").strip()
+        if not dataset_id:
+            self.send_json({"error": "dataset id is required"}, status=400)
+            return
+
+        dataset = self.discover_question_csv_datasets().get(dataset_id)
+        if not dataset:
+            self.send_json({"error": f"unknown dataset: {dataset_id}"}, status=404)
+            return
+        if not dataset.get("user_uploaded"):
+            self.send_json({"error": "Only user-uploaded datasets can be deleted."}, status=403)
+            return
+
+        path = Path(dataset["path"]).resolve(strict=False)
+        upload_root = USER_UPLOAD_CSV_ROOT.resolve(strict=False)
+        try:
+            path.relative_to(upload_root)
+        except ValueError:
+            self.send_json({"error": "dataset path is outside user upload directory"}, status=403)
+            return
+        if path.suffix.lower() != ".csv":
+            self.send_json({"error": "Only uploaded CSV datasets can be deleted."}, status=400)
+            return
+        if not path.exists():
+            self.send_json({"error": f"dataset file is missing: {self.display_path(path)}"}, status=404)
+            return
+
+        try:
+            path.unlink()
+        except OSError as exc:
+            self.send_json({"error": f"failed to delete dataset: {exc}"}, status=500)
+            return
+
+        with CASE_SUMMARY_CACHE_LOCK:
+            CASE_SUMMARY_CACHE.clear()
+
+        self.send_json(
+            {
+                "status": "ok",
+                "deleted_dataset": dataset_id,
+                **self.questionlist_datasets_response_payload(),
+                "catalog": self.eval_catalog_response_payload(),
+            }
+        )
+
+    def handle_set_question_dataset_default(self):
+        payload = self.read_json_body()
+        if payload is None:
+            self.send_json_body_error("invalid JSON body")
+            return
+        if not isinstance(payload, dict):
+            self.send_json({"error": "request body must be an object"}, status=400)
+            return
+
+        role = self.normalize_question_dataset_role(payload.get("role"))
+        dataset_id = str(payload.get("dataset_id") or payload.get("dataset") or "").strip()
+        if not dataset_id:
+            self.send_json({"error": "dataset_id is required"}, status=400)
+            return
+        path, _filters, resolved_role = self.resolve_question_dataset(dataset_id)
+        if not path:
+            self.send_json({"error": f"unknown dataset: {dataset_id}"}, status=404)
+            return
+        if not path.exists():
+            self.send_json({"error": f"dataset file is missing: {self.display_path(path)}"}, status=404)
+            return
+        resolved_role = self.normalize_question_dataset_role(resolved_role or role)
+        if resolved_role != role:
+            self.send_json({"error": f"{dataset_id} is a {resolved_role} dataset, not {role}."}, status=400)
+            return
+
+        settings = self.load_question_dataset_settings()
+        defaults = settings.setdefault("defaults", {})
+        defaults[role] = dataset_id
+        self.write_question_dataset_settings(settings)
+        with CASE_SUMMARY_CACHE_LOCK:
+            CASE_SUMMARY_CACHE.clear()
+
+        self.send_json(
+            {
+                **self.questionlist_datasets_response_payload(),
+                "catalog": self.eval_catalog_response_payload(),
+            }
+        )
 
     def normalize_question_dataset_role(self, value):
         role = str(value or "benchmark").strip().lower()
@@ -5221,30 +5438,71 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 continue
             if not self.catalog_dataset_visible(pool, path):
                 continue
+            role = str(pool.get("role") or "regression")
             pool_payload[str(pool_id)] = {
                 "id": str(pool_id),
                 "label": pool.get("label") or pool_id,
-                "role": pool.get("role", "regression"),
+                "role": role,
                 "path": self.display_path(path),
                 "exists": path.exists(),
                 "default_quota": pool.get("default_quota", 0),
-                "gate_eligible": bool(pool.get("gate_eligible", pool.get("role") != "benchmark")),
+                "gate_eligible": bool(pool.get("gate_eligible", role != "benchmark")),
                 "dataset_version": pool.get("dataset_version", ""),
                 "is_public": bool(pool.get("is_public", False)),
+                "total": pool.get("total", pool.get("default_quota", 0)),
+                "auto_discovered": bool(pool.get("auto_discovered", False)),
+                "user_uploaded": bool(pool.get("user_uploaded", False)),
             }
         visible_profiles = {
             profile_id: profile
             for profile_id, profile in profiles.items()
             if isinstance(profile, dict) and self.catalog_item_visible(profile)
         }
-        self.send_json(
-            {
-                "status": "ok",
-                "default_seed": catalog.get("default_seed", 42),
-                "pools": pool_payload,
-                "profiles": visible_profiles,
+        self.send_json(self.eval_catalog_payload_from_parts(catalog, pool_payload, visible_profiles))
+
+    def eval_catalog_response_payload(self):
+        catalog = self.load_eval_dataset_catalog()
+        pools = catalog.get("pools") if isinstance(catalog.get("pools"), dict) else {}
+        profiles = catalog.get("profiles") if isinstance(catalog.get("profiles"), dict) else {}
+        pool_payload = {}
+        for pool_id, pool in pools.items():
+            try:
+                path = self.resolve_project_path(str(pool.get("path") or ""))
+            except ValueError:
+                continue
+            if not self.catalog_dataset_visible(pool, path):
+                continue
+            role = str(pool.get("role") or "regression")
+            pool_payload[str(pool_id)] = {
+                "id": str(pool_id),
+                "label": pool.get("label") or pool_id,
+                "role": role,
+                "path": self.display_path(path),
+                "exists": path.exists(),
+                "default_quota": pool.get("default_quota", 0),
+                "total": pool.get("total", pool.get("default_quota", 0)),
+                "gate_eligible": bool(pool.get("gate_eligible", role != "benchmark")),
+                "dataset_version": pool.get("dataset_version", ""),
+                "is_public": bool(pool.get("is_public", False)),
+                "auto_discovered": bool(pool.get("auto_discovered", False)),
+                "user_uploaded": bool(pool.get("user_uploaded", False)),
             }
-        )
+        visible_profiles = {
+            profile_id: profile
+            for profile_id, profile in profiles.items()
+            if isinstance(profile, dict) and self.catalog_item_visible(profile)
+        }
+        return self.eval_catalog_payload_from_parts(catalog, pool_payload, visible_profiles)
+
+    def eval_catalog_payload_from_parts(self, catalog: dict, pool_payload: dict, visible_profiles: dict):
+        pools = catalog.get("pools") if isinstance(catalog.get("pools"), dict) else {}
+        return {
+            "status": "ok",
+            "default_seed": catalog.get("default_seed", 42),
+            "pools": pool_payload,
+            "profiles": visible_profiles,
+            "defaults": self.question_dataset_defaults(pools),
+        }
 
     def handle_questionlist_dataset_cases(self, query: str):
         params = parse_qs(query)
@@ -5574,11 +5832,17 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         dry_run = bool(payload.get("dry_run", True))
         skip_scoring = bool(payload.get("skip_scoring", False))
         answer_cache_enabled = bool(payload.get("answer_cache", True))
+        judge_cache_enabled = bool(payload.get("judge_cache", True))
+        arbiter_cache_enabled = bool(payload.get("arbiter_cache", True))
         if skip_scoring:
             dry_run = False
         export_final_ui = bool(payload.get("export_final_ui", False)) and not skip_scoring
         prediction_file = str(payload.get("prediction_file") or "").strip()
-        run_id = self.safe_run_id(payload.get("run_id") or f"WEB_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        raw_run_id = str(payload.get("run_id") or "").strip()
+        run_id_auto_generated = not raw_run_id
+        requested_run_id = self.safe_run_id(raw_run_id or f"WEB_EVAL_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        run_id = self.unique_eval_run_id(requested_run_id)
+        run_id_deduplicated = run_id != requested_run_id
         scoring_mode = str(payload.get("scoring_mode") or "static").strip()
         requested_scoring_mode = scoring_mode
         if scoring_mode == "llm_blended":
@@ -5708,6 +5972,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 cmd.append("--skip-scoring")
             if not answer_cache_enabled:
                 cmd.append("--no-answer-cache")
+            if not judge_cache_enabled:
+                cmd.append("--no-judge-cache")
+            if not arbiter_cache_enabled:
+                cmd.append("--no-arbiter-cache")
             if static_embedding_enabled:
                 cmd.extend(["--static-embedding-model", static_embedding_model])
                 if static_embedding_base_url:
@@ -5732,6 +6000,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "job_id": job_id,
             "status": "running",
             "run_id": run_id,
+            "requested_run_id": requested_run_id,
+            "run_id_auto_generated": run_id_auto_generated,
+            "run_id_deduplicated": run_id_deduplicated,
             "runner_type": runner_type,
             "dataset": dataset_id,
             "run_profile": run_profile,
@@ -5744,6 +6015,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "scoring_mode": "answers_only" if skip_scoring else scoring_mode,
             "skip_scoring": skip_scoring,
             "answer_cache": answer_cache_enabled,
+            "judge_cache": judge_cache_enabled,
+            "arbiter_cache": arbiter_cache_enabled,
             "static_embedding_model": static_embedding_model if static_embedding_enabled else "",
             "static_embedding_base_url": static_embedding_base_url if static_embedding_enabled else "",
             "judge_config": judge_config_label,
@@ -5860,6 +6133,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             return
         arbiter_config_id = self.safe_config_id(judge_payload.get("arbiter_config_id") or "")
         export_final_ui = bool(payload.get("export_final_ui", True))
+        judge_cache_enabled = bool(payload.get("judge_cache", True))
+        arbiter_cache_enabled = bool(payload.get("arbiter_cache", True))
         static_embedding_payload = payload.get("static_embedding") if isinstance(payload.get("static_embedding"), dict) else {}
         static_embedding_enabled = bool(static_embedding_payload.get("enabled"))
         static_embedding_model = str(static_embedding_payload.get("model") or "").strip()
@@ -5982,6 +6257,10 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 cmd.extend(["--conflict-policy", conflict_policy])
                 if arbiter_config_id:
                     cmd.extend(["--arbiter-config", arbiter_config_id])
+        if not judge_cache_enabled:
+            cmd.append("--no-judge-cache")
+        if not arbiter_cache_enabled:
+            cmd.append("--no-arbiter-cache")
         if static_embedding_enabled:
             cmd.extend(["--static-embedding-model", static_embedding_model])
             if static_embedding_base_url:
@@ -6013,6 +6292,8 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             "judge_aggregation_method": judge_aggregation_method if judge_config_ids else "",
             "judge_blend_weight": judge_blend_weight if judge_config_ids else "",
             "judge_score_weights": judge_score_weights if judge_config_ids else {},
+            "judge_cache": judge_cache_enabled,
+            "arbiter_cache": arbiter_cache_enabled,
             "dry_run": False,
             "export_final_ui": export_final_ui,
             "output_dir": str(EVAL_RUNS_ROOT / run_id),
@@ -6155,10 +6436,26 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
     def unique_eval_run_id(self, run_id: str):
         candidate = run_id
         suffix = 2
-        while (EVAL_RUNS_ROOT / candidate).exists():
+        while self.eval_run_id_in_use(candidate):
             candidate = self.safe_run_id(f"{run_id}_{suffix}")
             suffix += 1
         return candidate
+
+    def eval_run_id_in_use(self, run_id: str):
+        if (EVAL_RUNS_ROOT / run_id).exists() or (EVAL_RUNS_ROOT / f"{run_id}_tool_agent").exists():
+            return True
+        with EVAL_JOBS_LOCK:
+            if any(str(job.get("run_id") or "") == run_id for job in EVAL_JOBS.values()):
+                return True
+        for log_dir in self.eval_job_dirs():
+            for path in log_dir.glob("*.job.json"):
+                try:
+                    job = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(job, dict) and str(job.get("run_id") or "") == run_id:
+                    return True
+        return False
 
     def reblend_eval_run(
         self,
@@ -6380,10 +6677,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         deterministic["pass"] = deterministic["overall_score"] >= pass_threshold and not deterministic["critical_fail"]
         deterministic["error_type"] = eval_canonical_error_type(score.get("static_error_type") or score.get("error_type"))
         deterministic["reason"] = score.get("static_reason") or score.get("reason") or ""
-        deterministic["utl_applicable"] = self.bool_value(score.get("utl_applicable"), True)
-        deterministic["applicable_metrics"] = ",".join(SCORE_METRIC_KEYS)
-        deterministic["score_denominator"] = len(SCORE_METRIC_KEYS)
-        deterministic["raw_metric_score"] = sum(deterministic[key] for key in SCORE_METRIC_KEYS)
+        deterministic["applicable_metrics"] = score.get("static_applicable_metrics") or ",".join(SCORE_METRIC_KEYS)
+        deterministic["score_denominator"] = eval_score_denominator(deterministic)
+        deterministic["raw_metric_score"] = eval_raw_metric_score(deterministic)
         answer_quality_value = score.get("answer_quality_score")
         if answer_quality_value in {"", None}:
             answer_quality_value = deterministic["overall_score"]
@@ -6410,12 +6706,9 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
             for key in SCORE_METRIC_KEYS
         }
         judge_score["hal"] = judge_score.get("hal", judge_score.get("hal_pass"))
-        judge_overall = self.judge_overall_points(score.get("llm_judge_overall_score", score.get("overall_score")), score)
         judge_critical_fail = self.bool_value(score.get("llm_judge_critical_fail"), False)
         judge_score.update(
             {
-                "overall_score": judge_overall,
-                "pass": judge_overall >= pass_threshold and not judge_critical_fail,
                 "critical_fail": judge_critical_fail,
                 "error_type": eval_canonical_error_type(score.get("llm_judge_error_type")),
                 "reason": score.get("llm_judge_reason") or score.get("reason") or "",
@@ -6427,10 +6720,20 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
                 "config_id": score.get("llm_judge_config_id", ""),
                 "judge_count": self.safe_int(score.get("llm_judge_count"), default=1, minimum=1, maximum=100),
                 "individual_scores": self.json_list_value(score.get("llm_judge_individual_scores")),
-                "utl_applicable": deterministic["utl_applicable"],
                 "score_schema": score.get("score_schema") or "omnieval_metrics_config_v2",
+                "applicable_metrics": score.get("llm_judge_applicable_metrics") or score.get("applicable_metrics") or ",".join(SCORE_METRIC_KEYS),
+                "score_denominator": score.get("llm_judge_score_denominator", ""),
+                "raw_metric_score": score.get("llm_judge_raw_metric_score", ""),
+                "omnieval_accuracy": score.get("llm_judge_omnieval_accuracy", ""),
+                "omnieval_completeness": score.get("llm_judge_omnieval_completeness", ""),
+                "omnieval_numerical_accuracy": score.get("llm_judge_omnieval_numerical_accuracy", ""),
+                "omnieval_hallucination": score.get("llm_judge_omnieval_hallucination", ""),
             }
         )
+        judge_score["score_denominator"] = eval_score_denominator(judge_score)
+        judge_score["raw_metric_score"] = eval_raw_metric_score(judge_score)
+        judge_score["overall_score"] = eval_score_total_from_metrics(judge_score)
+        judge_score["pass"] = judge_score["overall_score"] >= pass_threshold and not judge_score["critical_fail"]
         mode = {
             "static_llm": "audit",
             "llm_override": "override",
@@ -6758,7 +7061,7 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         log_text = self.read_tail(log_path, max_chars=240000)
         response["progress"] = self.eval_job_progress(job, log_text)
         if include_log:
-            response["log_tail"] = log_text[-16000:]
+            response["log_tail"] = log_text[-40000:]
         return response
 
     def read_tail(self, path: Path, max_chars: int = 12000):
@@ -7245,13 +7548,198 @@ class FinalUiHandler(SimpleHTTPRequestHandler):
         key = str(value or "unknown").strip() or "unknown"
         counts[key] = counts.get(key, 0) + 1
 
-    def load_eval_dataset_catalog(self):
+    def load_eval_dataset_catalog_file(self):
         if not EVAL_DATASET_CATALOG_PATH.exists():
             return {"default_seed": 42, "pools": {}, "profiles": {}}
         try:
             return load_eval_catalog_config(EVAL_DATASET_CATALOG_PATH)
         except (RuntimeError, ValueError, json.JSONDecodeError):
             return {"default_seed": 42, "pools": {}, "profiles": {}}
+
+    def load_eval_dataset_catalog(self):
+        return self.augment_eval_dataset_catalog(self.load_eval_dataset_catalog_file())
+
+    def augment_eval_dataset_catalog(self, catalog: dict):
+        runtime_catalog = copy.deepcopy(catalog if isinstance(catalog, dict) else {})
+        runtime_catalog.setdefault("default_seed", 42)
+        runtime_catalog["pools"] = self.question_dataset_pool_specs(runtime_catalog)
+        profiles = runtime_catalog.get("profiles") if isinstance(runtime_catalog.get("profiles"), dict) else {}
+        profiles = copy.deepcopy(profiles)
+
+        # Keep legacy fixed-file profiles callable by ID but remove them from the main UI.
+        for legacy_profile in ("benchmark_final_full", "regression_golden_full"):
+            if isinstance(profiles.get(legacy_profile), dict):
+                profiles[legacy_profile]["ui_visible"] = False
+
+        defaults = self.question_dataset_defaults(runtime_catalog["pools"])
+        for role in QUESTION_DATASET_ROLES:
+            default_dataset_id = defaults.get(role, "")
+            default_profile_id = DEFAULT_PROFILE_BY_ROLE[role]
+            all_profile_id = REGISTERED_ALL_PROFILE_BY_ROLE[role]
+            role_label = "벤치마크" if role == "benchmark" else "회귀"
+            default_quota = self.question_dataset_pool_quota(runtime_catalog["pools"].get(default_dataset_id, {}))
+            if default_dataset_id and default_quota > 0:
+                profiles[default_profile_id] = {
+                    "label": f"기본 {role_label} 셋",
+                    "description": f"기본으로 지정된 {role_label} 테스트셋 전체를 실행합니다.",
+                    "pools": {default_dataset_id: default_quota},
+                    "ui_visible": True,
+                    "role": role,
+                    "default_dataset_id": default_dataset_id,
+                }
+
+            all_pools = {
+                pool_id: self.question_dataset_pool_quota(pool)
+                for pool_id, pool in sorted(runtime_catalog["pools"].items())
+                if isinstance(pool, dict)
+                and str(pool.get("role") or "").lower() == role
+                and bool(pool.get("registered_all_eligible", True))
+                and self.question_dataset_pool_quota(pool) > 0
+            }
+            if all_pools:
+                profiles[all_profile_id] = {
+                    "label": f"등록된 {role_label} 전체",
+                    "description": f"현재 등록되어 있는 {role_label} 테스트셋을 모두 합쳐 실행합니다.",
+                    "pools": all_pools,
+                    "ui_visible": True,
+                    "role": role,
+                    "all_registered": True,
+                }
+
+        profiles.setdefault(
+            "custom_seeded_mix",
+            {"label": "직접 구성", "pools": {}, "ui_visible": True},
+        )
+        runtime_catalog["profiles"] = profiles
+        return runtime_catalog
+
+    def question_dataset_pool_specs(self, catalog: dict):
+        pools = catalog.get("pools") if isinstance(catalog.get("pools"), dict) else {}
+        specs = {}
+        catalog_paths = {}
+        for pool_id, pool in pools.items():
+            if not isinstance(pool, dict) or not pool.get("path"):
+                continue
+            try:
+                path = self.resolve_project_path(str(pool.get("path") or ""))
+            except ValueError:
+                continue
+            if not self.catalog_dataset_visible(pool, path):
+                continue
+            role = self.normalize_question_dataset_role(pool.get("role"))
+            summary = self.summarize_case_file(path, filters=pool.get("filters"), dataset_id=str(pool_id), role=role)
+            quota = int(summary.get("total") or pool.get("default_quota") or 0)
+            spec = copy.deepcopy(pool)
+            spec.update(
+                {
+                    "label": str(pool.get("label") or path.name),
+                    "path": self.display_path(path),
+                    "role": role,
+                    "default_quota": quota,
+                    "total": quota,
+                    "gate_eligible": bool(pool.get("gate_eligible", role != "benchmark")),
+                    "dataset_version": str(pool.get("dataset_version") or datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y%m%d_%H%M%S")),
+                    "registered_all_eligible": optional_bool(pool.get("registered_all_eligible")) is not False,
+                }
+            )
+            specs[str(pool_id)] = spec
+            catalog_paths[str(path.resolve()).lower()] = str(pool_id)
+
+        for dataset in self.discover_question_csv_datasets().values():
+            path = dataset["path"]
+            resolved_key = str(path.resolve()).lower()
+            if resolved_key in catalog_paths:
+                continue
+            role = self.normalize_question_dataset_role(dataset["role"])
+            summary = self.summarize_case_file(path, dataset_id=dataset["id"], role=role)
+            quota = int(summary.get("total") or 0)
+            specs[dataset["id"]] = {
+                "label": dataset["name"],
+                "path": self.display_path(path),
+                "role": role,
+                "default_quota": quota,
+                "total": quota,
+                "gate_eligible": role != "benchmark",
+                "release_gate_eligible_default": role == "regression",
+                "case_status_default": "active" if role == "regression" else "shadow",
+                "gold_verified_default": role == "regression",
+                "dataset_version": dataset["version"],
+                "is_public": not bool(dataset.get("user_uploaded")),
+                "ui_visible": True,
+                "source_format": "csv",
+                "source_directory": dataset["directory"],
+                "auto_discovered": True,
+                "user_uploaded": bool(dataset.get("user_uploaded")),
+                "registered_all_eligible": True,
+                "case_id_prefix": dataset["id"],
+            }
+        return specs
+
+    def question_dataset_pool_quota(self, pool: dict):
+        try:
+            return max(0, int(pool.get("total") or pool.get("default_quota") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def question_dataset_defaults(self, pools: dict | None = None):
+        pools = pools if isinstance(pools, dict) else self.question_dataset_pool_specs(self.load_eval_dataset_catalog_file())
+        configured = self.load_question_dataset_settings().get("defaults", {})
+        defaults = {}
+        for role in QUESTION_DATASET_ROLES:
+            candidate = str(configured.get(role) or "").strip()
+            if candidate and self.dataset_id_matches_role(candidate, role, pools):
+                defaults[role] = candidate
+                continue
+            fallback = FALLBACK_DEFAULT_DATASET_BY_ROLE.get(role, "")
+            if fallback and self.dataset_id_matches_role(fallback, role, pools):
+                defaults[role] = fallback
+                continue
+            defaults[role] = next(
+                (
+                    pool_id
+                    for pool_id, pool in sorted(pools.items())
+                    if isinstance(pool, dict)
+                    and str(pool.get("role") or "").lower() == role
+                    and self.question_dataset_pool_quota(pool) > 0
+                ),
+                "",
+            )
+        return defaults
+
+    def dataset_id_matches_role(self, dataset_id: str, role: str, pools: dict):
+        pool = pools.get(dataset_id) if isinstance(pools, dict) else None
+        return isinstance(pool, dict) and str(pool.get("role") or "").lower() == role and self.question_dataset_pool_quota(pool) > 0
+
+    def load_question_dataset_settings(self):
+        if not QUESTION_DATASET_SETTINGS_PATH.exists():
+            return {"defaults": {}}
+        try:
+            raw = self.load_structured_file(QUESTION_DATASET_SETTINGS_PATH)
+        except (OSError, json.JSONDecodeError, RuntimeError):
+            return {"defaults": {}}
+        defaults = raw.get("defaults") if isinstance(raw, dict) and isinstance(raw.get("defaults"), dict) else {}
+        return {
+            "defaults": {
+                role: str(defaults.get(role) or "").strip()
+                for role in QUESTION_DATASET_ROLES
+                if str(defaults.get(role) or "").strip()
+            }
+        }
+
+    def write_question_dataset_settings(self, settings: dict):
+        defaults = settings.get("defaults") if isinstance(settings.get("defaults"), dict) else {}
+        payload = {
+            "defaults": {
+                role: str(defaults.get(role) or "").strip()
+                for role in QUESTION_DATASET_ROLES
+                if str(defaults.get(role) or "").strip()
+            }
+        }
+        QUESTION_DATASET_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        QUESTION_DATASET_SETTINGS_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     def catalog_pool(self, pool_id: str):
         pools = self.load_eval_dataset_catalog().get("pools")

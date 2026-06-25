@@ -1,49 +1,5 @@
-﻿{
+{
     "presets": [
-        {
-            "id": "gemini_3_5_flash",
-            "label": "Google Gemini 3.5 Flash · 1차 Judge",
-            "provider": "gemini",
-            "configId": "gemini_3_5_flash_judge",
-            "displayName": "Gemini 3.5 Flash Judge",
-            "model": "gemini-3.5-flash",
-            "baseUrl": "https://generativelanguage.googleapis.com",
-            "chatUrl": "",
-            "apiKeyEnv": "GEMINI_API_KEY",
-            "temperature": 0,
-            "topP": 0.1,
-            "maxTokens": 1024,
-            "promptPreset": "judge_default_v1",
-            "promptVersion": "omnieval_metrics_config_v2",
-            "systemPrompt": "",
-            "options": {
-                "max_output_tokens": 1024
-            },
-            "builtIn": true,
-            "scoreSchema": "omnieval_metrics_config_v2"
-        },
-        {
-            "id": "gemini_2_5_pro_arbiter",
-            "label": "Google Gemini 2.5 Pro · Arbiter Judge",
-            "provider": "gemini",
-            "configId": "gemini_2_5_pro_arbiter",
-            "displayName": "Gemini 2.5 Pro Arbiter Judge",
-            "model": "gemini-2.5-pro",
-            "baseUrl": "https://generativelanguage.googleapis.com",
-            "chatUrl": "",
-            "apiKeyEnv": "GEMINI_API_KEY",
-            "temperature": 0,
-            "topP": 0.1,
-            "maxTokens": 1400,
-            "promptPreset": "arbiter_conflict_v1",
-            "promptVersion": "arbiter_v2_to_omnieval_metrics_config",
-            "systemPrompt": "",
-            "options": {
-                "max_output_tokens": 1400
-            },
-            "builtIn": true,
-            "scoreSchema": "omnieval_metrics_config_v2"
-        },
         {
             "id": "gemini_2_5_pro",
             "label": "Google Gemini 2.5 Pro · Judge",
@@ -99,8 +55,6 @@
             "baseUrl": "https://api.openai.com",
             "chatUrl": "https://api.openai.com/v1/responses",
             "apiKeyEnv": "OPENAI_API_KEY",
-            "temperature": 0,
-            "topP": 0.1,
             "maxTokens": 1024,
             "promptPreset": "judge_default_v1",
             "promptVersion": "omnieval_metrics_config_v2",
@@ -109,31 +63,6 @@
                 "max_output_tokens": 1024,
                 "reasoning_effort": "low",
                 "min_interval_seconds": 8,
-                "store": false
-            },
-            "builtIn": true,
-            "scoreSchema": "omnieval_metrics_config_v2"
-        },
-        {
-            "id": "openai_gpt_5_5_arbiter",
-            "label": "OpenAI GPT-5.5 · Arbiter Judge",
-            "provider": "openai_native",
-            "configId": "openai_gpt55_judge",
-            "displayName": "OpenAI GPT-5.5 Arbiter Judge",
-            "model": "gpt-5.5",
-            "baseUrl": "https://api.openai.com",
-            "chatUrl": "https://api.openai.com/v1/responses",
-            "apiKeyEnv": "OPENAI_API_KEY",
-            "temperature": 0,
-            "topP": 0.1,
-            "maxTokens": 1400,
-            "promptPreset": "arbiter_conflict_v1",
-            "promptVersion": "arbiter_v2_to_omnieval_metrics_config",
-            "systemPrompt": "",
-            "options": {
-                "max_output_tokens": 1400,
-                "reasoning_effort": "medium",
-                "min_interval_seconds": 2,
                 "store": false
             },
             "builtIn": true,
@@ -149,8 +78,6 @@
             "baseUrl": "https://api.openai.com",
             "chatUrl": "https://api.openai.com/v1/responses",
             "apiKeyEnv": "OPENAI_API_KEY",
-            "temperature": 0,
-            "topP": 0.1,
             "maxTokens": 1024,
             "promptPreset": "judge_default_v1",
             "promptVersion": "omnieval_metrics_config_v2",
@@ -184,27 +111,49 @@
             "scoreSchema": "omnieval_metrics_config_v2"
         },
         {
-            "id": "clova_hcx_007",
-            "label": "CLOVA HCX-007 · 1차 Judge",
-            "provider": "clova_studio",
-            "configId": "clova_hcx007_judge",
-            "displayName": "CLOVA HCX-007 Judge",
-            "model": "HCX-007",
-            "baseUrl": "https://clovastudio.stream.ntruss.com",
-            "chatUrl": "",
-            "apiKeyEnv": "CLOVA_STUDIO_API_KEY",
-            "temperature": 0,
-            "topP": 0.1,
-            "maxTokens": 1024,
-            "promptPreset": "judge_default_v1",
-            "promptVersion": "omnieval_metrics_config_v2",
+            "id": "openai_gpt_5_5_arbiter",
+            "label": "OpenAI GPT-5.5 · Arbiter Judge",
+            "provider": "openai_native",
+            "configId": "openai_gpt55_judge",
+            "displayName": "OpenAI GPT-5.5 Arbiter Judge",
+            "model": "gpt-5.5",
+            "baseUrl": "https://api.openai.com",
+            "chatUrl": "https://api.openai.com/v1/responses",
+            "apiKeyEnv": "OPENAI_API_KEY",
+            "maxTokens": 1400,
+            "promptPreset": "arbiter_conflict_v1",
+            "promptVersion": "arbiter_v2_to_omnieval_metrics_config",
             "systemPrompt": "",
             "options": {
-                "include_ai_filters": false
+                "max_output_tokens": 1400,
+                "reasoning_effort": "medium",
+                "min_interval_seconds": 2,
+                "store": false
+            },
+            "builtIn": true,
+            "scoreSchema": "omnieval_metrics_config_v2"
+        },
+        {
+            "id": "gemini_2_5_pro_arbiter",
+            "label": "Google Gemini 2.5 Pro · Arbiter Judge",
+            "provider": "gemini",
+            "configId": "gemini_2_5_pro_arbiter",
+            "displayName": "Gemini 2.5 Pro Arbiter Judge",
+            "model": "gemini-2.5-pro",
+            "baseUrl": "https://generativelanguage.googleapis.com",
+            "chatUrl": "",
+            "apiKeyEnv": "GEMINI_API_KEY",
+            "temperature": 0,
+            "topP": 0.1,
+            "maxTokens": 1400,
+            "promptPreset": "arbiter_conflict_v1",
+            "promptVersion": "arbiter_v2_to_omnieval_metrics_config",
+            "systemPrompt": "",
+            "options": {
+                "max_output_tokens": 1400
             },
             "builtIn": true,
             "scoreSchema": "omnieval_metrics_config_v2"
         }
     ]
 }
-
