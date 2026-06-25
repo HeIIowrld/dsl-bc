@@ -61,6 +61,23 @@ python .\scripts\eval\run_multi_model_eval.py `
   --judge-config openai_gpt54_mini_judge
 ```
 
+Multi-judge run with explicit Arbiter:
+
+```powershell
+python .\scripts\eval\run_multi_model_eval.py `
+  --cases-file .\out\test_cases\composed\benchmark_final_full_seed42.jsonl `
+  --config bc_gemma_9b_bcgpt_q4 `
+  --scoring-mode llm_override `
+  --judge-config openai_gpt54_mini_judge `
+  --judge-config gemini_2_5_flash_judge `
+  --conflict-policy arbiter_override `
+  --arbiter-config gemini_2_5_pro_arbiter
+```
+
+Arbiter configs must be explicit. The runner does not choose a default Arbiter.
+The UI follows the same rule: no selected Arbiter means conflict rows remain in
+review mode.
+
 Provider credentials must be supplied through environment variables or the UI
 secret store. Do not store real keys in repository files.
 
@@ -117,6 +134,18 @@ large answer partitions are archived. This allows:
 - comparing judge sources such as GPT vs Gemini or GPT vs Clova
 - running Arbiter review only on selected conflict candidates
 - preserving per-judge evidence for later audit
+
+The default judge cache directory is:
+
+```text
+out/eval_runs/_judge_cache/
+```
+
+Primary judge cache entries are keyed by answer model and judge model. Arbiter
+cache entries add the base judge set and selected Arbiter model to the cache
+namespace. This prevents one Arbiter model from reusing another Arbiter's
+decision while still allowing repeated runs with the same judge set to avoid
+extra API calls.
 
 Generated score snapshot summaries are in `data/eval_snapshot_20260624_094927/`; retained raw judge
 evidence stays in `out/eval_runs/`.

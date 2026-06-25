@@ -162,6 +162,41 @@ out/
 questionlist/user_uploads/
 ```
 
+## Judge And Arbiter Runs
+
+Registered judge configs are stored in:
+
+```text
+final_UI/data/registered_judge_models.json
+```
+
+Primary judges use `judge_role=judge` and normally use
+`system_prompt_preset=judge_default_v1`. Arbiter judges use
+`judge_role=arbiter` or `system_prompt_preset=arbiter_conflict_v1`; they are
+conflict-only configs and are not shown in the primary judge picker.
+
+In the Run tab:
+
+- `static` scoring does not call judge APIs.
+- Single-Judge scoring (`llm_override`) accepts exactly one primary judge.
+- Multi-Judge scoring (`llm_blended`) accepts two or more primary judges and
+  then shows the Arbiter selector.
+- Leaving Arbiter empty keeps conflicts marked for review.
+- Selecting Arbiter sends `conflict_policy=arbiter_override` plus
+  `arbiter_config_id`; the Arbiter is called only when base judges conflict.
+
+Equivalent CLI shape:
+
+```powershell
+python .\scripts\eval\run_multi_model_eval.py `
+  --config bc_gemma_9b_bcgpt_q4 `
+  --scoring-mode llm_override `
+  --judge-config openai_gpt54_mini_judge `
+  --judge-config gemini_2_5_flash_judge `
+  --conflict-policy arbiter_override `
+  --arbiter-config gemini_2_5_pro_arbiter
+```
+
 ## API Cost Safety
 
 Opening saved results in the UI does not call external model APIs. API cost can
@@ -170,6 +205,18 @@ Arbiter scoring, or provider health checks.
 
 Judge cache loading is disabled when there are no judge configs or when scoring
 is skipped, so saved-answer browsing and no-scoring runs stay local.
+
+Judge and Arbiter cache entries are stored under:
+
+```text
+out/eval_runs/_judge_cache/
+```
+
+Base judge cache entries are keyed by answer model and judge model. Arbiter
+cache entries are keyed by answer model, base judge set, and selected Arbiter
+model. Selecting a different Arbiter intentionally does not reuse another
+Arbiter's cached judgment. Saved-answer rejudging also requires an explicit
+Arbiter config whenever an Arbiter conflict policy is requested.
 
 ## Validation
 
@@ -198,4 +245,3 @@ no API-costing endpoints are called unless a run is explicitly started
 | `data/QUESTION_SETS.md` | Benchmark/regression CSV contract and upload behavior |
 | `data/eval_snapshot_20260624_094927/README.md` | Score snapshot file guide |
 | `final_UI/README.md` | UI server, tabs, loading model, and run output contract |
-

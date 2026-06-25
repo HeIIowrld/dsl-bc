@@ -62,6 +62,27 @@ python .\final_UI\server.py
 The large `question_cases.csv` file is loaded lazily. The default Run tab should
 not fetch it.
 
+## Run Tab Judge Controls
+
+The Run tab separates primary judges from conflict arbiters.
+
+- Primary judge options come from `registered_judge_models.json` entries with
+  `judge_role=judge`.
+- Arbiter options come from entries with `judge_role=arbiter` or
+  `system_prompt_preset=arbiter_conflict_v1`.
+- Arbiter-only configs are hidden from the primary judge picker.
+- The Arbiter selector appears only when scoring is not `static`, including the
+  multi-judge `llm_blended` mode, and two or more primary judges are selected.
+- Selecting no Arbiter leaves judge conflicts unresolved for manual review.
+- Selecting an Arbiter applies `conflict_policy=arbiter_override`; the Arbiter
+  is invoked only for rows where primary judges disagree.
+
+Run cache toggles are independent:
+
+- Answer cache controls target model answer reuse.
+- Judge cache controls primary judge response reuse.
+- Arbiter cache controls selected-Arbiter response reuse for conflict rows.
+
 ## Runtime Data
 
 Default files:

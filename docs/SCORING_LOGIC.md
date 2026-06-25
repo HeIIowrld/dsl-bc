@@ -73,9 +73,42 @@ are not converted to zero.
 Base judges and arbiter judges use the same OmniEval v2 score contract.
 Arbitration compares normalized 0-1 scores directly.
 
+The runner marks a judge conflict when any of these are true:
+
+- primary judges disagree on pass/fail
+- primary judge `overall_score` gap is at least `0.30`
+- primary judges report different non-`normal` error types
+
+Conflict policy behavior:
+
+- `review`: keep the primary aggregate and mark the conflict unresolved.
+- `arbiter_override`: call the selected Arbiter only for conflict rows and use
+  the Arbiter score as the final LLM judge score.
+- `three_judge`: call the selected Arbiter only for conflict rows and aggregate
+  base judges plus Arbiter.
+
+The UI uses `arbiter_override` when an Arbiter config is selected. If no Arbiter
+is selected, conflicts stay in review mode. Saved-answer rejudging must also
+provide an explicit Arbiter config before an Arbiter policy is allowed.
+
 ```text
 Pass when overall_score >= 0.60 and critical_fail is false
 Fail otherwise
+```
+
+Arbitrated rows preserve audit fields:
+
+```text
+llm_judge_conflict_detected
+llm_judge_unresolved_conflict
+llm_judge_conflict_reason
+llm_judge_conflict_resolution_policy
+llm_judge_arbiter_config_id
+llm_judge_arbitration_status
+llm_judge_base_average_score
+llm_judge_arbiter_score
+llm_judge_arbiter_override
+llm_judge_individual_scores
 ```
 
 Release-gate status is separate and remains in:
