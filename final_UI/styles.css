@@ -410,8 +410,9 @@ body {
 }
 
 .result-viewer-stats .kpi span {
-  font-size: 9px;
-  line-height: 1.25;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
 }
 
 .result-viewer-stats .kpi strong {
@@ -425,7 +426,7 @@ body {
 .result-viewer-stats .kpi em {
   margin-top: 3px;
   overflow: hidden;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -887,15 +888,15 @@ select {
   flex-direction: column;
   gap: 5px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-dim);
   text-transform: uppercase;
-  letter-spacing: .07em;
+  letter-spacing: .04em;
 }
 
 .prompt-variant-builder button {
-  min-height: 32px;
+  min-height: 38px;
   line-height: 1.25;
   white-space: normal;
 }
@@ -1345,13 +1346,14 @@ button.run-submit small {
 }
 
 .toast-message button {
-  min-width: 26px;
-  min-height: 26px;
+  min-width: 40px;
+  min-height: 40px;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--text-dim);
+  font-size: 13px;
   line-height: 1;
 }
 
@@ -1563,9 +1565,9 @@ body[data-active-tab="search"] .run-context-filter {
 .model-filter-item .check-item-label em {
   margin-top: 2px;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
-  line-height: 1.1;
+  line-height: 1.2;
 }
 
 .model-filter-item .model-status-pill[data-status="pending"] {
@@ -1574,8 +1576,8 @@ body[data-active-tab="search"] .run-context-filter {
 
 .model-filter-item .model-status-pill {
   flex: 0 0 auto;
-  padding: 2px 5px;
-  font-size: 10px;
+  padding: 3px 7px;
+  font-size: 11px;
 }
 .check-list label:hover { background: var(--bg-hover); }
 
@@ -2949,24 +2951,27 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
   flex-shrink: 0;
   align-self: start;
   margin-top: 1px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  padding: 2px 6px;
+  padding: 3px 7px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1.2;
   text-transform: none;
 }
 
 .model-status-pill.online {
-  background: var(--green-dim);
-  color: var(--green);
+  border-color: rgba(4,120,87,.26);
+  background: rgba(4,120,87,.12);
+  color: #047857;
 }
 
 .model-status-pill.available,
 .model-status-pill.checking {
-  background: var(--blue-dim);
-  color: var(--blue);
+  border-color: rgba(29,78,216,.24);
+  background: rgba(29,78,216,.12);
+  color: #1d4ed8;
 }
 
 .model-status-pill.checking {
@@ -2994,8 +2999,9 @@ td.score-warn { color: var(--yellow);font-family: var(--font-mono); }
 
 .model-status-pill.not-available,
 .model-status-pill.offline {
-  background: var(--red-dim);
-  color: var(--red);
+  border-color: rgba(180,35,24,.22);
+  background: rgba(180,35,24,.12);
+  color: #b42318;
 }
 
 .registry-item {
@@ -4637,9 +4643,19 @@ th:first-child {
 }
 
 .table-text-expand .table-text-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 30px;
+  margin-top: 2px;
+  padding: 5px 10px;
+  border: 1px solid rgba(232,49,42,.26);
+  border-radius: 999px;
+  background: var(--accent-dim);
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -5445,6 +5461,17 @@ pre,
   .grid.two { grid-template-columns: 1fr; }
   .model-form, .run-form { grid-template-columns: 1fr; }
   .prompt-variant-builder { grid-template-columns: 1fr; }
+  .judge-registry-panel .prompt-variant-builder,
+  .judge-registry-panel .judge-copy-builder,
+  .judge-registry-panel .judge-api-preset-builder {
+    grid-template-columns: 1fr;
+  }
+  .prompt-variant-builder button,
+  .judge-copy-builder button,
+  .judge-api-preset-builder button {
+    width: 100%;
+    min-height: 40px;
+  }
   .dataset-upload-form { grid-template-columns: 1fr; }
   .custom-pool-controls { grid-template-columns: 1fr; }
   .target-registry-list { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
