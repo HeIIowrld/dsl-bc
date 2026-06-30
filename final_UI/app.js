@@ -894,9 +894,11 @@ async function loadDeferredInitialData() {
       return false;
     }
     latestRun = runInfo || latestRun;
-  selectedRunId = normalizeRunId(runInfo?.run_id || selectedRunId);
+    if (!selectedRunId && runInfo?.run_id) {
+      selectedRunId = normalizeRunId(runInfo.run_id);
+    }
     if (selectedRunCacheId() !== previousRunId) {
-      resetCaseDataState();
+      return false;
     }
     evalRunHistory = runHistory?.runs ?? evalRunHistory;
     judgeComparisonOptions = comparisonOptions ?? judgeComparisonOptions;
